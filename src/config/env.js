@@ -1,0 +1,50 @@
+const dotenv = require('dotenv');
+
+dotenv.config();
+
+const required = (value, name) => {
+  if (!value) {
+    throw new Error(`Missing required env var: ${name}`);
+  }
+  return value;
+};
+
+const isPlaceholder = (value) => /^replace_with_/i.test(String(value || '').trim());
+
+const splitCsv = (value) =>
+  (value || '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+
+const normalizeMultiline = (value) => String(value || '').replace(/\\n/g, '\n').trim();
+
+module.exports = {
+  nodeEnv: process.env.NODE_ENV || 'development',
+  port: Number(process.env.PORT || 5000),
+  mongoUri: required(process.env.MONGO_URI, 'MONGO_URI'),
+  jwtSecret: required(process.env.JWT_SECRET, 'JWT_SECRET'),
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
+  jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
+  jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
+
+  boardingWindowMinutes: Number(process.env.BOARDING_WINDOW_MINUTES || 10),
+  stopAlertCooldownMinutes: Number(process.env.STOP_ALERT_COOLDOWN_MINUTES || 2),
+  pickupRequestTtlMinutes: Number(process.env.PICKUP_REQUEST_TTL_MINUTES || 12),
+  maxRequestsPerPassengerPerTrip: Number(
+    process.env.MAX_REQUESTS_PER_PASSENGER_PER_TRIP || 2
+  ),
+  pickupRoadProximityMeters: Number(process.env.PICKUP_ROAD_PROXIMITY_METERS || 300),
+
+  googleClientIds: splitCsv(process.env.GOOGLE_CLIENT_IDS),
+  facebookAppToken: process.env.FACEBOOK_APP_TOKEN || '',
+  firebaseProjectId: process.env.FIREBASE_PROJECT_ID || '',
+  firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL || '',
+  firebasePrivateKey: normalizeMultiline(process.env.FIREBASE_PRIVATE_KEY),
+};
+
+if (module.exports.nodeEnv === 'production') {
+  if (isPlaceholder(module.exports.jwtSecret) || isPlaceholder(module.exports.jwtRefreshSecret)) {
+    throw new Error('JWT secrets must be replaced before production deployment');
+  }
+}

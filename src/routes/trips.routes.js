@@ -1,0 +1,191 @@
+const express = require('express');
+const TripSession = require('../models/tripSession');
+const Driver = require('../models/driver');
+const Jeepney = require('../models/jeepney');
+const Route = require('../models/route');
+const asyncHandler = require('../utils/asyncHandler');
+const authenticate = require('../middlewares/authenticate');
+const authorize = require('../middlewares/authorize');
+const ApiError = require('../utils/apiError');
+const { ok } = require('../utils/response');
+const { DRIVER, ADMIN, PASSENGER } = require('../constants/roles');
+const { ensureObjectId, ensureEnum } = require('../utils/validators');
+
+const router = express.Router();
+
+router.get(
+  '/active',
+  authenticate,
+  asyncHandler(async (_req, res) => {
+    const activeTrips = await TripSession.find({ status: 'active' })
+      .populate('jeepneyId driverId routeId')
+      .sort({ startedAt: -1 });
+    return ok(res, activeTrips, 'Active trips');
+  })
+);
+
+router.get(
+  '/mine',
+  authenticate,
+  authorize(DRIVER),
+  asyncHandler(async (req, res) => {
+    const driver = await Driver.findOne({ userId: req.user._id });
+    if (!driver) throw new ApiError(404, 'Driver profile missing');
+    const trips = await TripSession.find({
+      driverId: driver._id,
+      status: { $in: ['scheduled', 'active'] },
+    })
+      .populate('jeepneyId driverId routeId')
+      .sort({ createdAt: -1 });
+    return ok(res, trips, 'Driver trips');
+  })
+);
+
+router.post(
+  '/',
+  authenticate,
+  authorize(DRIVER, ADMIN),
+  asyncHandler(async (req, res) => {
+    const payload = req.body || {};
+    const startedAt = payload.status === 'active' ? new Date() : undefined;
+    if (!payload.jeepneyId || !payload.routeId) {
+      throw new ApiError(400, 'jeepneyId and routeId are required');
+    }
+    ensureObjectId(payload.jeepneyId, 'jeepneyId');
+    ensureObjectId(payload.routeId, 'routeId');
+    if (payload.status) {
+      ensureEnum(payload.status, 'status', ['scheduled', 'active', 'completed', 'cancelled']);
+    }
+    const jeepney = await Jeepney.findById(payload.jeepneyId);
+    if (!jeepney) {
+      throw new ApiError(404, 'Jeepney not found');
+    }
+    if (jeepney.status !== 'active') {
+      throw new ApiError(409, 'Jeepney is not active');
+    }
+    const route = await Route.findById(payload.routeId);
+    if (!route) {
+      throw new ApiError(404, 'Route not found');
+    }
+    if (route.status !== 'active') {
+      throw new ApiError(409, 'Route is not active');
+    }
+    if (req.user.role === DRIVER) {
+      const driver = await Driver.findOne({ userId: req.user._id });
+      if (!driver) throw new ApiError(404, 'Driver profile missing');
+      if (driver.status !== 'active') {
+        throw new ApiError(403, 'Driver account must be active to create trips');
+      }
+      if (!driver.isVerified) {
+        throw new ApiError(403, 'Driver must be verified before creating trips');
+      }
+      if (
+        driver.assignedJeepneyId &&
+        String(driver.assignedJeepneyId) !== String(jeepney._id)
+      ) {
+        throw new ApiError(403, 'This jeepney is not assigned to the driver');
+      }
+      if (driver.assignedRouteId && String(driver.assignedRouteId) !== String(route._id)) {
+        throw new ApiError(403, 'This route is not assigned to the driver');
+      }
+      payload.driverId = driver._id;
+    }
+    const trip = await TripSession.create({
+      ...payload,
+      startedAt,
+      active: payload.status === 'active',
+    });
+    return ok(res, trip, 'Trip session created', 201);
+  })
+);
+
+router.patch(
+  '/:id/start',
+  authenticate,
+  authorize(DRIVER, ADMIN),
+  asyncHandler(async (req, res) => {
+    ensureObjectId(req.params.id, 'trip id');
+    const trip = await TripSession.findById(req.params.id);
+    if (!trip) throw new ApiError(404, 'Trip not found');
+    if (trip.status === 'active') {
+      throw new ApiError(409, 'Trip already active');
+    }
+    if (trip.status === 'completed' || trip.status === 'cancelled') {
+      throw new ApiError(409, 'Trip is already closed');
+    }
+    if (req.user.role === DRIVER) {
+      const driver = await Driver.findOne({ userId: req.user._id });
+      if (!driver || String(driver._id) !== String(trip.driverId)) {
+        throw new ApiError(403, 'You are not assigned to this trip');
+      }
+      if (driver.status !== 'active') {
+        throw new ApiError(403, 'Driver account must be active to start a trip');
+      }
+      if (!driver.isVerified) {
+        throw new ApiError(403, 'Driver must be verified to start a trip');
+      }
+    }
+    trip.status = 'active';
+    trip.startedAt = new Date();
+    trip.active = true;
+    trip.acceptRequests = true;
+    await trip.save();
+    return ok(res, trip, 'Trip started');
+  })
+);
+
+router.patch(
+  '/:id/end',
+  authenticate,
+  authorize(DRIVER, ADMIN),
+  asyncHandler(async (req, res) => {
+    ensureObjectId(req.params.id, 'trip id');
+    const trip = await TripSession.findById(req.params.id);
+    if (!trip) throw new ApiError(404, 'Trip not found');
+    if (trip.status === 'completed' || trip.status === 'cancelled') {
+      throw new ApiError(409, 'Trip already closed');
+    }
+    if (req.user.role === DRIVER) {
+      const driver = await Driver.findOne({ userId: req.user._id });
+      if (!driver || String(driver._id) !== String(trip.driverId)) {
+        throw new ApiError(403, 'You are not assigned to this trip');
+      }
+    }
+    trip.status = 'completed';
+    trip.endedAt = new Date();
+    trip.active = false;
+    trip.acceptRequests = false;
+    await trip.save();
+    return ok(res, trip, 'Trip ended');
+  })
+);
+
+router.patch(
+  '/:id/availability',
+  authenticate,
+  authorize(DRIVER),
+  asyncHandler(async (req, res) => {
+    ensureObjectId(req.params.id, 'trip id');
+    const trip = await TripSession.findById(req.params.id);
+    if (!trip) throw new ApiError(404, 'Trip not found');
+    const driver = await Driver.findOne({ userId: req.user._id });
+    if (!driver || String(driver._id) !== String(trip.driverId)) {
+      throw new ApiError(403, 'You are not assigned to this trip');
+    }
+    trip.acceptRequests = Boolean(req.body.acceptRequests);
+    await trip.save();
+    return ok(res, trip, 'Trip availability updated');
+  })
+);
+
+router.get(
+  '/',
+  authenticate,
+  authorize(ADMIN, DRIVER, PASSENGER),
+  asyncHandler(async (_req, res) => {
+    const trips = await TripSession.find().sort({ createdAt: -1 });
+    return ok(res, trips, 'All trips');
+  })
+);
+
+module.exports = router;

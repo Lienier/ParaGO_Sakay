@@ -1,0 +1,114 @@
+import '../core/network/api_client.dart';
+import '../core/exceptions/api_exception.dart';
+import '../models/operations/pickup_request.dart';
+
+class DriverService {
+  DriverService(this._client);
+
+  final ApiClient _client;
+
+  Future<Map<String, dynamic>> getProfile() async {
+    final response = await _client.request(
+      method: 'GET',
+      path: '/drivers/me',
+    );
+    final data = response['data'];
+    if (data is Map<String, dynamic>) {
+      return data;
+    }
+    return <String, dynamic>{};
+  }
+
+  Future<void> setStatus({required bool active}) async {
+    final body = {'status': active ? 'active' : 'inactive'};
+    try {
+      await _client.request(
+        method: 'PUT',
+        path: '/drivers/me',
+        body: body,
+      );
+    } on ApiException catch (error) {
+      if (error.statusCode != 404) {
+        rethrow;
+      }
+      await _client.request(
+        method: 'PATCH',
+        path: '/drivers/me/status',
+        body: body,
+      );
+    }
+  }
+
+  Future<void> updateLocation({
+    required double lat,
+    required double lng,
+  }) async {
+    final body = {
+      'lat': lat,
+      'lng': lng,
+    };
+
+    ApiException? lastError;
+    final attempts = <Map<String, String>>[
+      {'method': 'PATCH', 'path': '/drivers/location'},
+      {'method': 'PATCH', 'path': '/drivers/me/location'},
+      {'method': 'POST', 'path': '/drivers/location'},
+      {'method': 'POST', 'path': '/drivers/me/location'},
+      {'method': 'PUT', 'path': '/drivers/location'},
+    ];
+
+    bool isRouteNotFound(ApiException error) {
+      return error.statusCode == 404 &&
+          error.message.toLowerCase().contains('route not found');
+    }
+
+    for (final attempt in attempts) {
+      try {
+        await _client.request(
+          method: attempt['method']!,
+          path: attempt['path']!,
+          body: body,
+        );
+        return;
+      } on ApiException catch (error) {
+        lastError = error;
+        if (!isRouteNotFound(error)) {
+          rethrow;
+        }
+      }
+    }
+
+    if (lastError != null) {
+      throw lastError;
+    }
+  }
+
+  Future<List<PickupRequestModel>> getRequestsForTrip(
+      String tripSessionId) async {
+    final data =
+        await _client.getList(path: '/pickup-requests/trip/$tripSessionId');
+    return data
+        .map((e) => PickupRequestModel.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<PickupRequestModel> acknowledgeRequest(String requestId) async {
+    final response = await _client.request(
+      method: 'PATCH',
+      path: '/pickup-requests/$requestId/acknowledge',
+      body: {},
+    );
+    return PickupRequestModel.fromJson(
+        response['data'] as Map<String, dynamic>);
+  }
+
+  Future<PickupRequestModel> completeRequest(String requestId) async {
+    final response = await _client.request(
+      method: 'PATCH',
+      path: '/pickup-requests/$requestId/complete',
+      body: {},
+    );
+    return PickupRequestModel.fromJson(
+        response['data'] as Map<String, dynamic>);
+  }
+}

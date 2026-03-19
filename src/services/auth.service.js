@@ -1,0 +1,469 @@
+const bcrypt = require('bcryptjs');
+const axios = require('axios');
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
+const { googleClientIds, facebookAppToken } = require('../config/env');
+const { nodeEnv } = require('../config/env');
+const { getFirebaseAuth, isFirebaseAdminConfigured } = require('../config/firebaseAdmin');
+
+const User = require('../models/user');
+const Passenger = require('../models/passenger');
+const Driver = require('../models/driver');
+const Admin = require('../models/admin');
+const RefreshToken = require('../models/refreshToken');
+const PasswordResetToken = require('../models/passwordResetToken');
+const { signToken, verifyRefreshToken } = require('../utils/jwt');
+const tokenHash = require('../utils/tokenHash');
+const ApiError = require('../utils/apiError');
+
+const buildProfile = async (user) => {
+  if (!user) return null;
+  const profile = { role: user.role, fullName: user.fullName, email: user.email };
+  if (user.role === 'PASSENGER') {
+    const passenger = await Passenger.findOne({ userId: user._id });
+    return { ...profile, passengerId: passenger?._id || null };
+  }
+  if (user.role === 'DRIVER') {
+    const driver = await Driver.findOne({ userId: user._id });
+    return { ...profile, driverId: driver?._id || null };
+  }
+  const admin = await Admin.findOne({ userId: user._id });
+  return { ...profile, adminId: admin?._id || null };
+};
+
+const ensureActiveUser = (user) => {
+  if (!user) throw new ApiError(404, 'User not found');
+  if (user.status !== 'active') {
+    throw new ApiError(403, 'User account is not active');
+  }
+};
+
+const ensureStrongPassword = (password) => {
+  const value = String(password || '');
+  if (value.length < 8) {
+    throw new ApiError(400, 'Password must be at least 8 characters long');
+  }
+};
+
+const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
+
+const ensureRoleProfile = async (user) => {
+  if (user.role === 'PASSENGER') {
+    await Passenger.findOneAndUpdate(
+      { userId: user._id },
+      { $setOnInsert: { userId: user._id } },
+      { upsert: true }
+    );
+    return;
+  }
+
+  if (user.role === 'DRIVER') {
+    await Driver.findOneAndUpdate(
+      { userId: user._id },
+      { $setOnInsert: { userId: user._id } },
+      { upsert: true }
+    );
+    return;
+  }
+
+  await Admin.findOneAndUpdate(
+    { userId: user._id },
+    { $setOnInsert: { userId: user._id } },
+    { upsert: true }
+  );
+};
+
+const issueSession = async (user, replacedTokenHash = null) => {
+  ensureActiveUser(user);
+
+  const accessToken = signToken({ sub: user._id.toString(), role: user.role });
+  const refreshToken = signToken({ sub: user._id.toString(), role: user.role }, 'refresh');
+
+  const decoded = jwt.decode(refreshToken);
+  const expMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + 30 * 24 * 60 * 60 * 1000;
+  const newHash = tokenHash(refreshToken);
+
+  await RefreshToken.create({
+    userId: user._id,
+    tokenHash: newHash,
+    expiresAt: new Date(expMs),
+  });
+
+  if (replacedTokenHash) {
+    await RefreshToken.findOneAndUpdate(
+      { tokenHash: replacedTokenHash, revokedAt: null },
+      {
+        $set: {
+          revokedAt: new Date(),
+          replacedByHash: newHash,
+        },
+      }
+    );
+  }
+
+  return { token: accessToken, refreshToken, user: await buildProfile(user) };
+};
+
+const registerEmail = async ({ email, password, fullName, role = 'PASSENGER' }) => {
+  const normalizedEmail = normalizeEmail(email);
+  const existing = await User.findOne({ email: normalizedEmail });
+  if (existing) throw new ApiError(409, 'Email already registered');
+  const normalizedRole = String(role || 'PASSENGER').toUpperCase();
+  if (!['PASSENGER', 'DRIVER', 'ADMIN'].includes(normalizedRole)) {
+    throw new ApiError(400, 'Invalid role');
+  }
+  ensureStrongPassword(password);
+
+  const passwordHash = await bcrypt.hash(password, 11);
+  const user = await User.create({
+    email: normalizedEmail,
+    passwordHash,
+    fullName,
+    role: normalizedRole,
+    authProvider: 'local',
+    status: 'active',
+  });
+
+  if (normalizedRole === 'PASSENGER') {
+    await Passenger.create({ userId: user._id });
+  } else if (normalizedRole === 'DRIVER') {
+    await Driver.create({ userId: user._id });
+  } else if (normalizedRole === 'ADMIN') {
+    await Admin.create({ userId: user._id });
+  }
+
+  return issueSession(user);
+};
+
+const createUserByAdmin = async ({
+  email,
+  password,
+  fullName,
+  role = 'PASSENGER',
+  status = 'active',
+}) => {
+  const normalizedEmail = normalizeEmail(email);
+  const existing = await User.findOne({ email: normalizedEmail });
+  if (existing) throw new ApiError(409, 'Email already registered');
+
+  const normalizedRole = String(role || 'PASSENGER').toUpperCase();
+  if (!['PASSENGER', 'DRIVER', 'ADMIN'].includes(normalizedRole)) {
+    throw new ApiError(400, 'Invalid role');
+  }
+  ensureStrongPassword(password);
+
+  const passwordHash = await bcrypt.hash(password, 11);
+  const user = await User.create({
+    email: normalizedEmail,
+    passwordHash,
+    fullName,
+    role: normalizedRole,
+    authProvider: 'local',
+    status,
+    isVerified: true,
+  });
+
+  if (normalizedRole === 'PASSENGER') {
+    await Passenger.create({ userId: user._id });
+  } else if (normalizedRole === 'DRIVER') {
+    await Driver.create({ userId: user._id });
+  } else if (normalizedRole === 'ADMIN') {
+    await Admin.create({ userId: user._id });
+  }
+
+  return user;
+};
+
+const loginEmail = async ({ email, password }) => {
+  const user = await User.findOne({ email: normalizeEmail(email), authProvider: 'local' }).select(
+    '+passwordHash'
+  );
+  if (!user) throw new ApiError(404, 'Invalid email/password');
+  ensureActiveUser(user);
+
+  const valid = await bcrypt.compare(password, user.passwordHash);
+  if (!valid) throw new ApiError(401, 'Invalid email/password');
+
+  user.lastLoginAt = new Date();
+  await user.save();
+
+  return issueSession(user);
+};
+
+const verifyGoogleToken = async (idToken) => {
+  try {
+    if (!googleClientIds.length) return null;
+    const client = new OAuth2Client();
+    const ticket = await client.verifyIdToken({ idToken, audience: googleClientIds });
+    const payload = ticket.getPayload();
+    if (!payload?.sub || !payload?.email) return null;
+    return {
+      providerId: payload.sub,
+      email: payload.email.toLowerCase(),
+      fullName: payload.name || payload.email.split('@')[0],
+    };
+  } catch (_error) {
+    return null;
+  }
+};
+
+const verifyFirebaseGoogleToken = async (idToken) => {
+  if (!isFirebaseAdminConfigured()) {
+    throw new ApiError(503, 'Firebase login is not configured on the server');
+  }
+
+  try {
+    const auth = getFirebaseAuth();
+    const decoded = await auth.verifyIdToken(idToken);
+    if (!decoded?.uid || !decoded?.email) {
+      throw new ApiError(401, 'Invalid Firebase login token');
+    }
+
+    const provider = decoded.firebase?.sign_in_provider;
+    if (provider !== 'google.com') {
+      throw new ApiError(401, 'Firebase token is not a Google login session');
+    }
+
+    return {
+      providerId: decoded.uid,
+      email: decoded.email.toLowerCase(),
+      fullName: decoded.name || decoded.email.split('@')[0],
+    };
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    throw new ApiError(401, 'Invalid Firebase login token');
+  }
+};
+
+const verifyFacebookToken = async (accessToken) => {
+  if (!facebookAppToken) {
+    throw new ApiError(503, 'Facebook login is currently disabled');
+  }
+  if (!accessToken) return null;
+  const debug = await axios.get(
+    'https://graph.facebook.com/debug_token',
+    {
+      params: {
+        input_token: accessToken,
+        access_token: facebookAppToken,
+      },
+    }
+  );
+  if (!debug?.data?.data?.is_valid) return null;
+  const profile = await axios.get(
+    'https://graph.facebook.com/me',
+    {
+      params: {
+        access_token: accessToken,
+        fields: 'id,name,email',
+      },
+    }
+  );
+  const result = profile.data || {};
+  if (!result.id || !result.email) return null;
+  return {
+    providerId: result.id,
+    email: result.email.toLowerCase(),
+    fullName: result.name || result.email.split('@')[0],
+  };
+};
+
+const issueSocialAccountSession = async ({ profile, provider, role }) => {
+  let user = await User.findOne({
+    authProvider: provider,
+    providerId: profile.providerId,
+  });
+
+  if (!user) {
+    const existingEmailUser = await User.findOne({ email: profile.email });
+    if (existingEmailUser) {
+      user = existingEmailUser;
+      user.authProvider = provider;
+      user.providerId = profile.providerId;
+      user.fullName = user.fullName || profile.fullName;
+      user.isVerified = true;
+      await user.save();
+    } else {
+      user = await User.create({
+        email: profile.email,
+        fullName: profile.fullName,
+        role: role || 'PASSENGER',
+        authProvider: provider,
+        providerId: profile.providerId,
+        status: 'active',
+        isVerified: true,
+      });
+    }
+  }
+
+  await ensureRoleProfile(user);
+  ensureActiveUser(user);
+  user.lastLoginAt = new Date();
+  await user.save();
+
+  return issueSession(user);
+};
+
+const socialLogin = async ({ provider, token, role }) => {
+  let profile;
+  if (provider === 'google') profile = await verifyGoogleToken(token);
+  else if (provider === 'facebook') profile = await verifyFacebookToken(token);
+  if (!profile) throw new ApiError(401, 'Invalid social token');
+  return issueSocialAccountSession({ profile, provider, role });
+};
+
+const firebaseGoogleLogin = async ({ idToken, role }) => {
+  const profile = await verifyFirebaseGoogleToken(idToken);
+  return issueSocialAccountSession({ profile, provider: 'google', role });
+};
+
+const refreshSession = async ({ refreshToken }) => {
+  if (!refreshToken) throw new ApiError(400, 'refreshToken required');
+
+  let payload;
+  try {
+    payload = verifyRefreshToken(refreshToken);
+  } catch (_error) {
+    throw new ApiError(401, 'Invalid or expired refresh token');
+  }
+
+  const hash = tokenHash(refreshToken);
+  const stored = await RefreshToken.findOne({
+    tokenHash: hash,
+    revokedAt: null,
+    expiresAt: { $gt: new Date() },
+  });
+  if (!stored) {
+    throw new ApiError(401, 'Refresh token no longer valid');
+  }
+
+  const user = await User.findById(payload.sub);
+  ensureActiveUser(user);
+
+  return issueSession(user, hash);
+};
+
+const logoutSession = async ({ refreshToken }) => {
+  if (!refreshToken) throw new ApiError(400, 'refreshToken required');
+
+  let payload;
+  try {
+    payload = verifyRefreshToken(refreshToken);
+  } catch (_error) {
+    throw new ApiError(401, 'Invalid or expired refresh token');
+  }
+
+  const hash = tokenHash(refreshToken);
+  await RefreshToken.findOneAndUpdate(
+    {
+      tokenHash: hash,
+      userId: payload.sub,
+      revokedAt: null,
+    },
+    { $set: { revokedAt: new Date() } }
+  );
+};
+
+const changePassword = async ({ userId, currentPassword, newPassword }) => {
+  if (!currentPassword || !newPassword) {
+    throw new ApiError(400, 'currentPassword and newPassword are required');
+  }
+  ensureStrongPassword(newPassword);
+
+  const user = await User.findById(userId).select('+passwordHash');
+  if (!user) throw new ApiError(404, 'User not found');
+  if (user.authProvider !== 'local') {
+    throw new ApiError(400, 'Password change is only available for email login accounts');
+  }
+  ensureActiveUser(user);
+
+  const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+  if (!valid) throw new ApiError(401, 'Current password is incorrect');
+
+  user.passwordHash = await bcrypt.hash(newPassword, 11);
+  await user.save();
+
+  await RefreshToken.updateMany(
+    { userId: user._id, revokedAt: null },
+    { $set: { revokedAt: new Date() } }
+  );
+};
+
+const requestPasswordReset = async ({ email }) => {
+  const normalizedEmail = normalizeEmail(email);
+  const user = await User.findOne({ email: normalizedEmail, authProvider: 'local' }).select(
+    '_id status'
+  );
+
+  // Intentionally return generic success even when user does not exist.
+  if (!user || user.status !== 'active') {
+    return { delivered: true };
+  }
+
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const hash = tokenHash(rawToken);
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+
+  await PasswordResetToken.create({
+    userId: user._id,
+    tokenHash: hash,
+    expiresAt,
+  });
+
+  // In thesis/dev mode, expose token so the app can proceed without email SMTP setup.
+  if (nodeEnv === 'development') {
+    return { delivered: true, resetToken: rawToken, expiresAt };
+  }
+  return { delivered: true };
+};
+
+const resetPassword = async ({ token, newPassword }) => {
+  if (!token || !newPassword) {
+    throw new ApiError(400, 'token and newPassword are required');
+  }
+  ensureStrongPassword(newPassword);
+
+  const hash = tokenHash(token);
+  const record = await PasswordResetToken.findOne({
+    tokenHash: hash,
+    usedAt: null,
+    expiresAt: { $gt: new Date() },
+  });
+  if (!record) {
+    throw new ApiError(401, 'Invalid or expired reset token');
+  }
+
+  const user = await User.findById(record.userId).select('+passwordHash');
+  ensureActiveUser(user);
+  if (user.authProvider !== 'local') {
+    throw new ApiError(400, 'Password reset is only available for email login accounts');
+  }
+
+  user.passwordHash = await bcrypt.hash(newPassword, 11);
+  await user.save();
+
+  record.usedAt = new Date();
+  await record.save();
+
+  await RefreshToken.updateMany(
+    { userId: user._id, revokedAt: null },
+    { $set: { revokedAt: new Date() } }
+  );
+};
+
+module.exports = {
+  registerEmail,
+  loginEmail,
+  socialLogin,
+  firebaseGoogleLogin,
+  refreshSession,
+  logoutSession,
+  changePassword,
+  createUserByAdmin,
+  requestPasswordReset,
+  resetPassword,
+  buildProfile,
+};
