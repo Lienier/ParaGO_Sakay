@@ -1,44 +1,26 @@
 {
   "project_info": {
-    "project_number": "42909693940",
-    "project_id": "parago-ba422",
-    "storage_bucket": "parago-ba422.firebasestorage.app"
+    "project_number": "848551829233",
+    "project_id": "sakayflutter-88a7b",
+    "storage_bucket": "sakayflutter-88a7b.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:42909693940:android:4a12ee75422aabed3caba1",
+        "mobilesdk_app_id": "1:848551829233:android:497b3087df67f205b39350",
         "android_client_info": {
           "package_name": "com.example.parago_mobile"
         }
       },
-      "oauth_client": [
-        {
-          "client_id": "42909693940-9de0qljr1arcab7dsu5vtr1tgcmshmcp.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.example.parago_mobile",
-            "certificate_hash": "56e2098811d7aaa79cca6b3e4f6102973d3161eb"
-          }
-        },
-        {
-          "client_id": "42909693940-cismahr53ut6hmo2a69baaj7ffr0trbo.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
+      "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyCMlRBiqokzccDNLREtrKf326Hy3Iilvcs"
+          "current_key": "AIzaSyCcNKrZrJQDt_Z9Gc2qIeB2fifzj7ao3w8"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "42909693940-cismahr53ut6hmo2a69baaj7ffr0trbo.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
+          "other_platform_oauth_client": []
         }
       }
     }

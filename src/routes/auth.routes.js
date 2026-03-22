@@ -52,12 +52,16 @@ router.post(
 router.post(
   '/login-email',
   asyncHandler(async (req, res) => {
-    const { email, password } = req.body || {};
+    const { email, password, role } = req.body || {};
     if (!email || !password) throw new ApiError(400, 'email and password required');
     if (!emailPattern.test(String(email).trim())) {
       throw new ApiError(400, 'Invalid email format');
     }
-    const result = await loginEmail({ email, password });
+    const requestedRole = String(role || '').trim().toUpperCase();
+    if (requestedRole && !['PASSENGER', 'DRIVER', 'ADMIN'].includes(requestedRole)) {
+      throw new ApiError(400, 'Invalid role');
+    }
+    const result = await loginEmail({ email, password, role: requestedRole || undefined });
     return ok(res, result, 'Login successful');
   })
 );

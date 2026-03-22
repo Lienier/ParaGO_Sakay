@@ -40,7 +40,12 @@ class _AuthScreenState extends State<AuthScreen> {
     super.dispose();
   }
 
+  void _dismissKeyboard() {
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
   Future<void> _submit() async {
+    _dismissKeyboard();
     final session = context.read<SessionController>();
     final auth = AuthService(session.apiClient);
 
@@ -73,6 +78,7 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Future<void> _socialGoogle() async {
+    _dismissKeyboard();
     final session = context.read<SessionController>();
     final authService = AuthService(session.apiClient);
     final firebaseAuthService = FirebaseAuthService();
@@ -117,6 +123,7 @@ class _AuthScreenState extends State<AuthScreen> {
     return Scaffold(
       body: SafeArea(
         child: ListView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
           children: [
             Container(
@@ -285,6 +292,8 @@ class _AuthScreenState extends State<AuthScreen> {
                       TextField(
                         controller: _nameCtrl,
                         textInputAction: TextInputAction.next,
+                        onTapOutside: (_) => _dismissKeyboard(),
+                        onSubmitted: (_) => FocusScope.of(context).nextFocus(),
                         decoration: const InputDecoration(
                           labelText: 'Full name',
                           prefixIcon: Icon(Icons.person_outline),
@@ -296,6 +305,8 @@ class _AuthScreenState extends State<AuthScreen> {
                       controller: _emailCtrl,
                       keyboardType: TextInputType.emailAddress,
                       textInputAction: TextInputAction.next,
+                      onTapOutside: (_) => _dismissKeyboard(),
+                      onSubmitted: (_) => FocusScope.of(context).nextFocus(),
                       decoration: const InputDecoration(
                         labelText: 'Email address',
                         prefixIcon: Icon(Icons.alternate_email),
@@ -305,6 +316,13 @@ class _AuthScreenState extends State<AuthScreen> {
                     TextField(
                       controller: _passwordCtrl,
                       obscureText: _obscurePassword,
+                      textInputAction: TextInputAction.done,
+                      onTapOutside: (_) => _dismissKeyboard(),
+                      onSubmitted: (_) {
+                        if (!_loading) {
+                          _submit();
+                        }
+                      },
                       decoration: InputDecoration(
                         labelText: 'Password',
                         prefixIcon: const Icon(Icons.lock_outline),

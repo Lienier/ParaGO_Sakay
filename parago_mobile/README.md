@@ -37,7 +37,7 @@ Configure Firebase for this app:
 
 ```bash
 dart pub global activate flutterfire_cli
-flutterfire configure --project=parago-ba422
+flutterfire configure --project=sakayflutter-88a7b
 ```
 
 Register this Android app in your Google/Firebase project:
@@ -51,13 +51,22 @@ Register this Android app in your Google/Firebase project:
 Run the app with the backend URL:
 
 ```bash
-flutter run -d <device> --dart-define=PARAGO_API_BASE_URL=http://<your-backend-host>/api/v1
+flutter run -d <device> --dart-define=PARAGO_API_BASE_URL=https://sheltered-spire-66522-ba45eb6a735e.herokuapp.com/api/v1
+```
+
+If you prefer using the bundled app `.env`, set:
+
+```env
+PARAGO_API_BASE_URL=https://sheltered-spire-66522-ba45eb6a735e.herokuapp.com/api/v1
 ```
 
 Backend note:
 
 - Add Firebase Admin service-account values to the root `.env`.
 - The backend verifies Firebase ID tokens, then creates or restores the MongoDB user.
+- If Google sign-in fails on Android, add your Android SHA-1 in Firebase, enable
+  Google in Firebase Authentication, then download a fresh
+  `android/app/google-services.json`.
 
 ## Implemented route flows
 

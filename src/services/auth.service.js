@@ -17,6 +17,12 @@ const { signToken, verifyRefreshToken } = require('../utils/jwt');
 const tokenHash = require('../utils/tokenHash');
 const ApiError = require('../utils/apiError');
 
+const GENERIC_LOGIN_FAILURE_MESSAGE = 'Invalid email/password';
+const GENERIC_PASSENGER_LOGIN_FAILURE_MESSAGE =
+  'Invalid email/password';
+const GENERIC_PASSENGER_REGISTRATION_FAILURE_MESSAGE =
+  'Unable to create passenger account with the provided details';
+
 const buildProfile = async (user) => {
   if (!user) return null;
   const profile = { role: user.role, fullName: user.fullName, email: user.email };
@@ -47,6 +53,22 @@ const ensureStrongPassword = (password) => {
 };
 
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
+const normalizeRole = (role) => String(role || '').trim().toUpperCase();
+
+const ensureAllowedRequestedRole = (role) => {
+  const normalizedRole = normalizeRole(role);
+  if (!normalizedRole) return null;
+  if (!['PASSENGER', 'DRIVER', 'ADMIN'].includes(normalizedRole)) {
+    throw new ApiError(400, 'Invalid role');
+  }
+  return normalizedRole;
+};
+
+const isPassengerScopedRequest = (role) => normalizeRole(role) === 'PASSENGER';
+
+const throwPassengerLoginFailure = () => {
+  throw new ApiError(401, GENERIC_PASSENGER_LOGIN_FAILURE_MESSAGE);
+};
 
 const ensureRoleProfile = async (user) => {
   if (user.role === 'PASSENGER') {
@@ -107,11 +129,13 @@ const issueSession = async (user, replacedTokenHash = null) => {
 
 const registerEmail = async ({ email, password, fullName, role = 'PASSENGER' }) => {
   const normalizedEmail = normalizeEmail(email);
+  const normalizedRole = ensureAllowedRequestedRole(role) || 'PASSENGER';
   const existing = await User.findOne({ email: normalizedEmail });
-  if (existing) throw new ApiError(409, 'Email already registered');
-  const normalizedRole = String(role || 'PASSENGER').toUpperCase();
-  if (!['PASSENGER', 'DRIVER', 'ADMIN'].includes(normalizedRole)) {
-    throw new ApiError(400, 'Invalid role');
+  if (existing) {
+    if (normalizedRole === 'PASSENGER') {
+      throw new ApiError(400, GENERIC_PASSENGER_REGISTRATION_FAILURE_MESSAGE);
+    }
+    throw new ApiError(409, 'Email already registered');
   }
   ensureStrongPassword(password);
 
@@ -175,15 +199,35 @@ const createUserByAdmin = async ({
   return user;
 };
 
-const loginEmail = async ({ email, password }) => {
+const loginEmail = async ({ email, password, role }) => {
+  const requestedRole = ensureAllowedRequestedRole(role);
   const user = await User.findOne({ email: normalizeEmail(email), authProvider: 'local' }).select(
     '+passwordHash'
   );
-  if (!user) throw new ApiError(404, 'Invalid email/password');
+  if (!user) {
+    if (isPassengerScopedRequest(requestedRole)) {
+      throwPassengerLoginFailure();
+    }
+    throw new ApiError(404, GENERIC_LOGIN_FAILURE_MESSAGE);
+  }
+  if (requestedRole && user.role !== requestedRole) {
+    if (isPassengerScopedRequest(requestedRole)) {
+      throwPassengerLoginFailure();
+    }
+    throw new ApiError(401, GENERIC_LOGIN_FAILURE_MESSAGE);
+  }
+  if (isPassengerScopedRequest(requestedRole) && user.status !== 'active') {
+    throwPassengerLoginFailure();
+  }
   ensureActiveUser(user);
 
   const valid = await bcrypt.compare(password, user.passwordHash);
-  if (!valid) throw new ApiError(401, 'Invalid email/password');
+  if (!valid) {
+    if (isPassengerScopedRequest(requestedRole)) {
+      throwPassengerLoginFailure();
+    }
+    throw new ApiError(401, GENERIC_LOGIN_FAILURE_MESSAGE);
+  }
 
   user.lastLoginAt = new Date();
   await user.save();
@@ -272,7 +316,7 @@ const verifyFacebookToken = async (accessToken) => {
 };
 
 const issueSocialAccountSession = async ({ profile, provider, role }) => {
-  const normalizedRole = role ? String(role).toUpperCase() : null;
+  const normalizedRole = ensureAllowedRequestedRole(role);
   if (normalizedRole && normalizedRole !== 'PASSENGER') {
     throw new ApiError(403, 'Driver and admin accounts must be created by an admin account');
   }
@@ -281,10 +325,22 @@ const issueSocialAccountSession = async ({ profile, provider, role }) => {
     authProvider: provider,
     providerId: profile.providerId,
   });
+  if (user && normalizedRole && user.role !== normalizedRole) {
+    if (isPassengerScopedRequest(normalizedRole)) {
+      throwPassengerLoginFailure();
+    }
+    throw new ApiError(401, GENERIC_LOGIN_FAILURE_MESSAGE);
+  }
 
   if (!user) {
     const existingEmailUser = await User.findOne({ email: profile.email });
     if (existingEmailUser) {
+      if (normalizedRole && existingEmailUser.role !== normalizedRole) {
+        if (isPassengerScopedRequest(normalizedRole)) {
+          throwPassengerLoginFailure();
+        }
+        throw new ApiError(401, GENERIC_LOGIN_FAILURE_MESSAGE);
+      }
       user = existingEmailUser;
       user.authProvider = provider;
       user.providerId = profile.providerId;
@@ -304,6 +360,9 @@ const issueSocialAccountSession = async ({ profile, provider, role }) => {
     }
   }
 
+  if (isPassengerScopedRequest(normalizedRole) && user.status !== 'active') {
+    throwPassengerLoginFailure();
+  }
   await ensureRoleProfile(user);
   ensureActiveUser(user);
   user.lastLoginAt = new Date();

@@ -17,7 +17,7 @@ class ApiClient {
   ApiClient({String? baseUrl})
       : _dio = Dio(
           BaseOptions(
-            baseUrl: baseUrl ?? AppConfig.apiBaseUrl,
+            baseUrl: _normalizeBaseUrl(baseUrl ?? AppConfig.apiBaseUrl),
             connectTimeout: const Duration(seconds: 20),
             receiveTimeout: const Duration(seconds: 20),
             headers: {
@@ -31,6 +31,25 @@ class ApiClient {
   final Map<String, _ApiCachedResponse> _memoryCache = {};
   SharedPreferences? _cachePrefs;
   static const String _cachePrefix = 'parago_api_cache_v1:';
+
+  static String _normalizeBaseUrl(String rawBaseUrl) {
+    final trimmed = rawBaseUrl.trim();
+    if (trimmed.isEmpty) {
+      return trimmed;
+    }
+
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null) {
+      return trimmed;
+    }
+
+    final hasNestedPath = uri.path.isNotEmpty && uri.path != '/';
+    if (!hasNestedPath || trimmed.endsWith('/')) {
+      return trimmed;
+    }
+
+    return '$trimmed/';
+  }
 
   Future<SharedPreferences> get _cacheStorage async {
     _cachePrefs ??= await SharedPreferences.getInstance();

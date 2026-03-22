@@ -1,0 +1,68 @@
+{
+  "project_info": {
+    "project_number": "848551829233",
+    "project_id": "sakayflutter-88a7b",
+    "storage_bucket": "sakayflutter-88a7b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:848551829233:android:497b3087df67f205b39350",
+        "android_client_info": {
+          "package_name": "com.example.parago_mobile"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "848551829233-1vllm7i4gpljtc4v604s7u1siuf64s82.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCcNKrZrJQDt_Z9Gc2qIeB2fifzj7ao3w8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "848551829233-1vllm7i4gpljtc4v604s7u1siuf64s82.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:848551829233:android:097fcadcc1836ba3b39350",
+        "android_client_info": {
+          "package_name": "com.parago.passenger"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "848551829233-1vllm7i4gpljtc4v604s7u1siuf64s82.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCcNKrZrJQDt_Z9Gc2qIeB2fifzj7ao3w8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "848551829233-1vllm7i4gpljtc4v604s7u1siuf64s82.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

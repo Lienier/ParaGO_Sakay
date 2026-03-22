@@ -19,6 +19,8 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
             child: Form(
               key: _createFormKey,
               child: ListView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
                 shrinkWrap: true,
                 children: [
                   Text(
@@ -29,6 +31,9 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                   TextFormField(
                     decoration: const InputDecoration(labelText: 'Email'),
                     keyboardType: TextInputType.emailAddress,
+                    textInputAction: TextInputAction.next,
+                    onTapOutside: (_) =>
+                        FocusManager.instance.primaryFocus?.unfocus(),
                     onSaved: (value) => _createEmail = value,
                     validator: (value) =>
                         _textOf(value).isEmpty ? 'Email is required' : null,
@@ -36,6 +41,9 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                   TextFormField(
                     decoration: const InputDecoration(labelText: 'Password'),
                     obscureText: true,
+                    textInputAction: TextInputAction.next,
+                    onTapOutside: (_) =>
+                        FocusManager.instance.primaryFocus?.unfocus(),
                     onSaved: (value) => _createPassword = value,
                     validator: (value) {
                       if (_textOf(value).length < 8) {
@@ -46,24 +54,38 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                   ),
                   TextFormField(
                     decoration: const InputDecoration(labelText: 'Full name'),
+                    textInputAction: TextInputAction.next,
+                    onTapOutside: (_) =>
+                        FocusManager.instance.primaryFocus?.unfocus(),
                     onSaved: (value) => _createFullName = value,
                     validator: (value) =>
                         _textOf(value).isEmpty ? 'Full name is required' : null,
                   ),
                   TextFormField(
                     controller: _createLicenseCtrl,
-                    decoration: const InputDecoration(labelText: 'License number'),
+                    decoration:
+                        const InputDecoration(labelText: 'License number'),
+                    textInputAction: TextInputAction.next,
+                    onTapOutside: (_) =>
+                        FocusManager.instance.primaryFocus?.unfocus(),
                     onSaved: (value) => _createLicense = value,
                   ),
                   TextFormField(
                     controller: _createEmployeeCtrl,
-                    decoration: const InputDecoration(labelText: 'Employee number'),
+                    decoration:
+                        const InputDecoration(labelText: 'Employee number'),
+                    textInputAction: TextInputAction.next,
+                    onTapOutside: (_) =>
+                        FocusManager.instance.primaryFocus?.unfocus(),
                     onSaved: (value) => _createEmployee = value,
                   ),
                   TextFormField(
                     controller: _createPhoneCtrl,
                     decoration: const InputDecoration(labelText: 'Phone'),
                     keyboardType: TextInputType.phone,
+                    textInputAction: TextInputAction.next,
+                    onTapOutside: (_) =>
+                        FocusManager.instance.primaryFocus?.unfocus(),
                     onSaved: (value) => _createPhone = value,
                   ),
                   const SizedBox(height: 16),
@@ -74,15 +96,23 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                   const SizedBox(height: 10),
                   TextFormField(
                     controller: _createJeepneyPlateCtrl,
-                    decoration: const InputDecoration(labelText: 'Plate number'),
+                    decoration:
+                        const InputDecoration(labelText: 'Plate number'),
+                    textInputAction: TextInputAction.next,
+                    onTapOutside: (_) =>
+                        FocusManager.instance.primaryFocus?.unfocus(),
                     onSaved: (value) => _createJeepneyPlateNumber = value,
-                    validator: (value) =>
-                        _textOf(value).isEmpty ? 'Plate number is required' : null,
+                    validator: (value) => _textOf(value).isEmpty
+                        ? 'Plate number is required'
+                        : null,
                   ),
                   TextFormField(
                     controller: _createJeepneyCapacityCtrl,
                     decoration: const InputDecoration(labelText: 'Capacity'),
                     keyboardType: TextInputType.number,
+                    textInputAction: TextInputAction.done,
+                    onTapOutside: (_) =>
+                        FocusManager.instance.primaryFocus?.unfocus(),
                     onSaved: (value) => _createJeepneyCapacity = value,
                     validator: (value) {
                       final parsed = int.tryParse(_textOf(value));
@@ -95,7 +125,8 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String?>(
                     initialValue: _createRouteId,
-                    decoration: const InputDecoration(labelText: 'Assigned route'),
+                    decoration:
+                        const InputDecoration(labelText: 'Assigned route'),
                     items: [
                       const DropdownMenuItem(
                         value: null,
@@ -113,10 +144,12 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
                     initialValue: _createStatus,
-                    decoration: const InputDecoration(labelText: 'Account status'),
+                    decoration:
+                        const InputDecoration(labelText: 'Account status'),
                     items: const [
                       DropdownMenuItem(value: 'active', child: Text('Active')),
-                      DropdownMenuItem(value: 'inactive', child: Text('Inactive')),
+                      DropdownMenuItem(
+                          value: 'inactive', child: Text('Inactive')),
                     ],
                     onChanged: (value) => _createStatus = value ?? 'active',
                   ),
@@ -128,7 +161,8 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                   ),
                   const SizedBox(height: 10),
                   FilledButton(
-                    onPressed: _saving ? null : () => _createDriver(sheetContext),
+                    onPressed:
+                        _saving ? null : () => _createDriver(sheetContext),
                     child: const Text('Create driver'),
                   ),
                   const SizedBox(height: 12),
@@ -142,17 +176,22 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
   }
 
   Future<void> _openEditSheet(Map<String, dynamic> driver) async {
-    final assignedJeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
+    final assignedJeepney =
+        driver['assignedJeepneyId'] as Map<String, dynamic>?;
     _editLicenseCtrl.text = driver['licenseNumber']?.toString() ?? '';
     _editEmployeeCtrl.text = driver['employeeNumber']?.toString() ?? '';
     _editPhoneCtrl.text = driver['phone']?.toString() ?? '';
-    _editJeepneyPlateCtrl.text = assignedJeepney?['plateNumber']?.toString() ?? '';
-    _editJeepneyCapacityCtrl.text = assignedJeepney?['capacity']?.toString() ?? '';
+    _editJeepneyPlateCtrl.text =
+        assignedJeepney?['plateNumber']?.toString() ?? '';
+    _editJeepneyCapacityCtrl.text =
+        assignedJeepney?['capacity']?.toString() ?? '';
 
     final selectedRouteId = _nullableIdOf(driver['assignedRouteId']);
     _routeSelection.value = _hasRoute(selectedRouteId) ? selectedRouteId : null;
     _statusSelection.value =
-        _textOf(driver['status']).toLowerCase() == 'inactive' ? 'inactive' : 'active';
+        _textOf(driver['status']).toLowerCase() == 'inactive'
+            ? 'inactive'
+            : 'active';
     _verifiedSelection.value = driver['isVerified'] == true;
 
     await showModalBottomSheet(
@@ -169,6 +208,7 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
           child: Form(
             key: _editFormKey,
             child: ListView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               shrinkWrap: true,
               children: [
                 Text(
@@ -178,16 +218,27 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _editLicenseCtrl,
-                  decoration: const InputDecoration(labelText: 'License number'),
+                  decoration:
+                      const InputDecoration(labelText: 'License number'),
+                  textInputAction: TextInputAction.next,
+                  onTapOutside: (_) =>
+                      FocusManager.instance.primaryFocus?.unfocus(),
                 ),
                 TextFormField(
                   controller: _editEmployeeCtrl,
-                  decoration: const InputDecoration(labelText: 'Employee number'),
+                  decoration:
+                      const InputDecoration(labelText: 'Employee number'),
+                  textInputAction: TextInputAction.next,
+                  onTapOutside: (_) =>
+                      FocusManager.instance.primaryFocus?.unfocus(),
                 ),
                 TextFormField(
                   controller: _editPhoneCtrl,
                   decoration: const InputDecoration(labelText: 'Phone'),
                   keyboardType: TextInputType.phone,
+                  textInputAction: TextInputAction.next,
+                  onTapOutside: (_) =>
+                      FocusManager.instance.primaryFocus?.unfocus(),
                 ),
                 const SizedBox(height: 16),
                 Text(
@@ -198,13 +249,20 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                 TextFormField(
                   controller: _editJeepneyPlateCtrl,
                   decoration: const InputDecoration(labelText: 'Plate number'),
-                  validator: (value) =>
-                      _textOf(value).isEmpty ? 'Plate number is required' : null,
+                  textInputAction: TextInputAction.next,
+                  onTapOutside: (_) =>
+                      FocusManager.instance.primaryFocus?.unfocus(),
+                  validator: (value) => _textOf(value).isEmpty
+                      ? 'Plate number is required'
+                      : null,
                 ),
                 TextFormField(
                   controller: _editJeepneyCapacityCtrl,
                   decoration: const InputDecoration(labelText: 'Capacity'),
                   keyboardType: TextInputType.number,
+                  textInputAction: TextInputAction.done,
+                  onTapOutside: (_) =>
+                      FocusManager.instance.primaryFocus?.unfocus(),
                   validator: (value) {
                     final parsed = int.tryParse(_textOf(value));
                     if (parsed == null || parsed < 1) {
@@ -219,7 +277,8 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                   builder: (_, selectedRoute, __) =>
                       DropdownButtonFormField<String?>(
                     initialValue: selectedRoute,
-                    decoration: const InputDecoration(labelText: 'Assigned route'),
+                    decoration:
+                        const InputDecoration(labelText: 'Assigned route'),
                     items: [
                       const DropdownMenuItem(
                         value: null,
@@ -240,12 +299,15 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                   valueListenable: _statusSelection,
                   builder: (_, status, __) => DropdownButtonFormField<String>(
                     initialValue: status,
-                    decoration: const InputDecoration(labelText: 'Account status'),
+                    decoration:
+                        const InputDecoration(labelText: 'Account status'),
                     items: const [
                       DropdownMenuItem(value: 'active', child: Text('Active')),
-                      DropdownMenuItem(value: 'inactive', child: Text('Inactive')),
+                      DropdownMenuItem(
+                          value: 'inactive', child: Text('Inactive')),
                     ],
-                    onChanged: (value) => _statusSelection.value = value ?? 'active',
+                    onChanged: (value) =>
+                        _statusSelection.value = value ?? 'active',
                   ),
                 ),
                 const SizedBox(height: 10),

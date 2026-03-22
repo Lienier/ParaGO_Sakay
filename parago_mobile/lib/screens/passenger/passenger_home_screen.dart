@@ -239,13 +239,30 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final result = await showDialog<_PassengerInput>(
       context: context,
       builder: (context) {
+        void submit() {
+          FocusManager.instance.primaryFocus?.unfocus();
+          Navigator.of(context).pop(
+            _PassengerInput(
+              stopRef: stopCtrl.text.trim().isEmpty
+                  ? 'Nearest loading point'
+                  : stopCtrl.text.trim(),
+              note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
+            ),
+          );
+        }
+
         return AlertDialog(
+          scrollable: true,
           title: const Text('Send pickup request'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
                 controller: stopCtrl,
+                textInputAction: TextInputAction.next,
+                onTapOutside: (_) =>
+                    FocusManager.instance.primaryFocus?.unfocus(),
+                onSubmitted: (_) => FocusScope.of(context).nextFocus(),
                 decoration: const InputDecoration(
                   labelText: 'Pickup point or stop reference',
                 ),
@@ -253,6 +270,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
               const SizedBox(height: 12),
               TextField(
                 controller: noteCtrl,
+                textInputAction: TextInputAction.done,
+                onTapOutside: (_) =>
+                    FocusManager.instance.primaryFocus?.unfocus(),
+                onSubmitted: (_) => submit(),
                 decoration: const InputDecoration(
                   labelText: 'Optional note',
                 ),
@@ -267,18 +288,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed: () {
-                Navigator.of(context).pop(
-                  _PassengerInput(
-                    stopRef: stopCtrl.text.trim().isEmpty
-                        ? 'Nearest loading point'
-                        : stopCtrl.text.trim(),
-                    note: noteCtrl.text.trim().isEmpty
-                        ? null
-                        : noteCtrl.text.trim(),
-                  ),
-                );
-              },
+              onPressed: submit,
               child: const Text('Send'),
             ),
           ],
@@ -297,13 +307,30 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final result = await showDialog<_PassengerInput>(
       context: context,
       builder: (context) {
+        void submit() {
+          FocusManager.instance.primaryFocus?.unfocus();
+          Navigator.of(context).pop(
+            _PassengerInput(
+              stopRef: stopCtrl.text.trim().isEmpty
+                  ? 'Next preferred drop-off point'
+                  : stopCtrl.text.trim(),
+              note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
+            ),
+          );
+        }
+
         return AlertDialog(
+          scrollable: true,
           title: const Text('Send digital para alert'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
                 controller: stopCtrl,
+                textInputAction: TextInputAction.next,
+                onTapOutside: (_) =>
+                    FocusManager.instance.primaryFocus?.unfocus(),
+                onSubmitted: (_) => FocusScope.of(context).nextFocus(),
                 decoration: const InputDecoration(
                   labelText: 'Drop-off reference',
                 ),
@@ -311,6 +338,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
               const SizedBox(height: 12),
               TextField(
                 controller: noteCtrl,
+                textInputAction: TextInputAction.done,
+                onTapOutside: (_) =>
+                    FocusManager.instance.primaryFocus?.unfocus(),
+                onSubmitted: (_) => submit(),
                 decoration: const InputDecoration(
                   labelText: 'Optional note for driver',
                 ),
@@ -325,18 +356,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed: () {
-                Navigator.of(context).pop(
-                  _PassengerInput(
-                    stopRef: stopCtrl.text.trim().isEmpty
-                        ? 'Next preferred drop-off point'
-                        : stopCtrl.text.trim(),
-                    note: noteCtrl.text.trim().isEmpty
-                        ? null
-                        : noteCtrl.text.trim(),
-                  ),
-                );
-              },
+              onPressed: submit,
               child: const Text('Alert driver'),
             ),
           ],
@@ -396,6 +416,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
           children: [
             _RoleHero(
