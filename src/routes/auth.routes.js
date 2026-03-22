@@ -71,6 +71,12 @@ router.post(
       throw new ApiError(400, 'Unsupported provider');
     }
     if (!token) throw new ApiError(400, 'Provider token required');
+    if (role && String(role).toUpperCase() !== 'PASSENGER') {
+      throw new ApiError(
+        403,
+        'Driver and admin accounts must be created by an admin account'
+      );
+    }
     const result = await socialLogin({ provider, token, role });
     return ok(res, result, 'Social login successful');
   })
@@ -81,8 +87,11 @@ router.post(
   asyncHandler(async (req, res) => {
     const { idToken, role } = req.body || {};
     if (!idToken) throw new ApiError(400, 'Firebase ID token required');
-    if (role && !['PASSENGER', 'DRIVER', 'ADMIN'].includes(String(role).toUpperCase())) {
-      throw new ApiError(400, 'Invalid role');
+    if (role && String(role).toUpperCase() !== 'PASSENGER') {
+      throw new ApiError(
+        403,
+        'Driver and admin accounts must be created by an admin account'
+      );
     }
     const result = await firebaseGoogleLogin({ idToken, role });
     return ok(res, result, 'Firebase Google login successful');

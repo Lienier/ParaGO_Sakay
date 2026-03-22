@@ -40,23 +40,29 @@ class ApiClient {
   String _normalizePathForRequest(String path) {
     final trimmed = path.trim();
     if (trimmed.isEmpty) {
-      return '/';
+      return '';
     }
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
       return trimmed;
     }
 
     final parsedBasePath = Uri.tryParse(_dio.options.baseUrl)?.path ?? '';
+    final baseHasNestedPath =
+        parsedBasePath.isNotEmpty && parsedBasePath != '/';
     final baseHasApiV1 =
         parsedBasePath.endsWith('/api/v1') || parsedBasePath.endsWith('/api/v1/');
 
     var normalized = trimmed.startsWith('/') ? trimmed.substring(1) : trimmed;
-    if (baseHasApiV1 && normalized.startsWith('api/v1/')) {
-      normalized = normalized.substring(6); // remove duplicated API version
+    if (baseHasApiV1 && normalized == 'api/v1') {
+      normalized = '';
+    } else if (baseHasApiV1 && normalized.startsWith('api/v1/')) {
+      normalized = normalized.substring(7);
     }
 
-    if (normalized.isEmpty) return '/';
-    return normalized.startsWith('/') ? normalized : '/$normalized';
+    if (normalized.isEmpty) {
+      return baseHasNestedPath ? '' : '/';
+    }
+    return baseHasNestedPath ? normalized : '/$normalized';
   }
 
   Future<Map<String, dynamic>?> _getCachedResponse({

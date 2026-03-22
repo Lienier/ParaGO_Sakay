@@ -7,6 +7,10 @@ const { ADMIN, DRIVER, PASSENGER } = require('../constants/roles');
 const { ok } = require('../utils/response');
 const ApiError = require('../utils/apiError');
 const { ensureObjectId } = require('../utils/validators');
+const {
+  buildJeepneyCreatePayload,
+  buildJeepneyUpdatePayload,
+} = require('../utils/transportPayloads');
 
 const router = express.Router();
 
@@ -24,7 +28,7 @@ router.post(
   authenticate,
   authorize(ADMIN),
   asyncHandler(async (req, res) => {
-    const item = await Jeepney.create(req.body || {});
+    const item = await Jeepney.create(buildJeepneyCreatePayload(req.body || {}));
     return ok(res, item, 'Jeepney created', 201);
   })
 );
@@ -35,7 +39,15 @@ router.put(
   authorize(ADMIN),
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'jeepney id');
-    const item = await Jeepney.findByIdAndUpdate(req.params.id, req.body || {}, { new: true });
+    const updates = buildJeepneyUpdatePayload(req.body || {});
+    if (!Object.keys(updates).length) {
+      throw new ApiError(400, 'No valid jeepney fields provided');
+    }
+    const item = await Jeepney.findByIdAndUpdate(
+      req.params.id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
     if (!item) throw new ApiError(404, 'Jeepney not found');
     return ok(res, item, 'Jeepney updated');
   })

@@ -272,6 +272,11 @@ const verifyFacebookToken = async (accessToken) => {
 };
 
 const issueSocialAccountSession = async ({ profile, provider, role }) => {
+  const normalizedRole = role ? String(role).toUpperCase() : null;
+  if (normalizedRole && normalizedRole !== 'PASSENGER') {
+    throw new ApiError(403, 'Driver and admin accounts must be created by an admin account');
+  }
+
   let user = await User.findOne({
     authProvider: provider,
     providerId: profile.providerId,
@@ -290,7 +295,7 @@ const issueSocialAccountSession = async ({ profile, provider, role }) => {
       user = await User.create({
         email: profile.email,
         fullName: profile.fullName,
-        role: role || 'PASSENGER',
+        role: normalizedRole || 'PASSENGER',
         authProvider: provider,
         providerId: profile.providerId,
         status: 'active',

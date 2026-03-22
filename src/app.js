@@ -5,20 +5,7 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 
 const { nodeEnv } = require('./config/env');
-const authRoutes = require('./routes/auth.routes');
-const userRoutes = require('./routes/users.routes');
-const passengerRoutes = require('./routes/passengers.routes');
-const driverRoutes = require('./routes/drivers.routes');
-const adminRoutes = require('./routes/admin.routes');
-const jeepneyRoutes = require('./routes/jeepneys.routes');
-const routeRoutes = require('./routes/routes.routes');
-const tripRoutes = require('./routes/trips.routes');
-const pickupRequestRoutes = require('./routes/pickupRequests.routes');
-const boardingRoutes = require('./routes/boarding.routes');
-const rideSessionRoutes = require('./routes/rideSessions.routes');
-const stopAlertRoutes = require('./routes/stopAlerts.routes');
-const notificationRoutes = require('./routes/notifications.routes');
-const reportRoutes = require('./routes/reports.routes');
+const { registerApiRoutes } = require('./config/apiRoutes');
 const { notFound, errorHandler } = require('./middlewares/error.middleware');
 
 const app = express();
@@ -69,36 +56,10 @@ app.get('/api/v1/health', (_req, res) => {
   res.status(200).json({ status: 'ok', service: 'ParaGO Backend' });
 });
 
-app.use('/api/v1/auth', authLimiter, authRoutes);
-app.use('/api/v1/users', userRoutes);
-app.use('/api/v1/passengers', passengerRoutes);
-app.use('/api/v1/drivers', driverRoutes);
-app.use('/api/v1/admin', adminRoutes);
-app.use('/api/v1/jeepneys', jeepneyRoutes);
-app.use('/api/v1/routes', routeRoutes);
-app.use('/api/v1/trips', tripRoutes);
-app.use('/api/v1/pickup-requests', pickupRequestRoutes);
-app.use('/api/v1/boarding', boardingRoutes);
-app.use('/api/v1/ride-sessions', rideSessionRoutes);
-app.use('/api/v1/stop-alerts', stopAlertRoutes);
-app.use('/api/v1/notifications', notificationRoutes);
-app.use('/api/v1/reports', reportRoutes);
+registerApiRoutes(app, { prefix: '/api/v1', authLimiter });
 
 // Compatibility routes for clients that temporarily miss the /api/v1 prefix.
-app.use('/auth', authLimiter, authRoutes);
-app.use('/users', userRoutes);
-app.use('/passengers', passengerRoutes);
-app.use('/drivers', driverRoutes);
-app.use('/admin', adminRoutes);
-app.use('/jeepneys', jeepneyRoutes);
-app.use('/routes', routeRoutes);
-app.use('/trips', tripRoutes);
-app.use('/pickup-requests', pickupRequestRoutes);
-app.use('/boarding', boardingRoutes);
-app.use('/ride-sessions', rideSessionRoutes);
-app.use('/stop-alerts', stopAlertRoutes);
-app.use('/notifications', notificationRoutes);
-app.use('/reports', reportRoutes);
+registerApiRoutes(app, { authLimiter });
 
 app.use(notFound);
 app.use(errorHandler);

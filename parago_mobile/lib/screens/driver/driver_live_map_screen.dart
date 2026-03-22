@@ -81,8 +81,10 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
       }
 
       final initialPosition = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.best,
-        timeLimit: const Duration(seconds: 12),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.best,
+          timeLimit: Duration(seconds: 12),
+        ),
       );
 
       final current = LatLng(

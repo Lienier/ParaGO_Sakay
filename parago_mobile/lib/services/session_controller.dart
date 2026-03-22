@@ -28,23 +28,61 @@ class SessionController extends ChangeNotifier {
   bool get isAuthenticated => _user != null && _accessToken != null;
   ApiClient get apiClient => _apiClient;
 
+  Future<bool> _tryRefreshSession(String? refreshToken) async {
+    final token = refreshToken?.trim() ?? '';
+    if (token.isEmpty) {
+      return false;
+    }
+
+    final session = await AuthService(_apiClient).refreshSession(
+      refreshToken: token,
+    );
+    _applySession(session, notify: false);
+    await _storage.saveTokens(
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+    );
+    return true;
+  }
+
+  void _applySession(AuthSession session, {bool notify = true}) {
+    _accessToken = session.accessToken;
+    _refreshToken = session.refreshToken;
+    _user = session.user;
+    _apiClient.setAccessToken(_accessToken);
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
   Future<void> restore() async {
     final tokens = await _storage.loadTokens();
     final accessToken = tokens['accessToken'];
     final refreshToken = tokens['refreshToken'];
-    if (accessToken == null) {
-      _loading = false;
-      notifyListeners();
-      return;
-    }
-    _apiClient.setAccessToken(accessToken);
+
     try {
-      final user = await AuthService(_apiClient).getCurrentUser();
-      _accessToken = accessToken;
-      _refreshToken = refreshToken;
-      _user = user;
+      final trimmedAccessToken = accessToken?.trim() ?? '';
+      if (trimmedAccessToken.isNotEmpty) {
+        _apiClient.setAccessToken(trimmedAccessToken);
+        final user = await AuthService(_apiClient).getCurrentUser();
+        _accessToken = trimmedAccessToken;
+        _refreshToken = refreshToken;
+        _user = user;
+      } else {
+        final restored = await _tryRefreshSession(refreshToken);
+        if (!restored) {
+          await clear(notify: false);
+        }
+      }
     } catch (_) {
-      await clear(notify: false);
+      try {
+        final restored = await _tryRefreshSession(refreshToken);
+        if (!restored) {
+          await clear(notify: false);
+        }
+      } catch (_) {
+        await clear(notify: false);
+      }
     } finally {
       _loading = false;
       notifyListeners();
@@ -52,11 +90,7 @@ class SessionController extends ChangeNotifier {
   }
 
   void applySession(AuthSession session) {
-    _accessToken = session.accessToken;
-    _refreshToken = session.refreshToken;
-    _user = session.user;
-    _apiClient.setAccessToken(_accessToken);
-    notifyListeners();
+    _applySession(session);
   }
 
   Future<void> saveAuth(AuthSession session) async {

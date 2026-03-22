@@ -77,6 +77,16 @@ class AuthService {
         (data['user'] as Map? ?? <String, dynamic>{}).cast<String, dynamic>());
   }
 
+  Future<AuthSession> refreshSession({required String refreshToken}) async {
+    final response = await _client.request(
+      method: 'POST',
+      path: '/auth/refresh',
+      body: {'refreshToken': refreshToken},
+      useCache: false,
+    );
+    return AuthSession.fromJson(response['data'] as Map<String, dynamic>);
+  }
+
   Future<void> logout({required String refreshToken}) async {
     await _client.request(
       method: 'POST',

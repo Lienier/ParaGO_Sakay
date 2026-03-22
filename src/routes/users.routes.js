@@ -9,6 +9,7 @@ const { PASSENGER, DRIVER, ADMIN } = require('../constants/roles');
 const { ensureObjectId } = require('../utils/validators');
 
 const router = express.Router();
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 router.get(
   '/passengers',
@@ -76,8 +77,29 @@ router.put(
   asyncHandler(async (req, res) => {
     const user = await User.findById(req.user._id);
     if (!user) throw new ApiError(404, 'User not found');
-    user.fullName = req.body.fullName || user.fullName;
-    if (req.body.email) user.email = req.body.email.toLowerCase();
+
+    if (req.body.fullName !== undefined) {
+      const fullName = String(req.body.fullName || '').trim();
+      if (!fullName) {
+        throw new ApiError(400, 'fullName cannot be empty');
+      }
+      user.fullName = fullName;
+    }
+    if (req.body.email !== undefined) {
+      const email = String(req.body.email || '').trim().toLowerCase();
+      if (!emailPattern.test(email)) {
+        throw new ApiError(400, 'Invalid email format');
+      }
+      const existingUser = await User.findOne({
+        email,
+        _id: { $ne: user._id },
+      }).select('_id');
+      if (existingUser) {
+        throw new ApiError(409, 'Email already registered');
+      }
+      user.email = email;
+    }
+
     await user.save();
     return ok(res, { fullName: user.fullName, email: user.email }, 'Profile updated');
   })

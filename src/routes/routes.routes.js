@@ -7,6 +7,10 @@ const { ADMIN } = require('../constants/roles');
 const { ok } = require('../utils/response');
 const ApiError = require('../utils/apiError');
 const { ensureObjectId } = require('../utils/validators');
+const {
+  buildRouteCreatePayload,
+  buildRouteUpdatePayload,
+} = require('../utils/transportPayloads');
 
 const router = express.Router();
 
@@ -24,7 +28,7 @@ router.post(
   authenticate,
   authorize(ADMIN),
   asyncHandler(async (req, res) => {
-    const route = await RouteModel.create(req.body || {});
+    const route = await RouteModel.create(buildRouteCreatePayload(req.body || {}));
     return ok(res, route, 'Route created', 201);
   })
 );
@@ -35,7 +39,15 @@ router.put(
   authorize(ADMIN),
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'route id');
-    const updated = await RouteModel.findByIdAndUpdate(req.params.id, req.body || {}, { new: true });
+    const updates = buildRouteUpdatePayload(req.body || {});
+    if (!Object.keys(updates).length) {
+      throw new ApiError(400, 'No valid route fields provided');
+    }
+    const updated = await RouteModel.findByIdAndUpdate(
+      req.params.id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
     if (!updated) throw new ApiError(404, 'Route not found');
     return ok(res, updated, 'Route updated');
   })

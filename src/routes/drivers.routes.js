@@ -9,6 +9,7 @@ const { DRIVER, ADMIN } = require('../constants/roles');
 const { ok } = require('../utils/response');
 const ApiError = require('../utils/apiError');
 const { ensureLatLng } = require('../utils/validators');
+const { hasOwn } = require('../utils/object');
 const validateObjectId = require('../middlewares/validateObjectId');
 
 const router = express.Router();
@@ -67,9 +68,23 @@ router.put(
   authenticate,
   authorize(DRIVER),
   asyncHandler(async (req, res) => {
+    const updates = {};
+    if (hasOwn(req.body, 'licenseNumber')) {
+      updates.licenseNumber = String(req.body.licenseNumber || '').trim();
+    }
+    if (hasOwn(req.body, 'employeeNumber')) {
+      updates.employeeNumber = String(req.body.employeeNumber || '').trim();
+    }
+    if (hasOwn(req.body, 'phone')) {
+      updates.phone = String(req.body.phone || '').trim();
+    }
+    if (!Object.keys(updates).length) {
+      throw new ApiError(400, 'No valid driver profile fields provided');
+    }
+
     const profile = await Driver.findOneAndUpdate(
       { userId: req.user._id },
-      { $set: req.body || {} },
+      { $set: updates },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
     return ok(res, profile, 'Driver profile updated');
@@ -126,19 +141,21 @@ const updateDriverJeepneyLocation = async (req, res) => {
   return ok(res, jeepney, 'Location updated');
 };
 
-router.all(
-  '/me/location',
-  authenticate,
-  authorize(DRIVER),
-  asyncHandler(updateDriverJeepneyLocation)
-);
-
-router.all(
-  '/location',
-  authenticate,
-  authorize(DRIVER),
-  asyncHandler(updateDriverJeepneyLocation)
-);
+const locationMethods = ['patch', 'post', 'put'];
+for (const method of locationMethods) {
+  router[method](
+    '/me/location',
+    authenticate,
+    authorize(DRIVER),
+    asyncHandler(updateDriverJeepneyLocation)
+  );
+  router[method](
+    '/location',
+    authenticate,
+    authorize(DRIVER),
+    asyncHandler(updateDriverJeepneyLocation)
+  );
+}
 
 router.patch(
   '/:id/verify',

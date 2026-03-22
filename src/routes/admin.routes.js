@@ -17,6 +17,11 @@ const RouteModel = require('../models/route');
 const ApiError = require('../utils/apiError');
 const { ensureObjectId } = require('../utils/validators');
 const { createUserByAdmin } = require('../services/auth.service');
+const { hasOwn, isPlainObject, pickDefined } = require('../utils/object');
+const {
+  buildJeepneyCreatePayload,
+  buildJeepneyUpdatePayload,
+} = require('../utils/transportPayloads');
 
 const router = express.Router();
 
@@ -28,72 +33,6 @@ const normalizeOptionalObjectId = (value, fieldName, allowMissing = false) => {
   if (value === null) return null;
   ensureObjectId(value, fieldName);
   return String(value);
-};
-
-const normalizeOptionalText = (value) => {
-  const text = String(value || '').trim();
-  return text || undefined;
-};
-
-const normalizePlateNumber = (value) => {
-  const text = String(value || '').trim().toUpperCase();
-  return text || undefined;
-};
-
-const buildJeepneyCreatePayload = (value) => {
-  const payload = value || {};
-  const plateNumber = normalizePlateNumber(payload.plateNumber);
-  if (!plateNumber) {
-    throw new ApiError(400, 'jeepney.plateNumber is required');
-  }
-  const capacity = Number(payload.capacity);
-  if (!Number.isInteger(capacity) || capacity < 1) {
-    throw new ApiError(400, 'jeepney.capacity must be a positive whole number');
-  }
-
-  const status = payload.status ? String(payload.status).toLowerCase() : 'active';
-  if (!['active', 'inactive', 'maintenance'].includes(status)) {
-    throw new ApiError(400, 'jeepney.status must be one of: active, inactive, maintenance');
-  }
-
-  return {
-    plateNumber,
-    capacity,
-    capacityBand: normalizeOptionalText(payload.capacityBand) || 'normal',
-    status,
-  };
-};
-
-const buildJeepneyUpdatePayload = (value) => {
-  const payload = value || {};
-  const updates = {};
-
-  if (payload.plateNumber !== undefined) {
-    const plateNumber = normalizePlateNumber(payload.plateNumber);
-    if (!plateNumber) {
-      throw new ApiError(400, 'jeepney.plateNumber cannot be empty');
-    }
-    updates.plateNumber = plateNumber;
-  }
-  if (payload.capacity !== undefined) {
-    const capacity = Number(payload.capacity);
-    if (!Number.isInteger(capacity) || capacity < 1) {
-      throw new ApiError(400, 'jeepney.capacity must be a positive whole number');
-    }
-    updates.capacity = capacity;
-  }
-  if (payload.capacityBand !== undefined) {
-    updates.capacityBand = normalizeOptionalText(payload.capacityBand) || 'normal';
-  }
-  if (payload.status !== undefined) {
-    const status = String(payload.status || '').toLowerCase();
-    if (!['active', 'inactive', 'maintenance'].includes(status)) {
-      throw new ApiError(400, 'jeepney.status must be one of: active, inactive, maintenance');
-    }
-    updates.status = status;
-  }
-
-  return updates;
 };
 
 const buildDriverProfile = async (driver) => {
@@ -217,13 +156,13 @@ router.post(
     });
 
     const update = {};
-    if (body.licenseNumber !== undefined) {
+    if (hasOwn(body, 'licenseNumber')) {
       update.licenseNumber = String(body.licenseNumber || '').trim();
     }
-    if (body.employeeNumber !== undefined) {
+    if (hasOwn(body, 'employeeNumber')) {
       update.employeeNumber = String(body.employeeNumber || '').trim();
     }
-    if (body.phone !== undefined) {
+    if (hasOwn(body, 'phone')) {
       update.phone = String(body.phone || '').trim();
     }
     update.status = status;
@@ -266,17 +205,18 @@ router.patch(
     const updates = {};
     const updatesToUnset = {};
 
-    if (body.licenseNumber !== undefined) updates.licenseNumber = body.licenseNumber || '';
-    if (body.employeeNumber !== undefined) updates.employeeNumber = body.employeeNumber || '';
-    if (body.phone !== undefined) updates.phone = body.phone || '';
+    if (hasOwn(body, 'licenseNumber')) updates.licenseNumber = String(body.licenseNumber || '').trim();
+    if (hasOwn(body, 'employeeNumber')) updates.employeeNumber = String(body.employeeNumber || '').trim();
+    if (hasOwn(body, 'phone')) updates.phone = String(body.phone || '').trim();
     if (typeof body.isVerified === 'boolean') updates.isVerified = body.isVerified;
-    if (body.status !== undefined) {
-      if (!['active', 'inactive'].includes(body.status)) {
+    if (hasOwn(body, 'status')) {
+      const status = String(body.status || '').toLowerCase();
+      if (!['active', 'inactive'].includes(status)) {
         throw new ApiError(400, 'status must be one of: active, inactive');
       }
-      updates.status = body.status;
+      updates.status = status;
     }
-    if (body.assignedRouteId !== undefined) {
+    if (hasOwn(body, 'assignedRouteId')) {
       if (!body.assignedRouteId) {
         updatesToUnset.assignedRouteId = '';
       } else {
@@ -300,7 +240,7 @@ router.patch(
     let profile = await Driver.findByIdAndUpdate(req.params.id, updateAction, { new: true });
     if (!profile) throw new ApiError(404, 'Driver not found');
 
-    if (body.jeepney !== undefined) {
+    if (hasOwn(body, 'jeepney')) {
       const jeepneyUpdates = buildJeepneyUpdatePayload(body.jeepney);
       if (Object.keys(jeepneyUpdates).length) {
         if (profile.assignedJeepneyId) {
@@ -326,6 +266,9 @@ router.patch(
           if (!jeepneyUpdates.plateNumber) {
             throw new ApiError(400, 'jeepney.plateNumber is required to create a jeepney');
           }
+          if (jeepneyUpdates.capacity == null) {
+            throw new ApiError(400, 'jeepney.capacity is required to create a jeepney');
+          }
           const existingPlate = await Jeepney.findOne({
             plateNumber: jeepneyUpdates.plateNumber,
           });
@@ -334,10 +277,7 @@ router.patch(
           }
 
           const createdJeepney = await Jeepney.create({
-            plateNumber: jeepneyUpdates.plateNumber,
-            vehicleTag: jeepneyUpdates.vehicleTag,
-            jeepneyName: jeepneyUpdates.jeepneyName,
-            manufacturer: jeepneyUpdates.manufacturer,
+            ...jeepneyUpdates,
             capacityBand: jeepneyUpdates.capacityBand || 'normal',
             status: jeepneyUpdates.status || 'active',
             currentDriverId: profile._id,
@@ -360,7 +300,13 @@ router.patch(
     const targetDriver = await Driver.findById(req.params.id);
     if (!targetDriver) throw new ApiError(404, 'Driver not found');
 
-    const jeepneyId = body.jeepneyId ? normalizeOptionalObjectId(body.jeepneyId, 'jeepneyId', true) : null;
+    if (!hasOwn(body, 'jeepneyId')) {
+      throw new ApiError(400, 'jeepneyId is required. Use null to clear the assignment.');
+    }
+
+    const jeepneyId = body.jeepneyId
+      ? normalizeOptionalObjectId(body.jeepneyId, 'jeepneyId', true)
+      : null;
     if (jeepneyId === null) {
       const assigned = await syncJeepneyAssignment(targetDriver, null);
       return ok(res, assigned, 'Jeepney assignment cleared');
@@ -404,7 +350,27 @@ router.get(
 router.post(
   '/activity',
   asyncHandler(async (req, res) => {
-    const log = await ActivityLog.create(req.body || {});
+    const payload = pickDefined(req.body || {}, ['action', 'entity', 'entityId', 'details', 'client']);
+    if (!payload.action || !String(payload.action).trim()) {
+      throw new ApiError(400, 'action is required');
+    }
+    if (!payload.entity || !String(payload.entity).trim()) {
+      throw new ApiError(400, 'entity is required');
+    }
+    if (payload.details !== undefined && !isPlainObject(payload.details)) {
+      throw new ApiError(400, 'details must be an object');
+    }
+
+    const log = await ActivityLog.create({
+      actorId: req.user._id,
+      actorRole: req.user.role,
+      action: String(payload.action).trim(),
+      entity: String(payload.entity).trim(),
+      entityId: payload.entityId ? String(payload.entityId).trim() : undefined,
+      details: payload.details || {},
+      ip: req.ip,
+      client: payload.client ? String(payload.client).trim() : undefined,
+    });
     return ok(res, log, 'Activity logged', 201);
   })
 );

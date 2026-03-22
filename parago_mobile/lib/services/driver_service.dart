@@ -23,17 +23,17 @@ class DriverService {
     final body = {'status': active ? 'active' : 'inactive'};
     try {
       await _client.request(
-        method: 'PUT',
-        path: '/drivers/me',
+        method: 'PATCH',
+        path: '/drivers/me/status',
         body: body,
       );
     } on ApiException catch (error) {
-      if (error.statusCode != 404) {
+      if (error.statusCode != 404 && error.statusCode != 405) {
         rethrow;
       }
       await _client.request(
-        method: 'PATCH',
-        path: '/drivers/me/status',
+        method: 'PUT',
+        path: '/drivers/me',
         body: body,
       );
     }
