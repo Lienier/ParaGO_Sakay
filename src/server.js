@@ -1,10 +1,15 @@
+const http = require('http');
+
 const app = require('./app');
 const connectDb = require('./config/db');
 const { port } = require('./config/env');
+const { attachSocketServer } = require('./realtime/socketServer');
 
 const start = async () => {
   await connectDb();
-  app.listen(port, () => {
+  const server = http.createServer(app);
+  attachSocketServer(server);
+  server.listen(port, () => {
     // eslint-disable-next-line no-console
     console.log(`ParaGO backend running on port ${port}`);
   });
