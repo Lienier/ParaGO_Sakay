@@ -1,5 +1,4 @@
 import '../core/network/api_client.dart';
-import '../core/exceptions/api_exception.dart';
 import '../models/auth/auth_models.dart';
 
 class AuthService {
@@ -7,64 +6,22 @@ class AuthService {
 
   final ApiClient _client;
 
-  Future<AuthSession> registerEmail({
-    required String email,
-    required String password,
-    required String fullName,
-    required String role,
-  }) async {
-    final response = await _client.request(
-      method: 'POST',
-      path: '/auth/register-email',
-      body: {
-        'email': email.trim(),
-        'password': password.trim(),
-        'fullName': fullName.trim(),
-        'role': role.toUpperCase(),
-      },
-    );
-    return AuthSession.fromJson(response['data'] as Map<String, dynamic>);
-  }
-
   Future<AuthSession> loginEmail({
     required String email,
     required String password,
+    String? role,
   }) async {
-    final response = await _client.request(
-      method: 'POST',
-      path: '/auth/login-email',
-      body: {'email': email.trim(), 'password': password},
-    );
-    return AuthSession.fromJson(response['data'] as Map<String, dynamic>);
-  }
-
-  Future<AuthSession> socialLogin({
-    required String provider,
-    required String token,
-    required String role,
-  }) async {
-    if (!['google', 'facebook'].contains(provider)) {
-      throw ApiException(400, 'Unsupported social provider');
+    final body = <String, dynamic>{
+      'email': email.trim(),
+      'password': password,
+    };
+    if (role != null && role.trim().isNotEmpty) {
+      body['role'] = role.trim().toUpperCase();
     }
     final response = await _client.request(
       method: 'POST',
-      path: '/auth/social/$provider',
-      body: {'token': token, 'role': role.toUpperCase()},
-    );
-    return AuthSession.fromJson(response['data'] as Map<String, dynamic>);
-  }
-
-  Future<AuthSession> firebaseGoogleLogin({
-    required String idToken,
-    required String role,
-  }) async {
-    final response = await _client.request(
-      method: 'POST',
-      path: '/auth/firebase/google',
-      body: {
-        'idToken': idToken,
-        'role': role.toUpperCase(),
-      },
+      path: '/auth/login-email',
+      body: body,
     );
     return AuthSession.fromJson(response['data'] as Map<String, dynamic>);
   }

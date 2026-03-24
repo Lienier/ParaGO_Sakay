@@ -22,6 +22,16 @@ const routeSchema = new Schema(
     direction: { type: String, enum: ['up', 'down', 'circular'], default: 'circular' },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
     description: { type: String, trim: true },
+    path: {
+      type: {
+        type: String,
+        enum: ['LineString'],
+      },
+      coordinates: {
+        type: [[Number]],
+        default: undefined,
+      },
+    },
     waypoints: [
       {
         name: { type: String, trim: true },
@@ -37,6 +47,6 @@ const routeSchema = new Schema(
 );
 
 routeSchema.index({ status: 1 });
-routeSchema.index({ waypoints: '2dsphere' });
+routeSchema.index({ path: '2dsphere' });
 
 module.exports = mongoose.model('Route', routeSchema);

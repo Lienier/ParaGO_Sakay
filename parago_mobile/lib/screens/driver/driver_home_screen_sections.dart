@@ -1,6 +1,19 @@
 part of 'driver_home_screen.dart';
 
 extension _DriverHomeScreenSections on _DriverHomeScreenState {
+  RouteSummaryModel? _assignedRouteSummary() {
+    final routeId = _assignedRouteId;
+    if (routeId == null || routeId.isEmpty) {
+      return null;
+    }
+    for (final route in _routes) {
+      if (route.id == routeId) {
+        return route;
+      }
+    }
+    return null;
+  }
+
   int _displayedOnboardCount(TripSession? trip, List<RideSessionModel> rides) {
     if (trip == null) return 0;
     final base = _baseOnboardCount(trip, rides);
@@ -8,7 +21,21 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     return math.max(0, base + delta);
   }
 
+  RouteSummaryModel? _routeSummaryForTrip(TripSession trip) {
+    for (final route in _routes) {
+      if (route.id == trip.routeId) {
+        return route;
+      }
+    }
+    return null;
+  }
+
   LatLng _baseMapCenter(TripSession trip) {
+    final route = _routeSummaryForTrip(trip);
+    final routePoints = route?.referencePoints ?? const <LatLng>[];
+    if (routePoints.isNotEmpty) {
+      return routePoints[routePoints.length ~/ 2];
+    }
     const fallbackCenter = LatLng(14.6091, 121.0223);
     final source = '${trip.routeId}:${trip.id}:${trip.jeepneyId}';
     final hash = source.hashCode;
@@ -21,6 +48,11 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
   }
 
   List<LatLng> _routePathForTrip(TripSession trip, {LatLng? center}) {
+    final route = _routeSummaryForTrip(trip);
+    final savedPath = route?.mapPath ?? const <LatLng>[];
+    if (savedPath.length >= 2) {
+      return savedPath;
+    }
     final routeCenter = center ?? _baseMapCenter(trip);
     return [
       LatLng(routeCenter.latitude - 0.012, routeCenter.longitude - 0.016),
@@ -30,6 +62,24 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       LatLng(routeCenter.latitude + 0.008, routeCenter.longitude + 0.011),
       LatLng(routeCenter.latitude + 0.013, routeCenter.longitude + 0.018),
     ];
+  }
+
+  LatLng? _pickupPosition(PickupRequestModel request) {
+    final lat = request.pickupLatitude;
+    final lng = request.pickupLongitude;
+    if (lat == null || lng == null) {
+      return null;
+    }
+    return LatLng(lat, lng);
+  }
+
+  LatLng? _unloadPosition(StopAlertModel alert) {
+    final lat = alert.latitude;
+    final lng = alert.longitude;
+    if (lat == null || lng == null) {
+      return null;
+    }
+    return LatLng(lat, lng);
   }
 
   List<_DriveMarkerData> _buildMarkers(
@@ -71,7 +121,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           detail: request.status == 'acknowledged'
               ? 'Acknowledged pickup'
               : 'Waiting pickup',
-          position: routePath[math.min(index, routePath.length - 1)],
+          position: _pickupPosition(request) ??
+              routePath[math.min(index, routePath.length - 1)],
           icon: Icons.person_pin_circle,
           markerColor: request.status == 'acknowledged'
               ? const Color(0xFF1F8FD5)
@@ -93,7 +144,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         _DriveMarkerData(
           label: alert.stopRef,
           detail: 'Unload request near destination',
-          position: routePath[math.min(index + 2, routePath.length - 1)],
+          position: _unloadPosition(alert) ??
+              routePath[math.min(index + 2, routePath.length - 1)],
           icon: Icons.flag_circle,
           markerColor: const Color(0xFFCC4B7A),
           kind: _DriveMarkerKind.unload,
@@ -187,15 +239,16 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               _DriverHomeScreenState._activeAlertStatuses.contains(alert.status),
         )
         .toList();
+    final assignedRoute = _assignedRouteSummary();
     final liveVehicleLocation = _vehicleLocation;
     final tripVehicleLocation =
         focusedTrip == null ? null : _vehicleLocationForTrip(focusedTrip);
-    final routePath = focusedTrip == null
-        ? const <LatLng>[]
-        : _routePathForTrip(
+    final routePath = focusedTrip != null
+        ? _routePathForTrip(
             focusedTrip,
             center: tripVehicleLocation,
-          );
+          )
+        : (assignedRoute?.mapPath ?? const <LatLng>[]);
     final markers = <_DriveMarkerData>[];
 
     if (liveVehicleLocation != null) {
@@ -243,8 +296,9 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                 _DriverHomeScreenState._pickupStatuses.contains(request.status),
           )
           .length,
-      routeLabel:
-          focusedTrip == null ? 'Metro overview' : _routeLabel(focusedTrip),
+      routeLabel: focusedTrip == null
+          ? (assignedRoute?.label ?? 'Metro overview')
+          : _routeLabel(focusedTrip),
       displayedOnboard: displayedOnboard,
       manualAdjustment: focusedTrip == null
           ? 0

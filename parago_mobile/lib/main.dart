@@ -10,7 +10,6 @@ import 'models/user_role.dart';
 import 'screens/auth_screen.dart';
 import 'screens/admin/admin_home_screen.dart';
 import 'screens/driver/driver_home_screen.dart';
-import 'screens/passenger/passenger_home_screen.dart';
 import 'services/session_controller.dart';
 import 'theme/app_theme.dart';
 
@@ -67,9 +66,8 @@ class ParagoApp extends StatelessWidget {
               return const DriverHomeScreen();
             case UserRole.admin:
               return const AdminHomeScreen();
-            case UserRole.passenger:
             default:
-              return const PassengerHomeScreen();
+              return const AuthScreen();
           }
         },
       ),
@@ -114,7 +112,7 @@ class _BootScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'Preparing your commute support dashboard',
+                  'Preparing your operations dashboard',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                         color: Colors.white.withValues(alpha: 0.92),

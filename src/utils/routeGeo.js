@@ -15,6 +15,11 @@ const normalizeCoordinatePair = (value) => {
 const collectRouteCoordinates = (route) => {
   const coordinates = [];
 
+  for (const pair of route?.path?.coordinates || []) {
+    const normalized = normalizeCoordinatePair(pair);
+    if (normalized) coordinates.push(normalized);
+  }
+
   for (const stop of route?.stops || []) {
     const pair = normalizeCoordinatePair(stop?.location?.coordinates);
     if (pair) coordinates.push(pair);
@@ -51,6 +56,7 @@ const pickDefaultRouteCoordinate = (route) => {
 };
 
 module.exports = {
+  collectRouteCoordinates,
   isRoutePickupNearRoad,
   pickDefaultRouteCoordinate,
 };

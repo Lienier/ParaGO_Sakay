@@ -47,6 +47,30 @@ const normalizeGeoPoint = (value, fieldName) => {
   };
 };
 
+const normalizeGeoLine = (value, fieldName) => {
+  if (!isPlainObject(value)) {
+    throw new ApiError(400, `${fieldName} must be an object`);
+  }
+  const coordinates = Array.isArray(value.coordinates) ? value.coordinates : [];
+  if (coordinates.length < 2) {
+    throw new ApiError(400, `${fieldName}.coordinates must contain at least two [lng, lat] pairs`);
+  }
+  return {
+    type: 'LineString',
+    coordinates: coordinates.map((entry, index) => {
+      if (!Array.isArray(entry) || entry.length !== 2) {
+        throw new ApiError(
+          400,
+          `${fieldName}.coordinates[${index}] must contain [lng, lat]`
+        );
+      }
+      const [lng, lat] = entry;
+      ensureLatLng(lat, lng, `${fieldName}.coordinates[${index}]`);
+      return [Number(lng), Number(lat)];
+    }),
+  };
+};
+
 const buildJeepneyCreatePayload = (value = {}) => {
   if (!isPlainObject(value)) {
     throw new ApiError(400, 'jeepney payload is required');
@@ -140,9 +164,14 @@ const buildRouteCreatePayload = (value = {}) => {
       : 'circular',
     status: value.status ? normalizeEnum(value.status, 'status', ['active', 'inactive']) : 'active',
     description: normalizeOptionalText(value.description),
+    path: undefined,
     waypoints: [],
     stops: [],
   };
+
+  if (hasOwn(value, 'path')) {
+    payload.path = normalizeGeoLine(value.path, 'path');
+  }
 
   if (hasOwn(value, 'waypoints')) {
     if (!Array.isArray(value.waypoints)) {
@@ -183,6 +212,9 @@ const buildRouteUpdatePayload = (value = {}) => {
   }
   if (hasOwn(value, 'description')) {
     updates.description = normalizeOptionalText(value.description);
+  }
+  if (hasOwn(value, 'path')) {
+    updates.path = value.path == null ? undefined : normalizeGeoLine(value.path, 'path');
   }
   if (hasOwn(value, 'waypoints')) {
     if (!Array.isArray(value.waypoints)) {

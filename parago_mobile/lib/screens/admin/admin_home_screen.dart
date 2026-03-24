@@ -7,6 +7,7 @@ import '../../services/admin_service.dart';
 import '../../services/route_service.dart';
 import '../../services/session_controller.dart';
 import 'admin_driver_management_screen.dart';
+import 'admin_route_builder_screen.dart';
 import '../../widgets/metric_card.dart';
 
 part 'admin_home_sections.dart';
@@ -86,6 +87,19 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                   builder: (_) => const AdminDriverManagementScreen(),
                 ),
               );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.alt_route),
+            onPressed: () async {
+              final saved = await Navigator.of(context).push<bool>(
+                MaterialPageRoute<bool>(
+                  builder: (_) => const AdminRouteBuilderScreen(),
+                ),
+              );
+              if (saved == true && mounted) {
+                _load();
+              }
             },
           ),
           IconButton(

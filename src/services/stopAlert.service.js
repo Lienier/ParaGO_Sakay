@@ -1,8 +1,16 @@
 const ApiError = require('../utils/apiError');
+const Route = require('../models/route');
 const StopAlert = require('../models/stopAlert');
 const RideSession = require('../models/rideSession');
 const TripSession = require('../models/tripSession');
-const { stopAlertCooldownMinutes } = require('../config/env');
+const {
+  stopAlertCooldownMinutes,
+  stopAlertRoadProximityMeters,
+} = require('../config/env');
+const {
+  isRoutePickupNearRoad,
+  pickDefaultRouteCoordinate,
+} = require('../utils/routeGeo');
 
 const createStopAlert = async ({
   passengerId,
@@ -37,6 +45,31 @@ const createStopAlert = async ({
     throw new ApiError(409, 'Trip session is not active');
   }
 
+  const route = await Route.findById(trip.routeId);
+  if (!route) {
+    throw new ApiError(404, 'Route not found for this trip');
+  }
+
+  let alertLocation = location;
+  if (!alertLocation || !Array.isArray(alertLocation.coordinates) || alertLocation.coordinates.length < 2) {
+    alertLocation = pickDefaultRouteCoordinate(route);
+  }
+  if (!alertLocation) {
+    throw new ApiError(400, 'location is required for this route');
+  }
+
+  const [lng, lat] = alertLocation.coordinates;
+  if (
+    !isRoutePickupNearRoad({
+      latitude: lat,
+      longitude: lng,
+      route,
+      maxDistanceMeters: stopAlertRoadProximityMeters,
+    })
+  ) {
+    throw new ApiError(400, 'Unload point must be near the selected route');
+  }
+
   return StopAlert.create({
     passengerId,
     tripSessionId,
@@ -44,7 +77,7 @@ const createStopAlert = async ({
     routeId: trip.routeId,
     stopRef,
     note,
-    location,
+    location: alertLocation,
     status: 'sent',
   });
 };

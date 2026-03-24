@@ -106,7 +106,7 @@ router.get(
   asyncHandler(async (_req, res) => {
     const drivers = await Driver.find()
       .populate('userId', 'email fullName status role')
-      .populate('assignedJeepneyId', 'plateNumber jeepneyName status')
+      .populate('assignedJeepneyId', 'plateNumber jeepneyName capacity status')
       .populate('assignedRouteId', 'name code status')
       .sort({ createdAt: -1 });
     return ok(res, drivers, 'Drivers list');

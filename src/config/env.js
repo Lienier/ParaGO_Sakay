@@ -30,6 +30,9 @@ module.exports = {
 
   boardingWindowMinutes: Number(process.env.BOARDING_WINDOW_MINUTES || 10),
   stopAlertCooldownMinutes: Number(process.env.STOP_ALERT_COOLDOWN_MINUTES || 2),
+  stopAlertRoadProximityMeters: Number(
+    process.env.STOP_ALERT_ROAD_PROXIMITY_METERS || 300
+  ),
   pickupRequestTtlMinutes: Number(process.env.PICKUP_REQUEST_TTL_MINUTES || 12),
   maxRequestsPerPassengerPerTrip: Number(
     process.env.MAX_REQUESTS_PER_PASSENGER_PER_TRIP || 2

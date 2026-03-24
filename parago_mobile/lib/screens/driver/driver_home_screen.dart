@@ -47,6 +47,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Map<String, List<StopAlertModel>> _tripAlerts = {};
   Map<String, List<RideSessionModel>> _tripRides = {};
   Map<String, int> _manualOnboardAdjustments = {};
+  String? _assignedRouteId;
   String? _focusedTripId;
   int _tabIndex = 0;
   bool _isOnline = true;
@@ -141,6 +142,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         _trips = trips;
         _notifications = notifications;
         _routes = routes;
+        _assignedRouteId = _readAssignedRouteId(driverProfile);
         if (driverStatus == 'active' || driverStatus == 'inactive') {
           _isOnline = driverStatus == 'active';
         }
@@ -387,6 +389,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   LatLng? _vehicleLocationForTrip(TripSession trip) {
     return _vehicleLocation ?? _storedVehicleLocation(trip);
+  }
+
+  String? _readAssignedRouteId(Map<String, dynamic> profile) {
+    final assignedRoute = profile['assignedRouteId'];
+    if (assignedRoute is Map<String, dynamic>) {
+      final id = assignedRoute['_id']?.toString().trim();
+      return (id == null || id.isEmpty) ? null : id;
+    }
+    final id = assignedRoute?.toString().trim();
+    return (id == null || id.isEmpty) ? null : id;
   }
 
   void _changePassengerCount(String tripId, int delta) {
