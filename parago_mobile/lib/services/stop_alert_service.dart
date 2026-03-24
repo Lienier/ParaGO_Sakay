@@ -32,9 +32,14 @@ class StopAlertService {
     return StopAlertModel.fromJson(response['data'] as Map<String, dynamic>);
   }
 
-  Future<List<StopAlertModel>> getTripStopAlerts(String tripSessionId) async {
-    final data =
-        await _client.getList(path: '/stop-alerts/trip/$tripSessionId');
+  Future<List<StopAlertModel>> getTripStopAlerts(
+    String tripSessionId, {
+    bool useCache = true,
+  }) async {
+    final data = await _client.getList(
+      path: '/stop-alerts/trip/$tripSessionId',
+      useCache: useCache,
+    );
     return data
         .map((e) => StopAlertModel.fromJson(e as Map<String, dynamic>))
         .toList();

@@ -1,48 +1,48 @@
 import 'dart:math' as math;
 
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/config/app_config.dart';
 import '../../models/transport/route_summary.dart';
+import '../../services/open_street_map_routing_service.dart';
+import '../../services/route_preview_cache.dart';
 import '../../services/route_service.dart';
 import '../../services/session_controller.dart';
+
+enum _PinPlacementMode { start, end }
 
 class AdminRouteBuilderScreen extends StatefulWidget {
   const AdminRouteBuilderScreen({super.key});
 
   @override
-  State<AdminRouteBuilderScreen> createState() => _AdminRouteBuilderScreenState();
+  State<AdminRouteBuilderScreen> createState() =>
+      _AdminRouteBuilderScreenState();
 }
 
 class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
+  static const _defaultCenter = LatLng(14.6091, 121.0223);
+
   final _formKey = GlobalKey<FormState>();
-  final _mapsUrlCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
   final _codeCtrl = TextEditingController();
   final _descriptionCtrl = TextEditingController();
-  final _startCtrl = TextEditingController();
-  final _endCtrl = TextEditingController();
-  final _viaCtrl = TextEditingController();
-  final Dio _dio = Dio(
-    BaseOptions(
-      baseUrl: 'https://api.openrouteservice.org',
-      connectTimeout: const Duration(seconds: 20),
-      receiveTimeout: const Duration(seconds: 20),
-      headers: const {'Content-Type': 'application/json'},
-    ),
-  );
+  final OpenStreetMapRoutingService _routingService =
+      OpenStreetMapRoutingService();
+  final RoutePreviewCache _routePreviewCache = RoutePreviewCache();
 
   List<RouteSummaryModel> _routes = [];
-  List<_RoutePreviewSegment> _previewSegments =
-      const <_RoutePreviewSegment>[];
-  String _direction = 'down';
+  LatLng? _startPoint;
+  LatLng? _endPoint;
+  CachedRouteSnapshot? _previewSnapshot;
+  _PinPlacementMode _placementMode = _PinPlacementMode.start;
+  bool _offlinePreview = false;
   bool _loadingRoutes = false;
-  bool _building = false;
-  bool _saving = false;
+  bool _buildingRoute = false;
+  bool _savingRoute = false;
+  int _mapVersion = 0;
+  int _buildRequestSerial = 0;
   String? _message;
 
   @override
@@ -53,23 +53,24 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
 
   @override
   void dispose() {
-    _mapsUrlCtrl.dispose();
     _nameCtrl.dispose();
     _codeCtrl.dispose();
     _descriptionCtrl.dispose();
-    _startCtrl.dispose();
-    _endCtrl.dispose();
-    _viaCtrl.dispose();
-    _dio.close(force: true);
+    _routingService.dispose();
     super.dispose();
   }
 
   Future<void> _loadRoutes() async {
     final session = context.read<SessionController>();
     final routeService = RouteService(session.apiClient);
-    setState(() => _loadingRoutes = true);
+
+    setState(() {
+      _loadingRoutes = true;
+      _message = null;
+    });
+
     try {
-      final routes = await routeService.getRoutes();
+      final routes = await routeService.getRoutes(useCache: false);
       if (!mounted) return;
       setState(() => _routes = routes);
     } catch (error) {
@@ -82,223 +83,87 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     }
   }
 
-  void _dismissKeyboard() {
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  void _importGoogleDirections() {
-    final url = _mapsUrlCtrl.text.trim();
-    if (url.isEmpty) {
-      setState(() => _message = 'Paste a Google Maps directions URL first.');
-      return;
-    }
-
-    final startMatch = RegExp(r'/dir/(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)')
-        .firstMatch(url);
-    final pathCoordinates = RegExp(r'!1d(-?\d+(?:\.\d+)?)!2d(-?\d+(?:\.\d+)?)')
-        .allMatches(url)
-        .map((match) => '${match.group(2)},${match.group(1)}')
-        .toList(growable: false);
-
-    if (startMatch == null || pathCoordinates.isEmpty) {
-      setState(() {
-        _message =
-            'Could not extract route points from that Google Maps directions URL.';
-      });
-      return;
-    }
-
-    final start = '${startMatch.group(1)},${startMatch.group(2)}';
-    final end = pathCoordinates.last;
-    final vias = pathCoordinates.take(pathCoordinates.length - 1).join('\n');
-
-    setState(() {
-      _startCtrl.text = start;
-      _endCtrl.text = end;
-      _viaCtrl.text = vias;
-      _message = 'Google Maps points imported. Generate a preview next.';
-    });
-  }
-
-  Future<void> _buildPreview() async {
-    if (!(_formKey.currentState?.validate() ?? false)) {
-      return;
-    }
+  Future<void> _handleMapTap(LatLng point) async {
     _dismissKeyboard();
-    if (AppConfig.openRouteServiceApiKey.isEmpty) {
-      setState(() {
+    setState(() {
+      if (_placementMode == _PinPlacementMode.start) {
+        _startPoint = point;
         _message =
-            'OpenRouteService key missing. Add ORS_API_KEY to parago_mobile/.env.';
+            'Start pin placed. Tap again to move it or switch to End pin.';
+      } else {
+        _endPoint = point;
+        _message =
+            'End pin placed. Tap again to move it or build the live route.';
+      }
+      _previewSnapshot = null;
+      _offlinePreview = false;
+      _mapVersion += 1;
+    });
+
+    if (_startPoint != null && _endPoint != null) {
+      await _buildLiveRoute(autoTriggered: true);
+    }
+  }
+
+  Future<void> _buildLiveRoute({bool autoTriggered = false}) async {
+    final startPoint = _startPoint;
+    final endPoint = _endPoint;
+    if (startPoint == null || endPoint == null) {
+      setState(() {
+        _message = 'Pin both the start and end locations on the map first.';
       });
       return;
     }
 
-    final start = _parseLatLng(_startCtrl.text, 'Start');
-    final end = _parseLatLng(_endCtrl.text, 'End');
-    final viaPoints = _parseViaLines(_viaCtrl.text);
-    if (start == null || end == null) {
-      return;
-    }
-
+    final requestId = ++_buildRequestSerial;
     setState(() {
-      _building = true;
-      _message = null;
-      _previewSegments = const <_RoutePreviewSegment>[];
+      _buildingRoute = true;
+      if (!autoTriggered) {
+        _message = 'Building a live OpenStreetMap route...';
+      }
     });
 
     try {
-      final routePoints = <LatLng>[start, ...viaPoints, end];
-      final segments = <_RoutePreviewSegment>[];
+      final route = await _routingService.buildDrivingRoute(
+        startPoint: startPoint,
+        endPoint: endPoint,
+      );
 
-      for (var index = 0; index < routePoints.length - 1; index += 1) {
-        final options = await _fetchPairOptions(
-          start: routePoints[index],
-          end: routePoints[index + 1],
-        );
-        segments.add(
-          _RoutePreviewSegment(
-            label: routePoints.length > 2 ? 'Section ${index + 1}' : 'Route',
-            options: options,
-          ),
-        );
-      }
+      if (!mounted || requestId != _buildRequestSerial) return;
 
       setState(() {
-        _previewSegments = segments;
-        _message = _hasAnyBranches
-            ? 'Preview ready. Choose a branch for each section, then save.'
-            : routePoints.length > 2
-                ? 'Preview ready. These checkpoints only produced one road-snapped branch per section.'
-                : 'Preview ready. Save route when it matches the road.';
-      });
-    } on DioException catch (error) {
-      setState(() {
-        _message = 'Failed to build route preview: ${_describeRouteBuildError(error)}';
+        _previewSnapshot = CachedRouteSnapshot(
+          routeCode: _normalizedCode,
+          points: route.points,
+          startPoint: startPoint,
+          endPoint: endPoint,
+          bounds: route.bounds ?? RouteMapBounds.fromPoints(route.points),
+          distanceMeters: route.distanceMeters,
+          durationSeconds: route.durationSeconds,
+        );
+        _message = autoTriggered
+            ? 'Route refreshed from the new pins.'
+            : 'Live route ready. Save it to keep the same geometry online and offline.';
+        _mapVersion += 1;
       });
     } catch (error) {
-      setState(() => _message = 'Failed to build route preview: $error');
+      if (!mounted || requestId != _buildRequestSerial) return;
+      setState(() {
+        _message = 'Unable to build a road-following route: $error';
+      });
     } finally {
-      if (mounted) {
-        setState(() => _building = false);
+      if (mounted && requestId == _buildRequestSerial) {
+        setState(() => _buildingRoute = false);
       }
     }
-  }
-
-  Future<List<_RoutePreviewOption>> _fetchPairOptions({
-    required LatLng start,
-    required LatLng end,
-  }) async {
-    try {
-      final response = await _requestPreview(
-        coordinates: [
-          [start.longitude, start.latitude],
-          [end.longitude, end.latitude],
-        ],
-        allowAlternatives: true,
-      );
-      return _decodePreviewOptions(response.data);
-    } on DioException {
-      final fallback = await _requestPreview(
-        coordinates: [
-          [start.longitude, start.latitude],
-          [end.longitude, end.latitude],
-        ],
-        allowAlternatives: false,
-      );
-      final options = _decodePreviewOptions(fallback.data);
-      if (options.isNotEmpty) {
-        return options;
-      }
-      rethrow;
-    }
-  }
-
-  Future<Response<Map<String, dynamic>>> _requestPreview({
-    required List<List<double>> coordinates,
-    required bool allowAlternatives,
-  }) {
-    return _dio.post<Map<String, dynamic>>(
-      '/v2/directions/driving-car/geojson',
-      options: Options(
-        headers: {'Authorization': AppConfig.openRouteServiceApiKey},
-      ),
-      data: {
-        'coordinates': coordinates,
-        if (allowAlternatives)
-          'alternative_routes': {
-            'target_count': 3,
-            'share_factor': 0.6,
-            'weight_factor': 1.6,
-          },
-        'instructions': false,
-      },
-    );
-  }
-
-  List<_RoutePreviewOption> _decodePreviewOptions(Map<String, dynamic>? data) {
-    final features = data?['features'];
-    if (features is! List || features.isEmpty) {
-      throw Exception('No route returned by OpenRouteService.');
-    }
-
-    final options = <_RoutePreviewOption>[];
-    for (final feature in features) {
-      if (feature is! Map) {
-        continue;
-      }
-      final geometry = feature['geometry'];
-      final properties = feature['properties'];
-      final points = _decodeGeoJsonCoordinates(
-        geometry is Map ? geometry['coordinates'] : null,
-      );
-      if (points.isEmpty) {
-        continue;
-      }
-
-      final summary = properties is Map ? properties['summary'] : null;
-      final distanceKm = summary is Map && summary['distance'] is num
-          ? (summary['distance'] as num).toDouble() / 1000
-          : null;
-      final durationMinutes = summary is Map && summary['duration'] is num
-          ? (summary['duration'] as num).toDouble() / 60
-          : null;
-      options.add(
-        _RoutePreviewOption(
-          label: 'Route ${options.length + 1}',
-          points: points,
-          distanceKm: distanceKm,
-          durationMinutes: durationMinutes,
-        ),
-      );
-    }
-
-    if (options.isEmpty) {
-      throw Exception('Route geometry could not be decoded.');
-    }
-    return options;
-  }
-
-  String _describeRouteBuildError(DioException error) {
-    final response = error.response;
-    final data = response?.data;
-    if (data is Map) {
-      final nestedError = data['error'];
-      if (nestedError is Map && nestedError['message'] != null) {
-        return nestedError['message'].toString();
-      }
-      if (data['message'] != null) {
-        return data['message'].toString();
-      }
-    }
-    if (response?.statusCode != null) {
-      return 'OpenRouteService returned HTTP ${response!.statusCode}.';
-    }
-    return error.message ?? error.toString();
   }
 
   Future<void> _saveRoute() async {
-    if (_selectedPreview.points.length < 2) {
-      setState(() => _message = 'Generate a route preview before saving.');
+    if (_previewPoints.length < 2) {
+      setState(() {
+        _message =
+            'Build the route first so the exact road geometry can be saved.';
+      });
       return;
     }
     if (!(_formKey.currentState?.validate() ?? false)) {
@@ -309,10 +174,10 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     final session = context.read<SessionController>();
     final routeService = RouteService(session.apiClient);
     final payload = _buildRoutePayload();
-    final existing = _existingRouteByCode(_codeCtrl.text.trim());
+    final existing = _existingRouteByCode(_normalizedCode);
 
     setState(() {
-      _saving = true;
+      _savingRoute = true;
       _message = null;
     });
 
@@ -320,13 +185,25 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
       final saved = existing == null
           ? await routeService.createRoute(payload)
           : await routeService.updateRoute(existing.id, payload);
+
+      await _routePreviewCache.saveSnapshot(
+        routeId: saved.id,
+        routeCode: saved.code,
+        points: _previewPoints,
+        startPoint: _startPoint,
+        endPoint: _endPoint,
+        bounds: _previewBounds,
+        distanceMeters: _previewSnapshot?.distanceMeters,
+        durationSeconds: _previewSnapshot?.durationSeconds,
+      );
+
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             existing == null
-                ? 'Route ${saved.code} created.'
-                : 'Route ${saved.code} updated.',
+                ? 'Route ${saved.code} created with offline-ready geometry.'
+                : 'Route ${saved.code} updated with offline-ready geometry.',
           ),
         ),
       );
@@ -336,12 +213,40 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
       setState(() => _message = error.toString());
     } finally {
       if (mounted) {
-        setState(() => _saving = false);
+        setState(() => _savingRoute = false);
       }
     }
   }
 
+  void _clearPins() {
+    setState(() {
+      _startPoint = null;
+      _endPoint = null;
+      _previewSnapshot = null;
+      _offlinePreview = false;
+      _placementMode = _PinPlacementMode.start;
+      _message = 'Pins cleared. Tap the map to place a new route.';
+      _mapVersion += 1;
+    });
+  }
+
+  void _clearPreviewOnly() {
+    setState(() {
+      _previewSnapshot = null;
+      _offlinePreview = false;
+      _message = 'Route preview cleared. Move a pin or build again.';
+      _mapVersion += 1;
+    });
+  }
+
+  void _dismissKeyboard() {
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
   RouteSummaryModel? _existingRouteByCode(String code) {
+    if (code.isEmpty) {
+      return null;
+    }
     for (final route in _routes) {
       if (route.code.toLowerCase() == code.toLowerCase()) {
         return route;
@@ -350,283 +255,150 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     return null;
   }
 
+  String get _normalizedCode => _codeCtrl.text.trim().toUpperCase();
+
+  List<LatLng> get _previewPoints =>
+      _previewSnapshot?.points ?? const <LatLng>[];
+
+  RouteMapBounds? get _previewBounds =>
+      _previewSnapshot?.bounds ?? RouteMapBounds.fromPoints(_previewPoints);
+
+  LatLng get _mapCenter {
+    final bounds = _previewBounds;
+    if (bounds != null) {
+      return bounds.center;
+    }
+    if (_startPoint != null && _endPoint != null) {
+      return LatLng(
+        (_startPoint!.latitude + _endPoint!.latitude) / 2,
+        (_startPoint!.longitude + _endPoint!.longitude) / 2,
+      );
+    }
+    return _startPoint ?? _endPoint ?? _defaultCenter;
+  }
+
+  double get _mapZoom {
+    final points = _previewPoints.isNotEmpty
+        ? _previewPoints
+        : <LatLng>[
+            if (_startPoint != null) _startPoint!,
+            if (_endPoint != null) _endPoint!,
+          ];
+    if (points.isEmpty) return 13.2;
+    if (points.length == 1) return 15.6;
+
+    final bounds = RouteMapBounds.fromPoints(points);
+    if (bounds == null) return 13.2;
+    final latSpan = (bounds.north - bounds.south).abs();
+    final lngSpan = (bounds.east - bounds.west).abs();
+    final span = math.max(latSpan, lngSpan);
+
+    if (span < 0.003) return 17.2;
+    if (span < 0.008) return 16.4;
+    if (span < 0.02) return 15.4;
+    if (span < 0.05) return 14.2;
+    if (span < 0.12) return 13.2;
+    return 12;
+  }
+
   Map<String, dynamic> _buildRoutePayload() {
-    final coordinates = _selectedPreview.points
-        .map((point) => [point.longitude, point.latitude])
+    final pathCoordinates = _previewPoints
+        .map((point) => <double>[point.longitude, point.latitude])
         .toList(growable: false);
-    final sampled = _sampleRoutePoints(coordinates);
+    final startPoint = _startPoint!;
+    final endPoint = _endPoint!;
 
     return {
       'name': _nameCtrl.text.trim(),
-      'code': _codeCtrl.text.trim().toUpperCase(),
-      'direction': _direction,
+      'code': _normalizedCode,
+      'direction': 'circular',
       'status': 'active',
       'description': _descriptionCtrl.text.trim(),
       'path': {
         'type': 'LineString',
-        'coordinates': coordinates,
+        'coordinates': pathCoordinates,
       },
       'waypoints': [
-        for (var index = 0; index < sampled.length; index += 1)
+        for (var index = 0; index < _previewPoints.length; index += 1)
           {
-            'name': 'Waypoint ${index + 1}',
+            'name': index == 0
+                ? 'Start pin'
+                : index == _previewPoints.length - 1
+                    ? 'End pin'
+                    : 'Geometry point ${index + 1}',
             'location': {
               'type': 'Point',
-              'coordinates': sampled[index],
+              'coordinates': <double>[
+                _previewPoints[index].longitude,
+                _previewPoints[index].latitude,
+              ],
             },
           },
       ],
       'stops': const <Map<String, dynamic>>[],
+      'navigation': {
+        'source': 'openstreetmap',
+        'origin': {
+          'type': 'Point',
+          'coordinates': <double>[
+            startPoint.longitude,
+            startPoint.latitude,
+          ],
+        },
+        'destination': {
+          'type': 'Point',
+          'coordinates': <double>[
+            endPoint.longitude,
+            endPoint.latitude,
+          ],
+        },
+        if (_previewBounds != null) 'bounds': _previewBounds!.toJson(),
+        if (_previewSnapshot?.distanceMeters != null)
+          'distanceMeters': _previewSnapshot!.distanceMeters,
+        if (_previewSnapshot?.durationSeconds != null)
+          'durationSeconds': _previewSnapshot!.durationSeconds,
+      },
     };
   }
 
-  List<List<double>> _sampleRoutePoints(
-    List<List<double>> coordinates, {
-    int targetCount = 24,
-  }) {
-    if (coordinates.length <= targetCount) {
-      return coordinates;
-    }
-
-    final step = math.max(1, coordinates.length ~/ targetCount);
-    final sampled = <List<double>>[];
-    for (var index = 0; index < coordinates.length; index += step) {
-      sampled.add(coordinates[index]);
-    }
-
-    final last = coordinates.last;
-    if (sampled.isEmpty ||
-        sampled.last[0] != last[0] ||
-        sampled.last[1] != last[1]) {
-      sampled.add(last);
-    }
-    return sampled;
+  String _formatCoordinate(LatLng? point) {
+    if (point == null) return 'Not pinned yet';
+    return '${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}';
   }
 
-  LatLng? _parseLatLng(String raw, String label) {
-    final point = _tryParseLatLng(raw);
-    if (point != null) {
-      return point;
+  String _formatDistance(double? meters) {
+    if (meters == null) return 'Waiting for route';
+    if (meters >= 1000) {
+      return '${(meters / 1000).toStringAsFixed(2)} km';
     }
-    setState(() => _message = '$label must be formatted as "lat,lng".');
-    return null;
+    return '${meters.toStringAsFixed(0)} m';
   }
 
-  LatLng? _tryParseLatLng(String raw) {
-    final parts = raw
-        .split(',')
-        .map((entry) => entry.trim())
-        .where((entry) => entry.isNotEmpty)
-        .toList(growable: false);
-    if (parts.length != 2) {
-      return null;
+  String _formatDuration(double? seconds) {
+    if (seconds == null) return 'Waiting for route';
+    final minutes = seconds / 60;
+    if (minutes < 60) {
+      return '${minutes.toStringAsFixed(0)} min';
     }
-
-    final lat = double.tryParse(parts[0]);
-    final lng = double.tryParse(parts[1]);
-    if (lat == null || lng == null) {
-      return null;
-    }
-    return LatLng(lat, lng);
-  }
-
-  List<LatLng> _parseViaLines(String raw) {
-    final points = <LatLng>[];
-    for (final line in raw.split('\n')) {
-      final trimmed = line.trim();
-      if (trimmed.isEmpty) continue;
-      final point = _parseLatLng(trimmed, 'Via point');
-      if (point != null) {
-        points.add(point);
-      }
-    }
-    return points;
-  }
-
-  List<LatLng> _decodeGeoJsonCoordinates(dynamic coordinates) {
-    if (coordinates is! List) {
-      return const <LatLng>[];
-    }
-    final points = <LatLng>[];
-    for (final entry in coordinates) {
-      if (entry is List && entry.length >= 2) {
-        final lng = double.tryParse(entry[0].toString());
-        final lat = double.tryParse(entry[1].toString());
-        if (lat != null && lng != null) {
-          points.add(LatLng(lat, lng));
-        }
-      }
-    }
-    return points;
-  }
-
-  _RoutePreviewOption get _selectedPreview {
-    if (_previewSegments.isEmpty) {
-      return _RoutePreviewOption.empty;
-    }
-    final points = <LatLng>[];
-    var totalDistanceKm = 0.0;
-    var totalDurationMinutes = 0.0;
-    var hasDistance = false;
-    var hasDuration = false;
-
-    for (final segment in _previewSegments) {
-      final selected = segment.selectedOption;
-      if (selected.points.isEmpty) {
-        continue;
-      }
-      if (points.isEmpty) {
-        points.addAll(selected.points);
-      } else {
-        points.addAll(selected.points.skip(1));
-      }
-      if (selected.distanceKm != null) {
-        totalDistanceKm += selected.distanceKm!;
-        hasDistance = true;
-      }
-      if (selected.durationMinutes != null) {
-        totalDurationMinutes += selected.durationMinutes!;
-        hasDuration = true;
-      }
-    }
-
-    return _RoutePreviewOption(
-      label: _previewSegments.length > 1 ? 'Selected route' : 'Route',
-      points: points,
-      distanceKm: hasDistance ? totalDistanceKm : null,
-      durationMinutes: hasDuration ? totalDurationMinutes : null,
-    );
-  }
-
-  bool get _hasAnyBranches =>
-      _previewSegments.any((segment) => segment.options.length > 1);
-
-  double? get _distanceKm => _selectedPreview.distanceKm;
-
-  double? get _durationMinutes => _selectedPreview.durationMinutes;
-
-  Future<void> _openFullScreenPreview() async {
-    if (_previewSegments.isEmpty) {
-      return;
-    }
-
-    final selectedIndexes = await Navigator.of(context).push<List<int>>(
-      MaterialPageRoute<List<int>>(
-        builder: (_) => _RoutePreviewMapScreen(
-          previewSegments: _previewSegments,
-          startPoint: _tryParseLatLng(_startCtrl.text),
-          endPoint: _tryParseLatLng(_endCtrl.text),
-        ),
-      ),
-    );
-
-    if (selectedIndexes == null || !mounted) {
-      return;
-    }
-
-    setState(() {
-      _previewSegments = _applySelectedIndexes(
-        _previewSegments,
-        selectedIndexes,
-      );
-    });
-  }
-
-  Future<void> _openBranchSheet() async {
-    if (_previewSegments.isEmpty) {
-      return;
-    }
-
-    final selectedIndexes = await showModalBottomSheet<List<int>>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (_) => _RouteBranchSheet(
-        title: _hasAnyBranches ? 'Choose branches' : 'Selected sections',
-        segments: _previewSegments,
-      ),
-    );
-
-    if (selectedIndexes == null || !mounted) {
-      return;
-    }
-
-    setState(() {
-      _previewSegments = _applySelectedIndexes(
-        _previewSegments,
-        selectedIndexes,
-      );
-    });
-  }
-
-  List<_RoutePreviewSegment> _applySelectedIndexes(
-    List<_RoutePreviewSegment> segments,
-    List<int> selectedIndexes,
-  ) {
-    final updated = <_RoutePreviewSegment>[];
-    for (var index = 0; index < segments.length; index += 1) {
-      final selection = index < selectedIndexes.length ? selectedIndexes[index] : 0;
-      updated.add(segments[index].copyWith(selectedIndex: selection));
-    }
-    return updated;
-  }
-
-  String? _requiredText(String? value, String label) {
-    if ((value ?? '').trim().isEmpty) {
-      return '$label is required';
-    }
-    return null;
+    final hours = minutes ~/ 60;
+    final remainingMinutes = (minutes % 60).round();
+    return '${hours}h ${remainingMinutes}m';
   }
 
   @override
   Widget build(BuildContext context) {
-    final selectedPreview = _selectedPreview;
+    final theme = Theme.of(context);
+    final existing = _existingRouteByCode(_normalizedCode);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Route Builder'),
+        title: const Text('Build Route'),
       ),
-      body: SafeArea(
+      body: RefreshIndicator(
+        onRefresh: _loadRoutes,
         child: ListView(
-          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
           children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Automatic Jeepney Route',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Paste a Google Maps directions link or enter start, end, and optional via checkpoints. OpenRouteService will snap the line to roads, then you can save it directly as a permanent route.',
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _mapsUrlCtrl,
-                      minLines: 2,
-                      maxLines: 3,
-                      onTapOutside: (_) => _dismissKeyboard(),
-                      decoration: const InputDecoration(
-                        labelText: 'Google Maps directions URL',
-                        hintText: 'Paste a Google Maps directions link here',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    OutlinedButton.icon(
-                      onPressed: _building || _saving ? null : _importGoogleDirections,
-                      icon: const Icon(Icons.link_outlined),
-                      label: const Text('Import points from Google Maps'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 18),
             Form(
               key: _formKey,
               child: Card(
@@ -635,583 +407,420 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Route details',
-                          style: Theme.of(context).textTheme.titleLarge),
-                      const SizedBox(height: 14),
+                      Text('Route details', style: theme.textTheme.titleLarge),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Pin the start and end points directly on OpenStreetMap, then save the exact same route geometry for online and offline use.',
+                        style: theme.textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 18),
                       TextFormField(
                         controller: _nameCtrl,
-                        onTapOutside: (_) => _dismissKeyboard(),
-                        validator: (value) => _requiredText(value, 'Route name'),
-                        decoration: const InputDecoration(labelText: 'Route name'),
+                        decoration: const InputDecoration(
+                          labelText: 'Route name',
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) {
+                          final text = value?.trim() ?? '';
+                          if (text.isEmpty) {
+                            return 'Route name is required.';
+                          }
+                          return null;
+                        },
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 14),
                       TextFormField(
                         controller: _codeCtrl,
-                        onTapOutside: (_) => _dismissKeyboard(),
-                        validator: (value) => _requiredText(value, 'Route code'),
-                        decoration: const InputDecoration(labelText: 'Route code'),
+                        textCapitalization: TextCapitalization.characters,
+                        decoration: const InputDecoration(
+                          labelText: 'Route code',
+                          border: OutlineInputBorder(),
+                        ),
+                        onChanged: (_) => setState(() {}),
+                        validator: (value) {
+                          final text = value?.trim() ?? '';
+                          if (text.isEmpty) {
+                            return 'Route code is required.';
+                          }
+                          return null;
+                        },
                       ),
-                      const SizedBox(height: 12),
-                      DropdownButtonFormField<String>(
-                        initialValue: _direction,
-                        items: const [
-                          DropdownMenuItem(value: 'up', child: Text('Up')),
-                          DropdownMenuItem(value: 'down', child: Text('Down')),
-                          DropdownMenuItem(
-                            value: 'circular',
-                            child: Text('Circular'),
-                          ),
-                        ],
-                        onChanged: (value) =>
-                            setState(() => _direction = value ?? 'down'),
-                        decoration: const InputDecoration(labelText: 'Direction'),
-                      ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 14),
                       TextFormField(
                         controller: _descriptionCtrl,
-                        onTapOutside: (_) => _dismissKeyboard(),
-                        maxLines: 2,
+                        minLines: 2,
+                        maxLines: 4,
                         decoration: const InputDecoration(
                           labelText: 'Description',
+                          border: OutlineInputBorder(),
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      Text('Coordinates',
-                          style: Theme.of(context).textTheme.titleMedium),
-                      const SizedBox(height: 10),
-                      TextFormField(
-                        controller: _startCtrl,
-                        onTapOutside: (_) => _dismissKeyboard(),
-                        validator: (value) =>
-                            _requiredText(value, 'Start coordinate'),
-                        decoration: const InputDecoration(
-                          labelText: 'Start (lat,lng)',
+                      const SizedBox(height: 14),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: existing == null
+                              ? const Color(0xFF0F6A5F).withValues(alpha: 0.08)
+                              : const Color(0xFFE29B2D).withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(16),
                         ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: _endCtrl,
-                        onTapOutside: (_) => _dismissKeyboard(),
-                        validator: (value) =>
-                            _requiredText(value, 'End coordinate'),
-                        decoration: const InputDecoration(
-                          labelText: 'End (lat,lng)',
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: _viaCtrl,
-                        minLines: 3,
-                        maxLines: 6,
-                        onTapOutside: (_) => _dismissKeyboard(),
-                        decoration: const InputDecoration(
-                          labelText: 'Via points',
-                          hintText: 'One lat,lng pair per line',
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          FilledButton.icon(
-                            onPressed: _building || _saving ? null : _buildPreview,
-                            icon: _building
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(strokeWidth: 2),
-                                  )
-                                : const Icon(Icons.alt_route),
-                            label: const Text('Generate preview'),
+                        child: Text(
+                          existing == null
+                              ? 'Saving will create a new route.'
+                              : 'Route code already exists. Saving will update ${existing.label}.',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
                           ),
-                          OutlinedButton.icon(
-                            onPressed: selectedPreview.points.length < 2 || _saving
-                                ? null
-                                : _saveRoute,
-                            icon: _saving
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(strokeWidth: 2),
-                                  )
-                                : const Icon(Icons.save_outlined),
-                            label: Text(
-                              _existingRouteByCode(_codeCtrl.text.trim()) == null
-                                  ? 'Save route'
-                                  : 'Update route',
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
-                      if (_loadingRoutes) ...[
-                        const SizedBox(height: 16),
-                        const LinearProgressIndicator(),
-                      ],
                     ],
                   ),
                 ),
               ),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 16),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Preview', style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 8),
-                    if (selectedPreview.distanceKm != null ||
-                        selectedPreview.durationMinutes != null)
-                      Text(
-                        'Distance: ${_distanceKm?.toStringAsFixed(1) ?? '--'} km · ETA: ${_durationMinutes?.toStringAsFixed(0) ?? '--'} min',
-                      ),
-                    if (_message != null) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        _message!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.primary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 14),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    Text('Pin controls', style: theme.textTheme.titleLarge),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
                       children: [
-                        Text(
-                          _hasAnyBranches
-                              ? 'Open the map full screen to compare each branch section.'
-                              : 'Open the map full screen for a closer preview.',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        ChoiceChip(
+                          label: const Text('Place Start Pin'),
+                          selected: _placementMode == _PinPlacementMode.start,
+                          onSelected: (_) {
+                            setState(() {
+                              _placementMode = _PinPlacementMode.start;
+                              _message =
+                                  'Tap the map to place or move the start pin.';
+                            });
+                          },
                         ),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 12,
-                          runSpacing: 12,
-                          children: [
-                            OutlinedButton.icon(
-                              onPressed: _previewSegments.isEmpty
-                                  ? null
-                                  : _openFullScreenPreview,
-                              icon: const Icon(Icons.fullscreen),
-                              label: const Text('Full screen'),
-                            ),
-                            OutlinedButton.icon(
-                              onPressed:
-                                  _previewSegments.isEmpty ? null : _openBranchSheet,
-                              icon: const Icon(Icons.tune),
-                              label: const Text('Branches'),
-                            ),
-                          ],
+                        ChoiceChip(
+                          label: const Text('Place End Pin'),
+                          selected: _placementMode == _PinPlacementMode.end,
+                          onSelected: (_) {
+                            setState(() {
+                              _placementMode = _PinPlacementMode.end;
+                              _message =
+                                  'Tap the map to place or move the end pin.';
+                            });
+                          },
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _clearPreviewOnly,
+                          icon: const Icon(Icons.layers_clear_outlined),
+                          label: const Text('Clear Route Only'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _clearPins,
+                          icon: const Icon(Icons.restart_alt),
+                          label: const Text('Reset All Pins'),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 14),
-                    SizedBox(
-                      height: 260,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(24),
-                        child: _RoutePreviewMap(
-                          previewSegments: _previewSegments,
-                          startPoint: _tryParseLatLng(_startCtrl.text),
-                          endPoint: _tryParseLatLng(_endCtrl.text),
-                        ),
-                      ),
+                    const SizedBox(height: 16),
+                    _CoordinateRow(
+                      label: 'Start',
+                      value: _formatCoordinate(_startPoint),
+                      icon: Icons.flag_circle_outlined,
+                      accent: const Color(0xFF0F6A5F),
                     ),
-                    if (_previewSegments.isNotEmpty) ...[
-                      const SizedBox(height: 14),
-                      Text(
-                        _hasAnyBranches
-                            ? 'Use Branches to drag up the section chooser.'
-                            : 'Use Branches to review the selected sections.',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ],
+                    const SizedBox(height: 10),
+                    _CoordinateRow(
+                      label: 'End',
+                      value: _formatCoordinate(_endPoint),
+                      icon: Icons.location_on_outlined,
+                      accent: const Color(0xFF8A3B5D),
+                    ),
                   ],
                 ),
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-}
-
-class _RoutePreviewMap extends StatelessWidget {
-  const _RoutePreviewMap({
-    required this.previewSegments,
-    required this.startPoint,
-    required this.endPoint,
-  });
-
-  final List<_RoutePreviewSegment> previewSegments;
-  final LatLng? startPoint;
-  final LatLng? endPoint;
-
-  LatLng get _mapCenter {
-    final selectedPoints = _selectedRoute.points;
-    if (selectedPoints.isEmpty) {
-      return const LatLng(14.8258, 121.0621);
-    }
-    return selectedPoints[selectedPoints.length ~/ 2];
-  }
-
-  _RoutePreviewOption get _selectedRoute {
-    if (previewSegments.isEmpty) {
-      return _RoutePreviewOption.empty;
-    }
-    final points = <LatLng>[];
-    for (final segment in previewSegments) {
-      final selected = segment.selectedOption;
-      if (points.isEmpty) {
-        points.addAll(selected.points);
-      } else {
-        points.addAll(selected.points.skip(1));
-      }
-    }
-    return _RoutePreviewOption(
-      label: 'Selected route',
-      points: points,
-      distanceKm: null,
-      durationMinutes: null,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final selectedRoute = _selectedRoute;
-
-    return FlutterMap(
-      options: MapOptions(
-        initialCenter: _mapCenter,
-        initialZoom: selectedRoute.points.length >= 2 ? 12.8 : 11,
-      ),
-      children: [
-        TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.parago.mobile',
-        ),
-        if (previewSegments.isNotEmpty)
-          PolylineLayer(
-            polylines: [
-              for (final segment in previewSegments)
-                for (var index = 0; index < segment.options.length; index += 1)
-                  Polyline(
-                    points: segment.options[index].points,
-                    strokeWidth: index == segment.selectedIndex ? 4 : 2.5,
-                    color: index == segment.selectedIndex
-                        ? const Color(0xFF2A9D8F)
-                        : const Color(0x997FB7AE),
-                  ),
-              if (selectedRoute.points.length >= 2)
-                Polyline(
-                  points: selectedRoute.points,
-                  strokeWidth: 5,
-                  color: const Color(0xFF0F6A5F),
+            const SizedBox(height: 16),
+            _buildMapCard(theme, existing),
+            if (_message != null) ...[
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF102725).withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(16),
                 ),
-            ],
-          ),
-        MarkerLayer(
-          markers: [
-            _routeMarker(startPoint, const Color(0xFF1F8FD5)),
-            _routeMarker(endPoint, const Color(0xFFCC4B7A)),
-          ].whereType<Marker>().toList(growable: false),
-        ),
-        RichAttributionWidget(
-          attributions: const [
-            TextSourceAttribution('OpenStreetMap contributors'),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class _RouteSegmentSelector extends StatelessWidget {
-  const _RouteSegmentSelector({
-    required this.segment,
-    required this.onSelected,
-  });
-
-  final _RoutePreviewSegment segment;
-  final ValueChanged<int> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          segment.label,
-          style: Theme.of(context).textTheme.titleSmall,
-        ),
-        const SizedBox(height: 8),
-        if (segment.options.length == 1)
-          Text(
-            '${segment.selectedOption.summaryLabel} (only branch found)',
-            style: Theme.of(context).textTheme.bodyMedium,
-          )
-        else
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              for (var index = 0; index < segment.options.length; index += 1)
-                ChoiceChip(
-                  label: Text(segment.options[index].summaryLabel),
-                  selected: index == segment.selectedIndex,
-                  onSelected: (_) => onSelected(index),
+                child: Text(
+                  _message!,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-            ],
-          ),
-      ],
-    );
-  }
-}
-
-class _RouteBranchSheet extends StatefulWidget {
-  const _RouteBranchSheet({
-    required this.title,
-    required this.segments,
-  });
-
-  final String title;
-  final List<_RoutePreviewSegment> segments;
-
-  @override
-  State<_RouteBranchSheet> createState() => _RouteBranchSheetState();
-}
-
-class _RouteBranchSheetState extends State<_RouteBranchSheet> {
-  late List<_RoutePreviewSegment> _segments = [
-    for (final segment in widget.segments) segment,
-  ];
-
-  void _selectSegmentOption(int segmentIndex, int optionIndex) {
-    setState(() {
-      _segments = [
-        for (var index = 0; index < _segments.length; index += 1)
-          if (index == segmentIndex)
-            _segments[index].copyWith(selectedIndex: optionIndex)
-          else
-            _segments[index],
-      ];
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.48,
-      minChildSize: 0.28,
-      maxChildSize: 0.9,
-      builder: (context, scrollController) {
-        return SizedBox(
-          width: double.infinity,
-          child: Material(
-            color: Theme.of(context).scaffoldBackgroundColor,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-            child: SafeArea(
-              top: false,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          widget.title,
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                        const SizedBox(height: 12),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: FilledButton(
-                            onPressed: () => Navigator.of(context).pop(
-                              [for (final segment in _segments) segment.selectedIndex],
-                            ),
-                            child: const Text('Apply'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: ListView.separated(
-                      controller: scrollController,
-                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-                      itemCount: _segments.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 12),
-                      itemBuilder: (context, index) {
-                        return _RouteSegmentSelector(
-                          segment: _segments[index],
-                          onSelected: (optionIndex) =>
-                              _selectSegmentOption(index, optionIndex),
-                        );
-                      },
-                    ),
-                  ),
-                ],
               ),
-            ),
-          ),
-        );
-      },
+            ],
+          ],
+        ),
+      ),
     );
   }
-}
 
-class _InlineRouteBranchSheet extends StatelessWidget {
-  const _InlineRouteBranchSheet({
-    required this.title,
-    required this.segments,
-    required this.onChanged,
-  });
-
-  final String title;
-  final List<_RoutePreviewSegment> segments;
-  final void Function(int segmentIndex, int optionIndex) onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.24,
-      minChildSize: 0.20,
-      maxChildSize: 0.72,
-      builder: (context, scrollController) {
-        return SizedBox(
-          width: double.infinity,
-          child: Material(
-            color: Theme.of(context).scaffoldBackgroundColor,
-            elevation: 10,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildMapCard(ThemeData theme, RouteSummaryModel? existing) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Center(
-                        child: Container(
-                          width: 44,
-                          height: 5,
-                          decoration: BoxDecoration(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .outline
-                                .withValues(alpha: 0.45),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        title,
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Drag up to compare branch options for each section.',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ],
+                Expanded(
+                  child: Text(
+                    'OpenStreetMap route canvas',
+                    style: theme.textTheme.titleLarge,
                   ),
                 ),
-                Expanded(
-                  child: ListView.separated(
-                    controller: scrollController,
-                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-                    itemCount: segments.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 12),
-                    itemBuilder: (context, index) {
-                      return _RouteSegmentSelector(
-                        segment: segments[index],
-                        onSelected: (optionIndex) =>
-                            onChanged(index, optionIndex),
-                      );
-                    },
+                ChoiceChip(
+                  label: const Text('Online'),
+                  selected: !_offlinePreview,
+                  onSelected: (_) {
+                    setState(() {
+                      _offlinePreview = false;
+                      _mapVersion += 1;
+                    });
+                  },
+                ),
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: const Text('Offline parity'),
+                  selected: _offlinePreview,
+                  onSelected: _previewPoints.length >= 2
+                      ? (_) {
+                          setState(() {
+                            _offlinePreview = true;
+                            _mapVersion += 1;
+                          });
+                        }
+                      : null,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _offlinePreview
+                  ? 'Offline parity view hides the live base tiles and renders the exact saved route geometry on the same bounds.'
+                  : 'Tap the map to pin start/end. When both pins exist, the route is refreshed against the road network.',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            if (_loadingRoutes || _buildingRoute || _savingRoute) ...[
+              const LinearProgressIndicator(),
+              const SizedBox(height: 14),
+            ],
+            if (_savingRoute) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F6A5F).withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2.4),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Saving route geometry and offline snapshot...',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+            ],
+            _buildMapCanvas(theme),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _MetaPill(
+                  label: 'Distance',
+                  value: _formatDistance(_previewSnapshot?.distanceMeters),
+                ),
+                _MetaPill(
+                  label: 'ETA',
+                  value: _formatDuration(_previewSnapshot?.durationSeconds),
+                ),
+                _MetaPill(
+                  label: 'Geometry',
+                  value: _previewPoints.isEmpty
+                      ? 'No route yet'
+                      : '${_previewPoints.length} points',
+                ),
+                _MetaPill(
+                  label: 'Offline ready',
+                  value: _previewPoints.length >= 2 ? 'Yes' : 'No',
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _buildingRoute ? null : () => _buildLiveRoute(),
+                  icon: const Icon(Icons.route_outlined),
+                  label: const Text('Refresh Live Route'),
+                ),
+                FilledButton.icon(
+                  onPressed: _savingRoute ? null : _saveRoute,
+                  icon: _savingRoute
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.4,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.save_outlined),
+                  label: Text(
+                    _savingRoute
+                        ? 'Saving...'
+                        : existing == null
+                            ? 'Save Route'
+                            : 'Update Route',
                   ),
                 ),
               ],
             ),
-          ),
-        );
-      },
+          ],
+        ),
+      ),
     );
   }
-}
 
-class _RoutePreviewMapScreen extends StatefulWidget {
-  const _RoutePreviewMapScreen({
-    required this.previewSegments,
-    required this.startPoint,
-    required this.endPoint,
-  });
-
-  final List<_RoutePreviewSegment> previewSegments;
-  final LatLng? startPoint;
-  final LatLng? endPoint;
-
-  @override
-  State<_RoutePreviewMapScreen> createState() => _RoutePreviewMapScreenState();
-}
-
-class _RoutePreviewMapScreenState extends State<_RoutePreviewMapScreen> {
-  late List<_RoutePreviewSegment> _segments = [
-    for (final segment in widget.previewSegments) segment,
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Route Preview'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(
-              [for (final segment in _segments) segment.selectedIndex],
-            ),
-            child: const Text('Use this'),
-          ),
-        ],
-      ),
-      body: SafeArea(
+  Widget _buildMapCanvas(ThemeData theme) {
+    return AspectRatio(
+      aspectRatio: 1.05,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(28),
         child: Stack(
           children: [
             Positioned.fill(
-              child: _RoutePreviewMap(
-                previewSegments: _segments,
-                startPoint: widget.startPoint,
-                endPoint: widget.endPoint,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: _offlinePreview
+                        ? [
+                            const Color(0xFFF2F0E8),
+                            const Color(0xFFE5E2D6),
+                          ]
+                        : [
+                            const Color(0xFFE6F0ED),
+                            const Color(0xFFD3E2E0),
+                          ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                ),
+                child: FlutterMap(
+                  key: ValueKey(
+                    'route-builder-map:$_mapVersion:${_offlinePreview ? 'offline' : 'online'}',
+                  ),
+                  options: MapOptions(
+                    initialCenter: _mapCenter,
+                    initialZoom: _mapZoom,
+                    interactionOptions: const InteractionOptions(
+                      flags: InteractiveFlag.all,
+                    ),
+                    onTap: (_, point) => _handleMapTap(point),
+                  ),
+                  children: [
+                    if (!_offlinePreview)
+                      TileLayer(
+                        urlTemplate:
+                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.parago.mobile',
+                      ),
+                    if (_previewPoints.length >= 2)
+                      PolylineLayer(
+                        polylines: [
+                          Polyline(
+                            points: _previewPoints,
+                            strokeWidth: 6,
+                            color: const Color(0xFF0F6A5F),
+                          ),
+                        ],
+                      ),
+                    MarkerLayer(
+                      markers: [
+                        if (_startPoint != null)
+                          Marker(
+                            point: _startPoint!,
+                            width: 140,
+                            height: 78,
+                            child: const _PinnedMarker(
+                              label: 'Start',
+                              accent: Color(0xFF0F6A5F),
+                              icon: Icons.trip_origin,
+                            ),
+                          ),
+                        if (_endPoint != null)
+                          Marker(
+                            point: _endPoint!,
+                            width: 140,
+                            height: 78,
+                            child: const _PinnedMarker(
+                              label: 'End',
+                              accent: Color(0xFF8A3B5D),
+                              icon: Icons.place,
+                            ),
+                          ),
+                      ],
+                    ),
+                    const RichAttributionWidget(
+                      attributions: [
+                        TextSourceAttribution('OpenStreetMap contributors'),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: _InlineRouteBranchSheet(
-                title: 'Choose branches',
-                segments: _segments,
-                onChanged: (segmentIndex, optionIndex) {
-                  setState(() {
-                    _segments = [
-                      for (var index = 0; index < _segments.length; index += 1)
-                        if (index == segmentIndex)
-                          _segments[index].copyWith(selectedIndex: optionIndex)
-                        else
-                          _segments[index],
-                    ];
-                  });
-                },
+            Positioned(
+              left: 14,
+              top: 14,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Text(
+                    _offlinePreview
+                        ? 'Offline parity view'
+                        : 'Live OpenStreetMap view',
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
               ),
             ),
           ],
@@ -1221,76 +830,131 @@ class _RoutePreviewMapScreenState extends State<_RoutePreviewMapScreen> {
   }
 }
 
-Marker? _routeMarker(LatLng? point, Color color) {
-  if (point == null) return null;
-  return Marker(
-    point: point,
-    width: 28,
-    height: 28,
-    child: DecoratedBox(
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 3),
-      ),
-    ),
-  );
-}
-
-class _RoutePreviewSegment {
-  const _RoutePreviewSegment({
+class _CoordinateRow extends StatelessWidget {
+  const _CoordinateRow({
     required this.label,
-    required this.options,
-    this.selectedIndex = 0,
+    required this.value,
+    required this.icon,
+    required this.accent,
   });
 
   final String label;
-  final List<_RoutePreviewOption> options;
-  final int selectedIndex;
+  final String value;
+  final IconData icon;
+  final Color accent;
 
-  _RoutePreviewOption get selectedOption {
-    if (options.isEmpty) {
-      return _RoutePreviewOption.empty;
-    }
-    return options[selectedIndex.clamp(0, options.length - 1)];
-  }
-
-  _RoutePreviewSegment copyWith({
-    String? label,
-    List<_RoutePreviewOption>? options,
-    int? selectedIndex,
-  }) {
-    return _RoutePreviewSegment(
-      label: label ?? this.label,
-      options: options ?? this.options,
-      selectedIndex: selectedIndex ?? this.selectedIndex,
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: accent),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+                const SizedBox(height: 2),
+                Text(value),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
-class _RoutePreviewOption {
-  const _RoutePreviewOption({
+class _MetaPill extends StatelessWidget {
+  const _MetaPill({
     required this.label,
-    required this.points,
-    required this.distanceKm,
-    required this.durationMinutes,
+    required this.value,
   });
 
-  static const empty = _RoutePreviewOption(
-    label: 'Route',
-    points: <LatLng>[],
-    distanceKm: null,
-    durationMinutes: null,
-  );
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: RichText(
+        text: TextSpan(
+          style: DefaultTextStyle.of(context).style,
+          children: [
+            TextSpan(
+              text: '$label: ',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            TextSpan(text: value),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PinnedMarker extends StatelessWidget {
+  const _PinnedMarker({
+    required this.label,
+    required this.accent,
+    required this.icon,
+  });
 
   final String label;
-  final List<LatLng> points;
-  final double? distanceKm;
-  final double? durationMinutes;
+  final Color accent;
+  final IconData icon;
 
-  String get summaryLabel {
-    final distance = distanceKm?.toStringAsFixed(1) ?? '--';
-    final duration = durationMinutes?.toStringAsFixed(0) ?? '--';
-    return '$label · $distance km · $duration min';
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.18),
+              blurRadius: 18,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: accent, size: 18),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: accent,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

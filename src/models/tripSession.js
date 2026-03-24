@@ -7,6 +7,16 @@ const tripSessionSchema = new Schema(
     jeepneyId: { type: Schema.Types.ObjectId, ref: 'Jeepney', required: true },
     driverId: { type: Schema.Types.ObjectId, ref: 'Driver', required: true },
     routeId: { type: Schema.Types.ObjectId, ref: 'Route', required: true },
+    routePathSnapshot: {
+      type: {
+        type: String,
+        enum: ['LineString'],
+      },
+      coordinates: {
+        type: [[Number]],
+        default: undefined,
+      },
+    },
     status: {
       type: String,
       enum: ['scheduled', 'active', 'completed', 'cancelled'],

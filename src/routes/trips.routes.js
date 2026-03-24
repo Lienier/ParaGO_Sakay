@@ -13,6 +13,21 @@ const { ensureObjectId, ensureEnum } = require('../utils/validators');
 
 const router = express.Router();
 
+const buildRoutePathSnapshot = (route) => {
+  const coordinates = Array.isArray(route?.path?.coordinates)
+    ? route.path.coordinates
+    : [];
+
+  if (coordinates.length < 2) {
+    return undefined;
+  }
+
+  return {
+    type: 'LineString',
+    coordinates: coordinates.map((entry) => [Number(entry[0]), Number(entry[1])]),
+  };
+};
+
 router.get(
   '/active',
   authenticate,
@@ -92,6 +107,7 @@ router.post(
     }
     const trip = await TripSession.create({
       ...payload,
+      routePathSnapshot: buildRoutePathSnapshot(route),
       startedAt,
       active: payload.status === 'active',
     });
@@ -126,6 +142,13 @@ router.patch(
       }
     }
     trip.status = 'active';
+    if (
+      (!trip.routePathSnapshot || !Array.isArray(trip.routePathSnapshot.coordinates)) &&
+      trip.routeId
+    ) {
+      const route = await Route.findById(trip.routeId);
+      trip.routePathSnapshot = buildRoutePathSnapshot(route);
+    }
     trip.startedAt = new Date();
     trip.active = true;
     trip.acceptRequests = true;

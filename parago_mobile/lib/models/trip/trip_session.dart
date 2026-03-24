@@ -1,3 +1,5 @@
+import 'package:latlong2/latlong.dart';
+
 class TripSession {
   const TripSession({
     required this.id,
@@ -5,6 +7,7 @@ class TripSession {
     required this.driverId,
     required this.routeId,
     required this.status,
+    this.routePathSnapshotPoints = const <LatLng>[],
     this.routeName,
     this.routeCode,
     this.jeepneyPlateNumber,
@@ -25,6 +28,7 @@ class TripSession {
   final String driverId;
   final String routeId;
   final String status;
+  final List<LatLng> routePathSnapshotPoints;
   final String? routeName;
   final String? routeCode;
   final String? jeepneyPlateNumber;
@@ -43,12 +47,10 @@ class TripSession {
     final route = json['routeId'];
     final jeepney = json['jeepneyId'];
     final driver = json['driverId'];
-    final jeepneyLocation = jeepney is Map
-        ? jeepney['lastKnownLocation']
-        : null;
-    final coordinates = jeepneyLocation is Map
-        ? jeepneyLocation['coordinates']
-        : null;
+    final jeepneyLocation =
+        jeepney is Map ? jeepney['lastKnownLocation'] : null;
+    final coordinates =
+        jeepneyLocation is Map ? jeepneyLocation['coordinates'] : null;
     final jeepneyCoordinates = _readCoordinatePair(coordinates);
     return TripSession(
       id: json['_id']?.toString() ?? '',
@@ -56,6 +58,7 @@ class TripSession {
       driverId: _readId(driver),
       routeId: _readId(route),
       status: json['status']?.toString() ?? '',
+      routePathSnapshotPoints: _readLinePoints(json['routePathSnapshot']),
       routeName: _readMapString(route, const ['name']),
       routeCode: _readMapString(route, const ['code']),
       jeepneyPlateNumber: _readMapString(jeepney, const ['plateNumber']),
@@ -88,6 +91,24 @@ class TripSession {
     if ((jeepneyName ?? '').isNotEmpty) return jeepneyName!;
     return jeepneyId;
   }
+}
+
+List<LatLng> _readLinePoints(dynamic value) {
+  final coordinates = value is Map ? value['coordinates'] : null;
+  if (coordinates is! List) return const <LatLng>[];
+
+  return coordinates
+      .map((entry) => _readLatLng(entry))
+      .whereType<LatLng>()
+      .toList(growable: false);
+}
+
+LatLng? _readLatLng(dynamic coordinates) {
+  if (coordinates is! List || coordinates.length < 2) return null;
+  final lng = _toDouble(coordinates[0]);
+  final lat = _toDouble(coordinates[1]);
+  if (lat == null || lng == null) return null;
+  return LatLng(lat, lng);
 }
 
 String _readId(dynamic value) {

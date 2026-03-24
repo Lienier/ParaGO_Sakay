@@ -68,8 +68,8 @@ class ApiClient {
     final parsedBasePath = Uri.tryParse(_dio.options.baseUrl)?.path ?? '';
     final baseHasNestedPath =
         parsedBasePath.isNotEmpty && parsedBasePath != '/';
-    final baseHasApiV1 =
-        parsedBasePath.endsWith('/api/v1') || parsedBasePath.endsWith('/api/v1/');
+    final baseHasApiV1 = parsedBasePath.endsWith('/api/v1') ||
+        parsedBasePath.endsWith('/api/v1/');
 
     var normalized = trimmed.startsWith('/') ? trimmed.substring(1) : trimmed;
     if (baseHasApiV1 && normalized == 'api/v1') {
@@ -184,7 +184,8 @@ class ApiClient {
   Future<void> _clearAllCache() async {
     _memoryCache.clear();
     final storage = await _cacheStorage;
-    final keysToRemove = storage.getKeys().where((key) => key.startsWith(_cachePrefix));
+    final keysToRemove =
+        storage.getKeys().where((key) => key.startsWith(_cachePrefix));
     for (final key in keysToRemove) {
       await storage.remove(key);
     }
@@ -271,12 +272,14 @@ class ApiClient {
     required String path,
     Map<String, dynamic>? queryParameters,
     Duration? cacheTtl,
+    bool useCache = true,
   }) async {
     final response = await request(
       method: 'GET',
       path: path,
       queryParameters: queryParameters,
       cacheTtl: cacheTtl,
+      useCache: useCache,
     );
     final data = response['data'];
     if (data is List<dynamic>) return data;

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -33,6 +35,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   String? _selectedRouteId;
   bool _loading = false;
   String? _statusMessage;
+  Timer? _liveRefreshTimer;
+  bool _silentRefreshActive = false;
+  bool _realtimePrimed = false;
+  Set<String> _knownNotificationIds = <String>{};
 
   TripSession? get _selectedTrip {
     for (final trip in _trips) {
@@ -42,30 +48,74 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 
   RideSessionModel? get _activeRide {
+    final selectedTripId = _selectedTripId;
+    if (selectedTripId != null && selectedTripId.isNotEmpty) {
+      for (final ride in _rides) {
+        if (ride.tripSessionId == selectedTripId &&
+            ride.status == 'onboard' &&
+            ride.canSendStopAlert != false) {
+          return ride;
+        }
+      }
+      for (final ride in _rides) {
+        if (ride.tripSessionId == selectedTripId && ride.status == 'onboard') {
+          return ride;
+        }
+      }
+    }
     for (final ride in _rides) {
-      if (ride.status == 'onboard' || ride.status == 'waiting') {
+      if (ride.status == 'onboard' && ride.canSendStopAlert != false) {
+        return ride;
+      }
+    }
+    for (final ride in _rides) {
+      if (ride.status == 'onboard') {
+        return ride;
+      }
+    }
+    for (final ride in _rides) {
+      if (ride.status == 'waiting') {
         return ride;
       }
     }
     return null;
   }
 
-  Future<void> _load() async {
+  PickupRequestModel? get _selectedTripBooking {
+    final selectedTripId = _selectedTripId;
+    if (selectedTripId == null || selectedTripId.isEmpty) {
+      return null;
+    }
+
+    for (final request in _requests) {
+      if (request.tripSessionId == selectedTripId &&
+          (request.status == 'pending' ||
+              request.status == 'acknowledged' ||
+              request.status == 'completed')) {
+        return request;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _load({bool silent = false}) async {
     final session = context.read<SessionController>();
     final tripService = TripService(session.apiClient);
     final passengerService = PassengerService(session.apiClient);
     final notificationService = NotificationService(session.apiClient);
     final routeService = RouteService(session.apiClient);
 
-    setState(() => _loading = true);
+    if (!silent) {
+      setState(() => _loading = true);
+    }
 
     try {
       final results = await Future.wait<dynamic>([
-        tripService.getActiveTrips(),
-        passengerService.getMyPickupRequests(),
-        passengerService.getMyRides(),
-        notificationService.getMine(),
-        routeService.getRoutes(),
+        tripService.getActiveTrips(useCache: false),
+        passengerService.getMyPickupRequests(useCache: false),
+        passengerService.getMyRides(useCache: false),
+        notificationService.getMine(useCache: false),
+        routeService.getRoutes(useCache: false),
       ]);
 
       final trips = results[0] as List<TripSession>;
@@ -93,17 +143,76 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _selectedTripId = nextTripId;
         _selectedRouteId = nextRouteId;
       });
+      _handleRealtimePassengerUpdates(
+        notifications: notifications,
+        silent: silent,
+      );
     } catch (error) {
       setState(() => _statusMessage = error.toString());
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && !silent) setState(() => _loading = false);
     }
   }
 
+  void _startLiveRefreshLoop() {
+    _liveRefreshTimer?.cancel();
+    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 8), (_) async {
+      if (!mounted || _silentRefreshActive) {
+        return;
+      }
+      _silentRefreshActive = true;
+      try {
+        await _load(silent: true);
+      } finally {
+        _silentRefreshActive = false;
+      }
+    });
+  }
+
+  void _handleRealtimePassengerUpdates({
+    required List<NotificationModel> notifications,
+    required bool silent,
+  }) {
+    final notificationIds = notifications.map((item) => item.id).toSet();
+    if (!_realtimePrimed) {
+      _knownNotificationIds = notificationIds;
+      _realtimePrimed = true;
+      return;
+    }
+
+    final newNotifications = notifications
+        .where((item) => !_knownNotificationIds.contains(item.id))
+        .toList(growable: false);
+    _knownNotificationIds = notificationIds;
+
+    if (!silent || !mounted || newNotifications.isEmpty) {
+      return;
+    }
+
+    final first = newNotifications.first;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          newNotifications.length == 1
+              ? '${first.title}: ${first.body}'
+              : '${newNotifications.length} new passenger notifications received.',
+        ),
+      ),
+    );
+  }
+
   Future<void> _sendPickup() async {
-    if (_selectedTripId == null || _selectedRouteId == null) {
+    final selectedTrip = _selectedTrip;
+    if (_selectedTripId == null || _selectedRouteId == null || selectedTrip == null) {
       setState(() => _statusMessage =
-          'Choose an active trip before sending a pickup request.');
+          'Choose an active trip before sending a booking request.');
+      return;
+    }
+
+    if (selectedTrip.acceptRequests == false) {
+      setState(() => _statusMessage =
+          'This trip is currently not accepting passenger bookings.');
       return;
     }
 
@@ -124,7 +233,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       );
       setState(() {
         _statusMessage =
-            'Pickup request sent for ${request.stopRef ?? 'your stop'}.';
+            'Booking request sent for ${request.stopRef ?? 'your stop'}.';
       });
       await _load();
     } catch (error) {
@@ -177,7 +286,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   Future<void> _sendPara() async {
     final ride = _activeRide;
-    if (ride == null || ride.status != 'onboard' || _selectedTripId == null) {
+    if (ride == null ||
+        ride.status != 'onboard' ||
+        ride.canSendStopAlert == false) {
       setState(() => _statusMessage =
           'Digital para alert is only available for verified onboard riders.');
       return;
@@ -193,7 +304,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
     try {
       await alerts.sendStopAlert(
-        tripSessionId: _selectedTripId!,
+        tripSessionId: ride.tripSessionId,
         stopRef: payload.stopRef,
         note: payload.note,
       );
@@ -253,7 +364,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
         return AlertDialog(
           scrollable: true,
-          title: const Text('Send pickup request'),
+          title: const Text('Book this trip'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -264,7 +375,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                     FocusManager.instance.primaryFocus?.unfocus(),
                 onSubmitted: (_) => FocusScope.of(context).nextFocus(),
                 decoration: const InputDecoration(
-                  labelText: 'Pickup point or stop reference',
+                  labelText: 'Boarding landmark or stop reference',
                 ),
               ),
               const SizedBox(height: 12),
@@ -289,7 +400,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
             ),
             FilledButton(
               onPressed: submit,
-              child: const Text('Send'),
+              child: const Text('Book now'),
             ),
           ],
         );
@@ -383,10 +494,36 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     return route?.label ?? ParagoFormat.shortId(trip.routeId);
   }
 
+  String _bookingStateText(PickupRequestModel request) {
+    switch (request.status) {
+      case 'pending':
+        return 'Waiting for driver acknowledgement';
+      case 'acknowledged':
+        return 'Driver acknowledged your booking';
+      case 'completed':
+        return 'Boarding was validated for this booking';
+      case 'cancelled':
+        return 'Booking was cancelled';
+      default:
+        return ParagoFormat.statusLabel(request.status);
+    }
+  }
+
+  bool _canCancelRequest(PickupRequestModel request) {
+    return request.status == 'pending' || request.status == 'acknowledged';
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    _startLiveRefreshLoop();
+  }
+
+  @override
+  void dispose() {
+    _liveRefreshTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -402,6 +539,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _rides.where((ride) => ride.status == 'onboard').length;
     final selectedTrip = _selectedTrip;
     final activeRide = _activeRide;
+    final selectedBooking = _selectedTripBooking;
 
     return Scaffold(
       appBar: AppBar(
@@ -420,9 +558,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
           children: [
             _RoleHero(
-              title: 'Ready for your next jeepney ride',
+              title: 'Book your next jeepney ride',
               subtitle:
-                  'Send pickup requests quickly, confirm boarding without QR, and trigger digital para alerts only when verified onboard.',
+                  'Choose an active trip, send a booking request, confirm boarding without QR, and trigger digital para alerts once you are verified onboard.',
               accent: Theme.of(context).colorScheme.secondary,
               badge: session.user?.fullName ?? 'Passenger',
             ),
@@ -451,12 +589,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                           'Trips currently accepting or serving passengers',
                     ),
                     MetricCard(
-                      label: 'Pending requests',
+                      label: 'Active bookings',
                       value: pendingCount.toString(),
-                      icon: Icons.near_me_outlined,
+                      icon: Icons.event_seat_outlined,
                       accent: const Color(0xFFE29B2D),
                       caption:
-                          'Requests waiting for acknowledgement or boarding',
+                          'Bookings waiting for acknowledgement or boarding',
                     ),
                     MetricCard(
                       label: 'Onboard rides',
@@ -485,18 +623,147 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Commute actions',
+                    Text('Booking panel',
                         style: Theme.of(context).textTheme.titleLarge),
                     const SizedBox(height: 8),
                     const Text(
-                      'The core passenger flow stays short: request pickup, confirm boarding, then send para when onboard.',
+                      'Pick an active trip first, then book your boarding point. After the driver accepts, you can confirm boarding and later send para.',
                     ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 16),
+                    if (_trips.isEmpty)
+                      const Text(
+                        'No active jeepney trips are available right now.',
+                      )
+                    else ...[
+                      DropdownButtonFormField<String>(
+                        initialValue: _selectedTripId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Active trip to book',
+                        ),
+                        items: _trips
+                            .map(
+                              (trip) => DropdownMenuItem<String>(
+                                value: trip.id,
+                                child: Text(_tripRouteLabel(trip)),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          final trip =
+                              _trips.firstWhere((entry) => entry.id == value);
+                          setState(() {
+                            _selectedTripId = value;
+                            _selectedRouteId = trip.routeId;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+                    if (selectedTrip != null) ...[
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: [
+                                StatusBadge(status: selectedTrip.status),
+                                StatusBadge(
+                                  status: selectedTrip.acceptRequests == false
+                                      ? 'paused'
+                                      : 'booking open',
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            _DetailRow(
+                              label: 'Route',
+                              value: _tripRouteLabel(selectedTrip),
+                            ),
+                            _DetailRow(
+                              label: 'Jeepney',
+                              value: selectedTrip.jeepneyLabel.isEmpty
+                                  ? ParagoFormat.shortId(selectedTrip.jeepneyId)
+                                  : selectedTrip.jeepneyLabel,
+                            ),
+                            _DetailRow(
+                              label: 'Driver',
+                              value: selectedTrip.driverName?.isNotEmpty == true
+                                  ? selectedTrip.driverName!
+                                  : 'Not available',
+                            ),
+                            _DetailRow(
+                              label: 'Started',
+                              value: ParagoFormat.dateTime(selectedTrip.startedAt),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+                    if (selectedBooking != null) ...[
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE29B2D).withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: const Color(0xFFE29B2D).withValues(alpha: 0.22),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Current booking',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              selectedBooking.stopRef ?? 'Booking request',
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(_bookingStateText(selectedBooking)),
+                            if ((selectedBooking.sourceNote ?? '').isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text(selectedBooking.sourceNote!),
+                            ],
+                            if (_canCancelRequest(selectedBooking)) ...[
+                              const SizedBox(height: 12),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: TextButton.icon(
+                                  onPressed: _loading
+                                      ? null
+                                      : () => _cancelRequest(selectedBooking.id),
+                                  icon: const Icon(Icons.close),
+                                  label: const Text('Cancel booking'),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                    ],
                     _PassengerActionButton(
-                      icon: Icons.location_searching_outlined,
-                      title: 'Send pickup request',
+                      icon: Icons.event_seat_outlined,
+                      title: 'Book this trip',
                       subtitle:
-                          'Notify a currently active trip where you want to board',
+                          'Create a booking request for your selected boarding point',
                       onPressed: _loading ? null : _sendPickup,
                     ),
                     const SizedBox(height: 12),
@@ -521,75 +788,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                     if (_loading) ...[
                       const SizedBox(height: 16),
                       const LinearProgressIndicator(),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 18),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Trip focus',
-                        style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 8),
-                    if (_trips.isEmpty)
-                      const Text(
-                          'No active jeepney trips are available right now.')
-                    else ...[
-                      DropdownButtonFormField<String>(
-                        initialValue: _selectedTripId,
-                        items: _trips
-                            .map(
-                              (trip) => DropdownMenuItem<String>(
-                                value: trip.id,
-                                child: Text(_tripRouteLabel(trip)),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          if (value == null) return;
-                          final trip =
-                              _trips.firstWhere((entry) => entry.id == value);
-                          setState(() {
-                            _selectedTripId = value;
-                            _selectedRouteId = trip.routeId;
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      if (selectedTrip != null) ...[
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: [
-                            StatusBadge(status: selectedTrip.status),
-                            StatusBadge(
-                              status: selectedTrip.acceptRequests == false
-                                  ? 'paused'
-                                  : 'active',
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 14),
-                        _DetailRow(
-                          label: 'Route',
-                          value: _tripRouteLabel(selectedTrip),
-                        ),
-                        _DetailRow(
-                          label: 'Jeepney',
-                          value: selectedTrip.jeepneyLabel.isEmpty
-                              ? ParagoFormat.shortId(selectedTrip.jeepneyId)
-                              : selectedTrip.jeepneyLabel,
-                        ),
-                        _DetailRow(
-                          label: 'Started',
-                          value: ParagoFormat.dateTime(selectedTrip.startedAt),
-                        ),
-                      ],
                     ],
                   ],
                 ),
@@ -645,22 +843,22 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _SectionHeader(
-                      title: 'My pickup requests',
+                      title: 'My bookings',
                       trailing: Text('${_requests.length} total'),
                     ),
                     const SizedBox(height: 8),
                     if (_requests.isEmpty)
-                      const Text('No pickup requests yet for this account.')
+                      const Text('No bookings yet for this account.')
                     else
                       for (final request in _requests.take(6)) ...[
                         ListTile(
                           contentPadding: EdgeInsets.zero,
                           title: Text(
-                              request.stopRef ?? 'Unspecified pickup point'),
+                              request.stopRef ?? 'Unspecified booking stop'),
                           subtitle: Text(
                             '${ParagoFormat.statusLabel(request.status)} · ${ParagoFormat.relative(request.createdAt)}',
                           ),
-                          trailing: request.status == 'pending'
+                          trailing: _canCancelRequest(request)
                               ? TextButton(
                                   onPressed: () => _cancelRequest(request.id),
                                   child: const Text('Cancel'),

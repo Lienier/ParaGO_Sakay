@@ -6,8 +6,8 @@ class RouteService {
 
   final ApiClient _client;
 
-  Future<List<RouteSummaryModel>> getRoutes() async {
-    final data = await _client.getList(path: '/routes');
+  Future<List<RouteSummaryModel>> getRoutes({bool useCache = true}) async {
+    final data = await _client.getList(path: '/routes', useCache: useCache);
     return data
         .map((entry) =>
             RouteSummaryModel.fromJson(entry as Map<String, dynamic>))
@@ -31,6 +31,14 @@ class RouteService {
       method: 'PUT',
       path: '/routes/$routeId',
       body: body,
+    );
+    return RouteSummaryModel.fromJson(response['data'] as Map<String, dynamic>);
+  }
+
+  Future<RouteSummaryModel> deactivateRoute(String routeId) async {
+    final response = await _client.request(
+      method: 'DELETE',
+      path: '/routes/$routeId',
     );
     return RouteSummaryModel.fromJson(response['data'] as Map<String, dynamic>);
   }

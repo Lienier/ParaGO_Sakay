@@ -38,6 +38,25 @@ router.post(
       note: body.note,
       location: body.location,
     });
+
+    const trip = await TripSession.findById(body.tripSessionId).select('driverId');
+    const driver = trip?.driverId
+      ? await Driver.findById(trip.driverId).select('userId')
+      : null;
+
+    await publishNotification({
+      userId: driver?.userId,
+      type: 'stop_alert_created',
+      title: 'New passenger stop alert',
+      body: `${req.user.fullName || 'Passenger'} requested to unload near ${body.stopRef || 'the selected stop'}.`,
+      payload: {
+        stopAlertId: alert._id.toString(),
+        tripSessionId: alert.tripSessionId.toString(),
+        routeId: alert.routeId.toString(),
+      },
+      category: 'ride',
+    });
+
     return ok(res, alert, 'Stop alert sent', 201);
   })
 );

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/transport/route_summary.dart';
+import '../../models/trip/trip_session.dart';
 import '../../services/admin_service.dart';
 import '../../services/route_service.dart';
 import '../../services/session_controller.dart';
@@ -40,9 +41,11 @@ class _AdminDriverManagementScreenState
 
   List<dynamic> _drivers = [];
   List<RouteSummaryModel> _routes = [];
+  List<TripSession> _trips = [];
 
   bool _loading = false;
   bool _saving = false;
+  String? _schedulingDriverId;
   String? _error;
 
   String? _createEmail;
@@ -132,6 +135,7 @@ class _AdminDriverManagementScreenState
         '_id': match.id,
         'name': match.name,
         'code': match.code,
+        'status': match.status,
       };
     }
     return <String, dynamic>{};
@@ -164,12 +168,14 @@ class _AdminDriverManagementScreenState
       final results = await Future.wait<dynamic>([
         admin.getDrivers(),
         routeService.getRoutes(),
+        admin.getTrips(),
       ]);
 
       if (!mounted) return;
       setState(() {
         _drivers = results[0] as List<dynamic>;
         _routes = results[1] as List<RouteSummaryModel>;
+        _trips = results[2] as List<TripSession>;
         _error = null;
       });
     } catch (error) {
@@ -178,6 +184,138 @@ class _AdminDriverManagementScreenState
     } finally {
       if (mounted) {
         setState(() => _loading = false);
+      }
+    }
+  }
+
+  TripSession? _openTripForDriver(String driverId) {
+    if (driverId.isEmpty) return null;
+    for (final trip in _trips) {
+      if (trip.driverId == driverId &&
+          (trip.status == 'scheduled' || trip.status == 'active')) {
+        return trip;
+      }
+    }
+    return null;
+  }
+
+  String? _scheduleTripBlockReason(Map<String, dynamic> driver) {
+    final driverId = _idOf(driver['_id']);
+    if (driverId.isEmpty) {
+      return 'Driver profile is missing.';
+    }
+
+    final status = _textOf(driver['status']).toLowerCase();
+    if (status != 'active') {
+      return 'Driver account must be active.';
+    }
+
+    if (driver['isVerified'] != true) {
+      return 'Driver must be verified first.';
+    }
+
+    final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
+    final jeepneyId = _nullableIdOf(jeepney);
+    if (jeepneyId == null) {
+      return 'Assign a jeepney first.';
+    }
+    if (_textOf(jeepney?['status']).toLowerCase() != 'active') {
+      return 'Assigned jeepney must be active.';
+    }
+
+    final route = _driverRoute(driver);
+    final routeId = _nullableIdOf(route);
+    if (routeId == null) {
+      return 'Assign a route first.';
+    }
+    final routeStatus = _textOf(route['status']).toLowerCase();
+    if (routeStatus.isNotEmpty && routeStatus != 'active') {
+      return 'Assigned route must be active.';
+    }
+
+    final openTrip = _openTripForDriver(driverId);
+    if (openTrip != null) {
+      return 'Driver already has a ${openTrip.status} trip.';
+    }
+
+    return null;
+  }
+
+  Future<void> _scheduleTrip(Map<String, dynamic> driver) async {
+    final blockReason = _scheduleTripBlockReason(driver);
+    if (blockReason != null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(blockReason)),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        final route = _driverRoute(driver);
+        final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
+        return AlertDialog(
+          title: const Text('Schedule trip'),
+          content: Text(
+            'Create a scheduled trip for ${_driverDisplayName(driver)} using '
+            '${jeepney?['plateNumber'] ?? 'the assigned jeepney'} on '
+            '${route['code'] ?? route['name'] ?? 'the assigned route'}?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Schedule'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+
+    final session = context.read<SessionController>();
+    final admin = AdminService(session.apiClient);
+    final driverId = _idOf(driver['_id']);
+    final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
+    final route = _driverRoute(driver);
+    final jeepneyId = _nullableIdOf(jeepney)!;
+    final routeId = _nullableIdOf(route)!;
+
+    setState(() => _schedulingDriverId = driverId);
+    try {
+      final trip = await admin.createTrip(
+        driverId: driverId,
+        jeepneyId: jeepneyId,
+        routeId: routeId,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Trip scheduled for ${_driverDisplayName(driver)} (${trip.routeLabel}).',
+          ),
+        ),
+      );
+      await _load();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _schedulingDriverId = null);
       }
     }
   }
@@ -423,8 +561,12 @@ class _AdminDriverManagementScreenState
                     : '${routeData['code'] ?? ''} ${routeData['name']}'.trim();
                 final jeepney =
                     driver['assignedJeepneyId'] as Map<String, dynamic>?;
-                final jeepneyPlate =
-                    jeepney?['plateNumber']?.toString() ?? 'No jeepney assigned';
+                final driverId = _idOf(driver['_id']);
+                final openTrip = _openTripForDriver(driverId);
+                final scheduleBlockReason = _scheduleTripBlockReason(driver);
+                final schedulingThisDriver = _schedulingDriverId == driverId;
+                final jeepneyPlate = jeepney?['plateNumber']?.toString() ??
+                    'No jeepney assigned';
                 final jeepneyCapacity = jeepney?['capacity']?.toString() ?? '';
 
                 return Card(
@@ -464,14 +606,59 @@ class _AdminDriverManagementScreenState
                         Text('Jeepney plate: $jeepneyPlate'),
                         if (jeepneyCapacity.isNotEmpty)
                           Text('Capacity: $jeepneyCapacity'),
-                        const SizedBox(height: 10),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: TextButton.icon(
-                            onPressed: () => _openEditSheet(driver),
-                            icon: const Icon(Icons.edit_outlined),
-                            label: const Text('Edit driver'),
+                        const SizedBox(height: 6),
+                        Text(
+                          openTrip == null
+                              ? 'Trip status: No scheduled trip'
+                              : 'Trip status: ${_statusLabel(openTrip.status)}',
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                        ),
+                        if (scheduleBlockReason != null) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            scheduleBlockReason,
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                  color: Theme.of(context).colorScheme.error,
+                                  fontWeight: FontWeight.w600,
+                                ),
                           ),
+                        ],
+                        const SizedBox(height: 10),
+                        Wrap(
+                          alignment: WrapAlignment.end,
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            OutlinedButton.icon(
+                              onPressed: schedulingThisDriver ||
+                                      scheduleBlockReason != null
+                                  ? null
+                                  : () => _scheduleTrip(driver),
+                              icon: schedulingThisDriver
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.playlist_add_check_circle_outlined),
+                              label: Text(
+                                schedulingThisDriver
+                                    ? 'Scheduling...'
+                                    : openTrip == null
+                                        ? 'Schedule trip'
+                                        : 'Trip ready',
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: () => _openEditSheet(driver),
+                              icon: const Icon(Icons.edit_outlined),
+                              label: const Text('Edit driver'),
+                            ),
+                          ],
                         ),
                       ],
                     ),

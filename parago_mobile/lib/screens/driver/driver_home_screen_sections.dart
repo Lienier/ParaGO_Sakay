@@ -14,6 +14,93 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     return null;
   }
 
+  RouteSummaryModel? _effectiveRouteSummaryForTrip(TripSession trip) {
+    final assignedRoute = _assignedRouteSummary();
+    final tripRoute = _routeSummaryForTrip(trip);
+
+    if (assignedRoute != null) {
+      if (assignedRoute.id == trip.routeId) {
+        return assignedRoute;
+      }
+      if (assignedRoute.mapPath.isNotEmpty ||
+          assignedRoute.referencePoints.isNotEmpty) {
+        return assignedRoute;
+      }
+    }
+
+    return tripRoute ?? assignedRoute;
+  }
+
+  List<LatLng> _cachedPreviewPath({
+    String? routeId,
+    String? routeCode,
+  }) {
+    if (routeId != null) {
+      final points = _cachedRoutePreviewPoints[routeId];
+      if (points != null && points.length >= 2) {
+        return points;
+      }
+    }
+
+    if (routeCode != null && routeCode.isNotEmpty) {
+      for (final route in _routes) {
+        if (route.code == routeCode) {
+          final points = _cachedRoutePreviewPoints[route.id];
+          if (points != null && points.length >= 2) {
+            return points;
+          }
+        }
+      }
+    }
+
+    return const <LatLng>[];
+  }
+
+  // ignore: unused_element
+  // Kept temporarily for route troubleshooting without exposing a driver-facing debug panel.
+  List<String> _routeDebugLines({
+    required TripSession? focusedTrip,
+    required RouteSummaryModel? assignedRoute,
+    required List<LatLng> routePath,
+  }) {
+    final lines = <String>[];
+    final effectiveRoute = focusedTrip == null
+        ? assignedRoute
+        : _effectiveRouteSummaryForTrip(focusedTrip);
+    final tripRoute =
+        focusedTrip == null ? null : _routeSummaryForTrip(focusedTrip);
+
+    lines.add(
+      'drawn route: ${effectiveRoute?.code ?? 'none'} · '
+      '${effectiveRoute?.id ?? 'no-id'} · ${routePath.length} pts',
+    );
+    if (effectiveRoute != null) {
+      lines.add(
+        'cached preview points: '
+        '${_cachedPreviewPath(routeId: effectiveRoute.id, routeCode: effectiveRoute.code).length}',
+      );
+    }
+
+    if (focusedTrip != null) {
+      lines.add(
+        'trip route: ${tripRoute?.code ?? focusedTrip.routeId} · '
+        '${focusedTrip.routeId}',
+      );
+      lines.add(
+        'trip snapshot points: ${focusedTrip.routePathSnapshotPoints.length}',
+      );
+    }
+
+    if (assignedRoute != null) {
+      lines.add(
+        'assigned route: ${assignedRoute.code} · ${assignedRoute.id} · '
+        '${assignedRoute.mapPath.length} pts',
+      );
+    }
+
+    return lines;
+  }
+
   int _displayedOnboardCount(TripSession? trip, List<RideSessionModel> rides) {
     if (trip == null) return 0;
     final base = _baseOnboardCount(trip, rides);
@@ -31,7 +118,19 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
   }
 
   LatLng _baseMapCenter(TripSession trip) {
-    final route = _routeSummaryForTrip(trip);
+    if (trip.routePathSnapshotPoints.isNotEmpty) {
+      return trip
+          .routePathSnapshotPoints[trip.routePathSnapshotPoints.length ~/ 2];
+    }
+    final effectiveRoute = _effectiveRouteSummaryForTrip(trip);
+    final cachedPreview = _cachedPreviewPath(
+      routeId: effectiveRoute?.id ?? trip.routeId,
+      routeCode: effectiveRoute?.code ?? trip.routeCode,
+    );
+    if (cachedPreview.isNotEmpty) {
+      return cachedPreview[cachedPreview.length ~/ 2];
+    }
+    final route = effectiveRoute;
     final routePoints = route?.referencePoints ?? const <LatLng>[];
     if (routePoints.isNotEmpty) {
       return routePoints[routePoints.length ~/ 2];
@@ -48,7 +147,17 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
   }
 
   List<LatLng> _routePathForTrip(TripSession trip, {LatLng? center}) {
-    final route = _routeSummaryForTrip(trip);
+    if (trip.routePathSnapshotPoints.length >= 2) {
+      return trip.routePathSnapshotPoints;
+    }
+    final route = _effectiveRouteSummaryForTrip(trip);
+    final cachedPreview = _cachedPreviewPath(
+      routeId: route?.id ?? trip.routeId,
+      routeCode: route?.code ?? trip.routeCode,
+    );
+    if (cachedPreview.length >= 2) {
+      return cachedPreview;
+    }
     final savedPath = route?.mapPath ?? const <LatLng>[];
     if (savedPath.length >= 2) {
       return savedPath;
@@ -134,8 +243,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
 
     final activeAlerts = alerts
         .where(
-          (alert) =>
-              _DriverHomeScreenState._activeAlertStatuses.contains(alert.status),
+          (alert) => _DriverHomeScreenState._activeAlertStatuses
+              .contains(alert.status),
         )
         .toList();
     for (var index = 0; index < activeAlerts.length; index += 1) {
@@ -235,20 +344,28 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     final displayedOnboard = _displayedOnboardCount(focusedTrip, focusedRides);
     final activeAlerts = focusedAlerts
         .where(
-          (alert) =>
-              _DriverHomeScreenState._activeAlertStatuses.contains(alert.status),
+          (alert) => _DriverHomeScreenState._activeAlertStatuses
+              .contains(alert.status),
         )
         .toList();
     final assignedRoute = _assignedRouteSummary();
     final liveVehicleLocation = _vehicleLocation;
     final tripVehicleLocation =
         focusedTrip == null ? null : _vehicleLocationForTrip(focusedTrip);
+    final assignedCachedPreview = assignedRoute == null
+        ? const <LatLng>[]
+        : _cachedPreviewPath(
+            routeId: assignedRoute.id,
+            routeCode: assignedRoute.code,
+          );
     final routePath = focusedTrip != null
         ? _routePathForTrip(
             focusedTrip,
             center: tripVehicleLocation,
           )
-        : (assignedRoute?.mapPath ?? const <LatLng>[]);
+        : (assignedCachedPreview.isNotEmpty
+            ? assignedCachedPreview
+            : (assignedRoute?.mapPath ?? const <LatLng>[]));
     final markers = <_DriveMarkerData>[];
 
     if (liveVehicleLocation != null) {
@@ -282,6 +399,12 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         (routePath.isEmpty
             ? const LatLng(14.6091, 121.0223)
             : routePath[math.min(routePath.length - 1, 2)]);
+
+    _routeDebugLines(
+      focusedTrip: focusedTrip,
+      assignedRoute: assignedRoute,
+      routePath: routePath,
+    );
 
     return _DriveMapPanel(
       cameraTarget: mapCenter,
@@ -365,8 +488,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               title: request.stopRef ?? 'Unspecified pickup point',
               subtitle:
                   '${ParagoFormat.statusLabel(request.status)} - ${ParagoFormat.relative(request.createdAt)}',
-              detail:
-                  request.sourceNote ?? 'Passenger requested a roadside pickup.',
+              detail: request.sourceNote ??
+                  'Passenger requested a roadside pickup.',
               status: request.status,
               primaryLabel: request.status == 'pending' ? 'Acknowledge' : null,
               onPrimary: request.status == 'pending'
@@ -424,17 +547,16 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               title: alert.stopRef,
               subtitle:
                   '${ParagoFormat.statusLabel(alert.status)} - ${ParagoFormat.relative(alert.createdAt)}',
-              detail:
-                  alert.note ?? 'Passenger is nearing the selected unloading point.',
+              detail: alert.note ??
+                  'Passenger is nearing the selected unloading point.',
               status: alert.status,
               primaryLabel:
                   _DriverHomeScreenState._activeAlertStatuses.contains(
                 alert.status,
               )
-                  ? 'Acknowledge'
-                  : null,
-              onPrimary:
-                  _DriverHomeScreenState._activeAlertStatuses.contains(
+                      ? 'Acknowledge'
+                      : null,
+              onPrimary: _DriverHomeScreenState._activeAlertStatuses.contains(
                 alert.status,
               )
                   ? () => _acknowledgeAlert(alert.id)
@@ -476,8 +598,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     final totalAlerts = _tripAlerts.values
         .expand((entries) => entries)
         .where(
-          (alert) =>
-              _DriverHomeScreenState._activeAlertStatuses.contains(alert.status),
+          (alert) => _DriverHomeScreenState._activeAlertStatuses
+              .contains(alert.status),
         )
         .length;
     final totalOnboard = _tripRides.values

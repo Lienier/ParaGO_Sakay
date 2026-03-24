@@ -271,12 +271,14 @@ class ApiClient {
     required String path,
     Map<String, dynamic>? queryParameters,
     Duration? cacheTtl,
+    bool useCache = true,
   }) async {
     final response = await request(
       method: 'GET',
       path: path,
       queryParameters: queryParameters,
       cacheTtl: cacheTtl,
+      useCache: useCache,
     );
     final data = response['data'];
     if (data is List<dynamic>) return data;

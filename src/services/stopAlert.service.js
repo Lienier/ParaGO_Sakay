@@ -39,7 +39,7 @@ const createStopAlert = async ({
     throw new ApiError(429, 'Please wait before sending another stop alert');
   }
 
-  const trip = await TripSession.findById(tripSessionId).select('routeId');
+  const trip = await TripSession.findById(tripSessionId).select('routeId status');
   if (!trip) throw new ApiError(404, 'Trip session not found');
   if (trip.status !== 'active') {
     throw new ApiError(409, 'Trip session is not active');

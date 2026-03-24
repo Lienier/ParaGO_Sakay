@@ -23,6 +23,22 @@ const normalizePositiveInteger = (value, fieldName) => {
   return normalized;
 };
 
+const normalizeNonNegativeNumber = (value, fieldName) => {
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized) || normalized < 0) {
+    throw new ApiError(400, `${fieldName} must be a non-negative number`);
+  }
+  return normalized;
+};
+
+const normalizeFiniteNumber = (value, fieldName) => {
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) {
+    throw new ApiError(400, `${fieldName} must be a valid number`);
+  }
+  return normalized;
+};
+
 const normalizeEnum = (value, fieldName, allowedValues) => {
   const normalized = String(value || '').trim().toLowerCase();
   if (!allowedValues.includes(normalized)) {
@@ -151,6 +167,60 @@ const buildRouteStop = (value, index) => {
   };
 };
 
+const buildRouteBounds = (value, fieldName) => {
+  if (!isPlainObject(value)) {
+    throw new ApiError(400, `${fieldName} must be an object`);
+  }
+
+  const bounds = {
+    north: normalizeFiniteNumber(value.north, `${fieldName}.north`),
+    south: normalizeFiniteNumber(value.south, `${fieldName}.south`),
+    east: normalizeFiniteNumber(value.east, `${fieldName}.east`),
+    west: normalizeFiniteNumber(value.west, `${fieldName}.west`),
+  };
+
+  if (bounds.north < bounds.south) {
+    throw new ApiError(400, `${fieldName}.north must be greater than or equal to south`);
+  }
+  if (bounds.east < bounds.west) {
+    throw new ApiError(400, `${fieldName}.east must be greater than or equal to west`);
+  }
+
+  return bounds;
+};
+
+const buildRouteNavigationPayload = (value, fieldName = 'navigation') => {
+  if (!isPlainObject(value)) {
+    throw new ApiError(400, `${fieldName} must be an object`);
+  }
+
+  const payload = {
+    source: value.source
+      ? normalizeEnum(value.source, `${fieldName}.source`, ['openstreetmap', 'cached'])
+      : 'openstreetmap',
+    origin: normalizeGeoPoint(value.origin, `${fieldName}.origin`),
+    destination: normalizeGeoPoint(value.destination, `${fieldName}.destination`),
+  };
+
+  if (hasOwn(value, 'bounds')) {
+    payload.bounds = buildRouteBounds(value.bounds, `${fieldName}.bounds`);
+  }
+  if (hasOwn(value, 'distanceMeters')) {
+    payload.distanceMeters = normalizeNonNegativeNumber(
+      value.distanceMeters,
+      `${fieldName}.distanceMeters`
+    );
+  }
+  if (hasOwn(value, 'durationSeconds')) {
+    payload.durationSeconds = normalizeNonNegativeNumber(
+      value.durationSeconds,
+      `${fieldName}.durationSeconds`
+    );
+  }
+
+  return payload;
+};
+
 const buildRouteCreatePayload = (value = {}) => {
   if (!isPlainObject(value)) {
     throw new ApiError(400, 'Route payload is required');
@@ -167,6 +237,7 @@ const buildRouteCreatePayload = (value = {}) => {
     path: undefined,
     waypoints: [],
     stops: [],
+    navigation: undefined,
   };
 
   if (hasOwn(value, 'path')) {
@@ -187,6 +258,10 @@ const buildRouteCreatePayload = (value = {}) => {
       throw new ApiError(400, 'stops must be an array');
     }
     payload.stops = value.stops.map((stop, index) => buildRouteStop(stop, index));
+  }
+
+  if (hasOwn(value, 'navigation')) {
+    payload.navigation = buildRouteNavigationPayload(value.navigation);
   }
 
   return payload;
@@ -229,6 +304,9 @@ const buildRouteUpdatePayload = (value = {}) => {
       throw new ApiError(400, 'stops must be an array');
     }
     updates.stops = value.stops.map((stop, index) => buildRouteStop(stop, index));
+  }
+  if (hasOwn(value, 'navigation') && value.navigation != null) {
+    updates.navigation = buildRouteNavigationPayload(value.navigation);
   }
 
   return updates;

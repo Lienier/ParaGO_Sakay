@@ -60,7 +60,8 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
       if (!serviceEnabled) {
         setState(() {
           _loadingLocation = false;
-          _statusMessage = 'Turn on device location services to use live mapping.';
+          _statusMessage =
+              'Turn on device location services to use live mapping.';
         });
         return;
       }
@@ -95,7 +96,8 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
       setState(() {
         _currentLocation = current;
         _loadingLocation = false;
-        _statusMessage = 'Live GPS ready. Tap anywhere on the map to plan a route.';
+        _statusMessage =
+            'Live GPS ready. Tap anywhere on the map to plan a route.';
       });
 
       _moveTo(current, zoom: 16);
@@ -415,7 +417,8 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
                 FlutterMap(
                   mapController: _mapController,
                   options: MapOptions(
-                    initialCenter: currentLocation ?? const LatLng(14.6091, 121.0223),
+                    initialCenter:
+                        currentLocation ?? const LatLng(14.6091, 121.0223),
                     initialZoom: 14,
                     onMapReady: () {
                       _mapReady = true;
@@ -427,7 +430,8 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
                   ),
                   children: [
                     TileLayer(
-                      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      urlTemplate:
+                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                       userAgentPackageName: 'com.example.parago_mobile',
                     ),
                     PolylineLayer(
@@ -449,14 +453,16 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
                     right: 16,
                     child: Card(
                       child: Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        padding:
+                            EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             SizedBox(
                               width: 18,
                               height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2.4),
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2.4),
                             ),
                             SizedBox(width: 10),
                             Text('Updating map...'),

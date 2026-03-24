@@ -6,15 +6,15 @@ class TripService {
 
   final ApiClient _client;
 
-  Future<List<TripSession>> getActiveTrips() async {
-    final data = await _client.getList(path: '/trips/active');
+  Future<List<TripSession>> getActiveTrips({bool useCache = true}) async {
+    final data = await _client.getList(path: '/trips/active', useCache: useCache);
     return data
         .map((e) => TripSession.fromJson(e as Map<String, dynamic>))
         .toList();
   }
 
-  Future<List<TripSession>> getMyTrips() async {
-    final data = await _client.getList(path: '/trips/mine');
+  Future<List<TripSession>> getMyTrips({bool useCache = true}) async {
+    final data = await _client.getList(path: '/trips/mine', useCache: useCache);
     return data
         .map((e) => TripSession.fromJson(e as Map<String, dynamic>))
         .toList();

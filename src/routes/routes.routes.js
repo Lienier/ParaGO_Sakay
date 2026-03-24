@@ -1,5 +1,6 @@
 const express = require('express');
 const RouteModel = require('../models/route');
+const TripSession = require('../models/tripSession');
 const asyncHandler = require('../utils/asyncHandler');
 const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
@@ -13,6 +14,21 @@ const {
 } = require('../utils/transportPayloads');
 
 const router = express.Router();
+
+const buildRoutePathSnapshot = (route) => {
+  const coordinates = Array.isArray(route?.path?.coordinates)
+    ? route.path.coordinates
+    : [];
+
+  if (coordinates.length < 2) {
+    return undefined;
+  }
+
+  return {
+    type: 'LineString',
+    coordinates: coordinates.map((entry) => [Number(entry[0]), Number(entry[1])]),
+  };
+};
 
 router.get(
   '/',
@@ -49,6 +65,17 @@ router.put(
       { new: true, runValidators: true }
     );
     if (!updated) throw new ApiError(404, 'Route not found');
+    await TripSession.updateMany(
+      {
+        routeId: updated._id,
+        status: { $in: ['scheduled', 'active'] },
+      },
+      {
+        $set: {
+          routePathSnapshot: buildRoutePathSnapshot(updated),
+        },
+      }
+    );
     return ok(res, updated, 'Route updated');
   })
 );

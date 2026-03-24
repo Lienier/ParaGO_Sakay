@@ -6,10 +6,14 @@ class NotificationService {
 
   final ApiClient _client;
 
-  Future<List<NotificationModel>> getMine({bool includeRead = false}) async {
+  Future<List<NotificationModel>> getMine({
+    bool includeRead = false,
+    bool useCache = true,
+  }) async {
     final data = await _client.getList(
       path: '/notifications/mine',
       queryParameters: {'includeRead': includeRead.toString()},
+      useCache: useCache,
     );
     return data
         .map((e) => NotificationModel.fromJson(e as Map<String, dynamic>))

@@ -6,8 +6,8 @@ class RouteService {
 
   final ApiClient _client;
 
-  Future<List<RouteSummaryModel>> getRoutes() async {
-    final data = await _client.getList(path: '/routes');
+  Future<List<RouteSummaryModel>> getRoutes({bool useCache = true}) async {
+    final data = await _client.getList(path: '/routes', useCache: useCache);
     return data
         .map((entry) =>
             RouteSummaryModel.fromJson(entry as Map<String, dynamic>))

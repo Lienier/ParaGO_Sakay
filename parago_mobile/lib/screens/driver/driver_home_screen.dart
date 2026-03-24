@@ -19,6 +19,7 @@ import '../../models/trip/trip_session.dart';
 import '../../services/driver_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/ride_session_service.dart';
+import '../../services/route_preview_cache.dart';
 import '../../services/route_service.dart';
 import '../../services/session_controller.dart';
 import '../../services/stop_alert_service.dart';
@@ -42,6 +43,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   List<TripSession> _trips = [];
   List<RouteSummaryModel> _routes = [];
+  Map<String, List<LatLng>> _cachedRoutePreviewPoints = {};
   List<NotificationModel> _notifications = [];
   Map<String, List<PickupRequestModel>> _tripRequests = {};
   Map<String, List<StopAlertModel>> _tripAlerts = {};
@@ -55,8 +57,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   String? _statusMessage;
   LatLng? _vehicleLocation;
   Timer? _vehicleLocationTimer;
+  Timer? _liveRefreshTimer;
   bool _locationPluginUnavailable = false;
   bool _locationLoopActive = true;
+  bool _silentRefreshActive = false;
+  bool _realtimePrimed = false;
+  Set<String> _knownNotificationIds = <String>{};
+  Set<String> _knownActiveStopAlertIds = <String>{};
 
   TripSession? get _focusedTrip {
     for (final trip in _trips) {
@@ -70,30 +77,35 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
     _startVehicleLocationHeartbeat();
+    _startLiveRefreshLoop();
   }
 
   @override
   void dispose() {
     _vehicleLocationTimer?.cancel();
+    _liveRefreshTimer?.cancel();
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool silent = false}) async {
     final session = context.read<SessionController>();
     final tripService = TripService(session.apiClient);
     final notificationService = NotificationService(session.apiClient);
     final routeService = RouteService(session.apiClient);
+    final routePreviewCache = RoutePreviewCache();
     final driverService = DriverService(session.apiClient);
     final stopAlertService = StopAlertService(session.apiClient);
     final rideSessionService = RideSessionService(session.apiClient);
 
-    setState(() => _loading = true);
+    if (!silent) {
+      setState(() => _loading = true);
+    }
 
     try {
       final initialResults = await Future.wait<dynamic>([
-        tripService.getMyTrips(),
-        notificationService.getMine(),
-        routeService.getRoutes(),
+        tripService.getMyTrips(useCache: false),
+        notificationService.getMine(useCache: false),
+        routeService.getRoutes(useCache: false),
         driverService.getProfile(),
       ]);
 
@@ -101,22 +113,45 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       final notifications = initialResults[1] as List<NotificationModel>;
       final routes = initialResults[2] as List<RouteSummaryModel>;
       final driverProfile = initialResults[3] as Map<String, dynamic>;
+      final assignedRouteId = _readAssignedRouteId(driverProfile);
       final driverStatus = driverProfile['status']?.toString().toLowerCase();
 
+      final cachedRoutePreviewPoints = <String, List<LatLng>>{};
+      for (final route in routes) {
+        final cachedPoints = await routePreviewCache.loadPreview(
+          routeId: route.id,
+          routeCode: route.code,
+        );
+        if (cachedPoints.length >= 2) {
+          cachedRoutePreviewPoints[route.id] = cachedPoints;
+        }
+      }
+
       final requestEntries = await Future.wait(
-        trips.map((trip) async =>
-            MapEntry(trip.id, await driverService.getRequestsForTrip(trip.id))),
+        trips.map((trip) async => MapEntry(
+              trip.id,
+              await driverService.getRequestsForTrip(
+                trip.id,
+                useCache: false,
+              ),
+            )),
       );
       final alertEntries = await Future.wait(
         trips.map((trip) async => MapEntry(
               trip.id,
-              await stopAlertService.getTripStopAlerts(trip.id),
+              await stopAlertService.getTripStopAlerts(
+                trip.id,
+                useCache: false,
+              ),
             )),
       );
       final rideEntries = await Future.wait(
         trips.map((trip) async => MapEntry(
               trip.id,
-              await rideSessionService.getTripRides(trip.id),
+              await rideSessionService.getTripRides(
+                trip.id,
+                useCache: false,
+              ),
             )),
       );
 
@@ -142,7 +177,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         _trips = trips;
         _notifications = notifications;
         _routes = routes;
-        _assignedRouteId = _readAssignedRouteId(driverProfile);
+        _cachedRoutePreviewPoints = cachedRoutePreviewPoints;
+        _assignedRouteId = assignedRouteId;
         if (driverStatus == 'active' || driverStatus == 'inactive') {
           _isOnline = driverStatus == 'active';
         }
@@ -162,12 +198,103 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             trip.id: _manualOnboardAdjustments[trip.id] ?? 0,
         };
       });
+      _handleRealtimeDriverUpdates(
+        notifications: notifications,
+        alertsByTrip: {
+          for (final entry in alertEntries) entry.key: entry.value,
+        },
+        silent: silent,
+      );
       _publishVehicleLocation();
     } catch (error) {
       setState(() => _statusMessage = error.toString());
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && !silent) setState(() => _loading = false);
     }
+  }
+
+  void _startLiveRefreshLoop() {
+    _liveRefreshTimer?.cancel();
+    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 8), (_) async {
+      if (!mounted || _silentRefreshActive) {
+        return;
+      }
+      _silentRefreshActive = true;
+      try {
+        await _load(silent: true);
+      } finally {
+        _silentRefreshActive = false;
+      }
+    });
+  }
+
+  void _handleRealtimeDriverUpdates({
+    required List<NotificationModel> notifications,
+    required Map<String, List<StopAlertModel>> alertsByTrip,
+    required bool silent,
+  }) {
+    final notificationIds = notifications.map((item) => item.id).toSet();
+    final activeAlertIds = alertsByTrip.values
+        .expand((items) => items)
+        .where((alert) => _activeAlertStatuses.contains(alert.status))
+        .map((alert) => alert.id)
+        .toSet();
+
+    if (!_realtimePrimed) {
+      _knownNotificationIds = notificationIds;
+      _knownActiveStopAlertIds = activeAlertIds;
+      _realtimePrimed = true;
+      return;
+    }
+
+    final newNotifications = notifications
+        .where((item) => !_knownNotificationIds.contains(item.id))
+        .toList(growable: false);
+    final newActiveAlerts = alertsByTrip.values
+        .expand((items) => items)
+        .where(
+          (alert) =>
+              _activeAlertStatuses.contains(alert.status) &&
+              !_knownActiveStopAlertIds.contains(alert.id),
+        )
+        .toList(growable: false);
+
+    _knownNotificationIds = notificationIds;
+    _knownActiveStopAlertIds = activeAlertIds;
+
+    if (!silent || !mounted) {
+      return;
+    }
+    if (newActiveAlerts.isEmpty && newNotifications.isEmpty) {
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    if (newActiveAlerts.isNotEmpty) {
+      final firstAlert = newActiveAlerts.first;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            newActiveAlerts.length == 1
+                ? 'New stop alert: ${firstAlert.stopRef}'
+                : '${newActiveAlerts.length} new passenger stop alerts received.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final firstNotification = newNotifications.first;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          newNotifications.length == 1
+              ? '${firstNotification.title}: ${firstNotification.body}'
+              : '${newNotifications.length} new driver notifications received.',
+        ),
+      ),
+    );
   }
 
   Future<void> _startTrip(String tripId) async {
@@ -315,7 +442,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        _setStatusMessage('Enable device location service to share jeepney location.');
+        _setStatusMessage(
+            'Enable device location service to share jeepney location.');
         return;
       }
 
@@ -341,8 +469,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
       if (!mounted) return;
       if (_vehicleLocation == null ||
-          (next.latitude - _vehicleLocation!.latitude).abs() >
-              0.00008 ||
+          (next.latitude - _vehicleLocation!.latitude).abs() > 0.00008 ||
           (next.longitude - _vehicleLocation!.longitude).abs() > 0.00008) {
         setState(() {
           _vehicleLocation = next;
@@ -358,7 +485,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
       final session = context.read<SessionController>();
       final driverService = DriverService(session.apiClient);
-      await driverService.updateLocation(lat: next.latitude, lng: next.longitude);
+      await driverService.updateLocation(
+          lat: next.latitude, lng: next.longitude);
       _setStatusMessage('Live jeepney location updated and shared.');
     } on MissingPluginException {
       _locationPluginUnavailable = true;
@@ -419,6 +547,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   String _routeLabel(TripSession trip) {
+    final effectiveRoute = _effectiveRouteSummaryForTrip(trip);
+    if (effectiveRoute != null) {
+      return effectiveRoute.label;
+    }
     if (trip.routeName != null && trip.routeName!.isNotEmpty) {
       return trip.routeLabel;
     }
@@ -478,11 +610,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
-      if (_tabIndex != 0) {
-        return RefreshIndicator(
-          onRefresh: _load,
-          child: _buildActiveTab(
-            focusedTrip: focusedTrip,
+          if (_tabIndex != 0) {
+            return RefreshIndicator(
+              onRefresh: _load,
+              child: _buildActiveTab(
+                focusedTrip: focusedTrip,
                 focusedRequests: focusedRequests,
                 focusedAlerts: focusedAlerts,
                 focusedRides: focusedRides,
@@ -740,7 +872,8 @@ class _DriveMapPanel extends StatelessWidget {
   final VoidCallback? onAcknowledgeAlert;
   final double? height;
 
-  void _openControlSheet(BuildContext context, bool hasTrip, bool isTripActive) {
+  void _openControlSheet(
+      BuildContext context, bool hasTrip, bool isTripActive) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -965,7 +1098,8 @@ class _DriveMapPanel extends StatelessWidget {
                             const SizedBox(height: 14),
                             _SummaryRow(
                               label: 'Route',
-                              value: trip == null ? 'No active route' : routeLabel,
+                              value:
+                                  trip == null ? 'No active route' : routeLabel,
                             ),
                             _SummaryRow(
                               label: 'Trip status',
@@ -1180,7 +1314,8 @@ class _DriveMapPanel extends StatelessWidget {
                       _openControlSheet(context, hasTrip, isTripActive);
                     }
                   },
-                  onTap: () => _openControlSheet(context, hasTrip, isTripActive),
+                  onTap: () =>
+                      _openControlSheet(context, hasTrip, isTripActive),
                   child: Container(
                     padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
                     decoration: BoxDecoration(

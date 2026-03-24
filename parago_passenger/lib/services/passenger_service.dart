@@ -7,8 +7,13 @@ class PassengerService {
 
   final ApiClient _client;
 
-  Future<List<PickupRequestModel>> getMyPickupRequests() async {
-    final data = await _client.getList(path: '/pickup-requests/mine');
+  Future<List<PickupRequestModel>> getMyPickupRequests({
+    bool useCache = true,
+  }) async {
+    final data = await _client.getList(
+      path: '/pickup-requests/mine',
+      useCache: useCache,
+    );
     return data
         .map((e) => PickupRequestModel.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -53,8 +58,11 @@ class PassengerService {
         response['data'] as Map<String, dynamic>);
   }
 
-  Future<List<RideSessionModel>> getMyRides() async {
-    final data = await _client.getList(path: '/ride-sessions/mine');
+  Future<List<RideSessionModel>> getMyRides({bool useCache = true}) async {
+    final data = await _client.getList(
+      path: '/ride-sessions/mine',
+      useCache: useCache,
+    );
     return data
         .map((e) => RideSessionModel.fromJson(e as Map<String, dynamic>))
         .toList();

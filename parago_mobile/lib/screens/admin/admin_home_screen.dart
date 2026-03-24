@@ -7,6 +7,7 @@ import '../../services/admin_service.dart';
 import '../../services/route_service.dart';
 import '../../services/session_controller.dart';
 import 'admin_driver_management_screen.dart';
+import 'admin_route_management_screen.dart';
 import 'admin_route_builder_screen.dart';
 import '../../widgets/metric_card.dart';
 
@@ -98,6 +99,19 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                 ),
               );
               if (saved == true && mounted) {
+                _load();
+              }
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_sweep_outlined),
+            onPressed: () async {
+              await Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => const AdminRouteManagementScreen(),
+                ),
+              );
+              if (mounted) {
                 _load();
               }
             },
@@ -216,6 +230,25 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                   children: [
                     Text('Managed routes',
                         style: Theme.of(context).textTheme.titleLarge),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          await Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  const AdminRouteManagementScreen(),
+                            ),
+                          );
+                          if (mounted) {
+                            _load();
+                          }
+                        },
+                        icon: const Icon(Icons.delete_sweep_outlined),
+                        label: const Text('Manage routes'),
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     if (_routes.isEmpty)
                       const Text('No routes available.')

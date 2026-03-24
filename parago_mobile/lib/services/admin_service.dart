@@ -1,4 +1,5 @@
 import '../core/network/api_client.dart';
+import '../models/trip/trip_session.dart';
 
 class AdminService {
   AdminService(this._client);
@@ -28,6 +29,13 @@ class AdminService {
     );
     final data = response['data'];
     return data is List<dynamic> ? data : <dynamic>[];
+  }
+
+  Future<List<TripSession>> getTrips() async {
+    final data = await _client.getList(path: '/trips', useCache: false);
+    return data
+        .map((entry) => TripSession.fromJson(entry as Map<String, dynamic>))
+        .toList();
   }
 
   Future<List<dynamic>> getJeepneys() async {
@@ -68,7 +76,8 @@ class AdminService {
           'licenseNumber': trimmedLicense,
         if (trimmedEmployee != null && trimmedEmployee.isNotEmpty)
           'employeeNumber': trimmedEmployee,
-        if (trimmedPhone != null && trimmedPhone.isNotEmpty) 'phone': trimmedPhone,
+        if (trimmedPhone != null && trimmedPhone.isNotEmpty)
+          'phone': trimmedPhone,
         if (trimmedRouteId != null && trimmedRouteId.isNotEmpty)
           'assignedRouteId': trimmedRouteId,
         'jeepney': {
@@ -141,5 +150,26 @@ class AdminService {
       },
     );
     return response['data'] as Map<String, dynamic>;
+  }
+
+  Future<TripSession> createTrip({
+    required String driverId,
+    required String jeepneyId,
+    required String routeId,
+    String status = 'scheduled',
+    String? notes,
+  }) async {
+    final response = await _client.request(
+      method: 'POST',
+      path: '/trips',
+      body: {
+        'driverId': driverId,
+        'jeepneyId': jeepneyId,
+        'routeId': routeId,
+        'status': status,
+        if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
+      },
+    );
+    return TripSession.fromJson(response['data'] as Map<String, dynamic>);
   }
 }

@@ -25,6 +25,21 @@ const {
 
 const router = express.Router();
 
+const buildRoutePathSnapshot = (route) => {
+  const coordinates = Array.isArray(route?.path?.coordinates)
+    ? route.path.coordinates
+    : [];
+
+  if (coordinates.length < 2) {
+    return undefined;
+  }
+
+  return {
+    type: 'LineString',
+    coordinates: coordinates.map((entry) => [Number(entry[0]), Number(entry[1])]),
+  };
+};
+
 const normalizeOptionalObjectId = (value, fieldName, allowMissing = false) => {
   if (value === undefined || value === null || String(value).trim() === '') {
     if (allowMissing) return null;
@@ -204,6 +219,7 @@ router.patch(
     const body = req.body || {};
     const updates = {};
     const updatesToUnset = {};
+    let assignedRouteSnapshot;
 
     if (hasOwn(body, 'licenseNumber')) updates.licenseNumber = String(body.licenseNumber || '').trim();
     if (hasOwn(body, 'employeeNumber')) updates.employeeNumber = String(body.employeeNumber || '').trim();
@@ -229,6 +245,7 @@ router.patch(
           throw new ApiError(409, 'Route is not active');
         }
         updates.assignedRouteId = routeId;
+        assignedRouteSnapshot = buildRoutePathSnapshot(route);
       }
     }
 
@@ -239,6 +256,21 @@ router.patch(
 
     let profile = await Driver.findByIdAndUpdate(req.params.id, updateAction, { new: true });
     if (!profile) throw new ApiError(404, 'Driver not found');
+
+    if (updates.assignedRouteId) {
+      await TripSession.updateMany(
+        {
+          driverId: profile._id,
+          status: { $in: ['scheduled', 'active'] },
+        },
+        {
+          $set: {
+            routeId: updates.assignedRouteId,
+            routePathSnapshot: assignedRouteSnapshot,
+          },
+        }
+      );
+    }
 
     if (hasOwn(body, 'jeepney')) {
       const jeepneyUpdates = buildJeepneyUpdatePayload(body.jeepney);

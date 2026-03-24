@@ -84,9 +84,13 @@ class DriverService {
   }
 
   Future<List<PickupRequestModel>> getRequestsForTrip(
-      String tripSessionId) async {
-    final data =
-        await _client.getList(path: '/pickup-requests/trip/$tripSessionId');
+    String tripSessionId, {
+    bool useCache = true,
+  }) async {
+    final data = await _client.getList(
+      path: '/pickup-requests/trip/$tripSessionId',
+      useCache: useCache,
+    );
     return data
         .map((e) => PickupRequestModel.fromJson(e as Map<String, dynamic>))
         .toList();
