@@ -21,6 +21,7 @@ import '../../services/notification_service.dart';
 import '../../services/ride_session_service.dart';
 import '../../services/route_preview_cache.dart';
 import '../../services/route_service.dart';
+import '../../services/realtime_socket_service.dart';
 import '../../services/session_controller.dart';
 import '../../services/stop_alert_service.dart';
 import '../../services/trip_service.dart';
@@ -58,12 +59,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   LatLng? _vehicleLocation;
   Timer? _vehicleLocationTimer;
   Timer? _liveRefreshTimer;
+  StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
   bool _locationPluginUnavailable = false;
   bool _locationLoopActive = true;
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
   Set<String> _knownNotificationIds = <String>{};
   Set<String> _knownActiveStopAlertIds = <String>{};
+  final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
 
   TripSession? get _focusedTrip {
     for (final trip in _trips) {
@@ -75,7 +78,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _load();
+      _connectRealtimeSocket();
+    });
     _startVehicleLocationHeartbeat();
     _startLiveRefreshLoop();
   }
@@ -84,7 +90,39 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   void dispose() {
     _vehicleLocationTimer?.cancel();
     _liveRefreshTimer?.cancel();
+    _realtimeNotificationSubscription?.cancel();
+    _realtimeSocketService.dispose();
     super.dispose();
+  }
+
+  void _connectRealtimeSocket() {
+    final session = context.read<SessionController>();
+    final token = session.token?.trim() ?? '';
+    if (token.isEmpty) {
+      return;
+    }
+
+    _realtimeNotificationSubscription?.cancel();
+    _realtimeNotificationSubscription =
+        _realtimeSocketService.notificationCreatedStream.listen((_) {
+      _refreshFromSocketEvent();
+    });
+    _realtimeSocketService.connect(
+      apiBaseUrl: session.apiClient.baseUrl,
+      token: token,
+    );
+  }
+
+  Future<void> _refreshFromSocketEvent() async {
+    if (!mounted || _silentRefreshActive) {
+      return;
+    }
+    _silentRefreshActive = true;
+    try {
+      await _load(silent: true);
+    } finally {
+      _silentRefreshActive = false;
+    }
   }
 
   Future<void> _load({bool silent = false}) async {
@@ -371,6 +409,21 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     try {
       await alertService.acknowledgeStopAlert(alertId);
       setState(() => _statusMessage = 'Destination alert acknowledged.');
+      await _load();
+    } catch (error) {
+      setState(() => _statusMessage = error.toString());
+    }
+  }
+
+  Future<void> _completeUnloadAlert(StopAlertModel alert) async {
+    final session = context.read<SessionController>();
+    final rideService = RideSessionService(session.apiClient);
+    try {
+      await rideService.completeRideSession(alert.rideSessionId);
+      setState(() {
+        _statusMessage =
+            'Passenger unloaded near ${alert.stopRef}. Ride session closed.';
+      });
       await _load();
     } catch (error) {
       setState(() => _statusMessage = error.toString());

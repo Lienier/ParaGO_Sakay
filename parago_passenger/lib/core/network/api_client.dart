@@ -32,6 +32,8 @@ class ApiClient {
   SharedPreferences? _cachePrefs;
   static const String _cachePrefix = 'parago_api_cache_v1:';
 
+  String get baseUrl => _dio.options.baseUrl;
+
   static String _normalizeBaseUrl(String rawBaseUrl) {
     final trimmed = rawBaseUrl.trim();
     if (trimmed.isEmpty) {
@@ -68,8 +70,8 @@ class ApiClient {
     final parsedBasePath = Uri.tryParse(_dio.options.baseUrl)?.path ?? '';
     final baseHasNestedPath =
         parsedBasePath.isNotEmpty && parsedBasePath != '/';
-    final baseHasApiV1 =
-        parsedBasePath.endsWith('/api/v1') || parsedBasePath.endsWith('/api/v1/');
+    final baseHasApiV1 = parsedBasePath.endsWith('/api/v1') ||
+        parsedBasePath.endsWith('/api/v1/');
 
     var normalized = trimmed.startsWith('/') ? trimmed.substring(1) : trimmed;
     if (baseHasApiV1 && normalized == 'api/v1') {
@@ -184,7 +186,8 @@ class ApiClient {
   Future<void> _clearAllCache() async {
     _memoryCache.clear();
     final storage = await _cacheStorage;
-    final keysToRemove = storage.getKeys().where((key) => key.startsWith(_cachePrefix));
+    final keysToRemove =
+        storage.getKeys().where((key) => key.startsWith(_cachePrefix));
     for (final key in keysToRemove) {
       await storage.remove(key);
     }

@@ -308,6 +308,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         return _buildAlertsTab(
           focusedTrip: focusedTrip,
           alerts: focusedAlerts,
+          rides: focusedRides,
         );
       case 3:
         return _buildAnalyticsTab(
@@ -511,6 +512,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
   Widget _buildAlertsTab({
     required TripSession? focusedTrip,
     required List<StopAlertModel> alerts,
+    required List<RideSessionModel> rides,
   }) {
     final recentNotifications = _notifications.take(5).toList();
 
@@ -543,26 +545,42 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           )
         else
           for (final alert in alerts) ...[
-            _DriverActionCard(
-              title: alert.stopRef,
-              subtitle:
-                  '${ParagoFormat.statusLabel(alert.status)} - ${ParagoFormat.relative(alert.createdAt)}',
-              detail: alert.note ??
-                  'Passenger is nearing the selected unloading point.',
-              status: alert.status,
-              primaryLabel:
-                  _DriverHomeScreenState._activeAlertStatuses.contains(
-                alert.status,
-              )
-                      ? 'Acknowledge'
-                      : null,
-              onPrimary: _DriverHomeScreenState._activeAlertStatuses.contains(
-                alert.status,
-              )
-                  ? () => _acknowledgeAlert(alert.id)
-                  : null,
-              icon: Icons.flag_circle_outlined,
-            ),
+            () {
+              RideSessionModel? matchingRide;
+              for (final ride in rides) {
+                if (ride.id == alert.rideSessionId) {
+                  matchingRide = ride;
+                  break;
+                }
+              }
+              final canCompleteUnload =
+                  matchingRide != null && matchingRide.status == 'onboard';
+
+              return _DriverActionCard(
+                title: alert.stopRef,
+                subtitle:
+                    '${ParagoFormat.statusLabel(alert.status)} - ${ParagoFormat.relative(alert.createdAt)}',
+                detail: alert.note ??
+                    'Passenger is nearing the selected unloading point.',
+                status: alert.status,
+                primaryLabel:
+                    _DriverHomeScreenState._activeAlertStatuses.contains(
+                  alert.status,
+                )
+                        ? 'Acknowledge'
+                        : null,
+                onPrimary: _DriverHomeScreenState._activeAlertStatuses.contains(
+                  alert.status,
+                )
+                    ? () => _acknowledgeAlert(alert.id)
+                    : null,
+                secondaryLabel: canCompleteUnload ? 'Mark unloaded' : null,
+                onSecondary: canCompleteUnload
+                    ? () => _completeUnloadAlert(alert)
+                    : null,
+                icon: Icons.flag_circle_outlined,
+              );
+            }(),
             const SizedBox(height: 12),
           ],
         const SizedBox(height: 18),

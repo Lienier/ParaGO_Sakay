@@ -11,6 +11,7 @@ import '../../models/transport/route_summary.dart';
 import '../../models/trip/trip_session.dart';
 import '../../services/notification_service.dart';
 import '../../services/passenger_service.dart';
+import '../../services/realtime_socket_service.dart';
 import '../../services/route_service.dart';
 import '../../services/session_controller.dart';
 import '../../services/stop_alert_service.dart';
@@ -36,9 +37,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   bool _loading = false;
   String? _statusMessage;
   Timer? _liveRefreshTimer;
+  StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
   Set<String> _knownNotificationIds = <String>{};
+  final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
 
   TripSession? get _selectedTrip {
     for (final trip in _trips) {
@@ -75,6 +78,43 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
     for (final ride in _rides) {
       if (ride.status == 'waiting') {
+        return ride;
+      }
+    }
+    return null;
+  }
+
+  RideSessionModel? get _displayRide {
+    final selectedTripId = _selectedTripId;
+    if (selectedTripId != null && selectedTripId.isNotEmpty) {
+      for (final ride in _rides) {
+        if (ride.tripSessionId == selectedTripId && ride.status == 'onboard') {
+          return ride;
+        }
+      }
+      for (final ride in _rides) {
+        if (ride.tripSessionId == selectedTripId && ride.status == 'waiting') {
+          return ride;
+        }
+      }
+      for (final ride in _rides) {
+        if (ride.tripSessionId == selectedTripId && ride.status == 'completed') {
+          return ride;
+        }
+      }
+    }
+    for (final ride in _rides) {
+      if (ride.status == 'onboard') {
+        return ride;
+      }
+    }
+    for (final ride in _rides) {
+      if (ride.status == 'waiting') {
+        return ride;
+      }
+    }
+    for (final ride in _rides) {
+      if (ride.status == 'completed') {
         return ride;
       }
     }
@@ -204,7 +244,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   Future<void> _sendPickup() async {
     final selectedTrip = _selectedTrip;
-    if (_selectedTripId == null || _selectedRouteId == null || selectedTrip == null) {
+    if (_selectedTripId == null ||
+        _selectedRouteId == null ||
+        selectedTrip == null) {
       setState(() => _statusMessage =
           'Choose an active trip before sending a booking request.');
       return;
@@ -513,17 +555,67 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     return request.status == 'pending' || request.status == 'acknowledged';
   }
 
+  String _rideStatusMessage(RideSessionModel ride) {
+    switch (ride.status) {
+      case 'waiting':
+        return 'Boarding is being validated for this ride.';
+      case 'onboard':
+        return ride.canSendStopAlert == true
+            ? 'You are onboard and can send a digital para alert.'
+            : 'You are onboard for this ride.';
+      case 'completed':
+        return 'Drop-off completed. This ride session has been closed.';
+      default:
+        return ParagoFormat.statusLabel(ride.status);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _load();
+      _connectRealtimeSocket();
+    });
     _startLiveRefreshLoop();
   }
 
   @override
   void dispose() {
     _liveRefreshTimer?.cancel();
+    _realtimeNotificationSubscription?.cancel();
+    _realtimeSocketService.dispose();
     super.dispose();
+  }
+
+  void _connectRealtimeSocket() {
+    final session = context.read<SessionController>();
+    final token = session.token?.trim() ?? '';
+    if (token.isEmpty) {
+      return;
+    }
+
+    _realtimeNotificationSubscription?.cancel();
+    _realtimeNotificationSubscription =
+        _realtimeSocketService.notificationCreatedStream.listen((_) {
+      _refreshFromSocketEvent();
+    });
+    _realtimeSocketService.connect(
+      apiBaseUrl: session.apiClient.baseUrl,
+      token: token,
+    );
+  }
+
+  Future<void> _refreshFromSocketEvent() async {
+    if (!mounted || _silentRefreshActive) {
+      return;
+    }
+    _silentRefreshActive = true;
+    try {
+      await _load(silent: true);
+    } finally {
+      _silentRefreshActive = false;
+    }
   }
 
   @override
@@ -539,6 +631,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _rides.where((ride) => ride.status == 'onboard').length;
     final selectedTrip = _selectedTrip;
     final activeRide = _activeRide;
+    final displayRide = _displayRide;
     final selectedBooking = _selectedTripBooking;
 
     return Scaffold(
@@ -705,7 +798,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                             ),
                             _DetailRow(
                               label: 'Started',
-                              value: ParagoFormat.dateTime(selectedTrip.startedAt),
+                              value:
+                                  ParagoFormat.dateTime(selectedTrip.startedAt),
                             ),
                           ],
                         ),
@@ -716,10 +810,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                       Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFE29B2D).withValues(alpha: 0.10),
+                          color:
+                              const Color(0xFFE29B2D).withValues(alpha: 0.10),
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(
-                            color: const Color(0xFFE29B2D).withValues(alpha: 0.22),
+                            color:
+                                const Color(0xFFE29B2D).withValues(alpha: 0.22),
                           ),
                         ),
                         child: Column(
@@ -737,7 +833,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                             ),
                             const SizedBox(height: 4),
                             Text(_bookingStateText(selectedBooking)),
-                            if ((selectedBooking.sourceNote ?? '').isNotEmpty) ...[
+                            if ((selectedBooking.sourceNote ?? '')
+                                .isNotEmpty) ...[
                               const SizedBox(height: 6),
                               Text(selectedBooking.sourceNote!),
                             ],
@@ -748,7 +845,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                                 child: TextButton.icon(
                                   onPressed: _loading
                                       ? null
-                                      : () => _cancelRequest(selectedBooking.id),
+                                      : () =>
+                                          _cancelRequest(selectedBooking.id),
                                   icon: const Icon(Icons.close),
                                   label: const Text('Cancel booking'),
                                 ),
@@ -803,7 +901,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                     Text('Ride session',
                         style: Theme.of(context).textTheme.titleLarge),
                     const SizedBox(height: 10),
-                    if (activeRide == null)
+                    if (displayRide == null)
                       const Text(
                         'No verified ride session yet. Send a pickup request, then confirm boarding after entering the jeepney.',
                       )
@@ -812,24 +910,31 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                         spacing: 10,
                         runSpacing: 10,
                         children: [
-                          StatusBadge(status: activeRide.status),
-                          if (activeRide.canSendStopAlert == true)
+                          StatusBadge(status: displayRide.status),
+                          if (displayRide.canSendStopAlert == true)
                             const StatusBadge(status: 'para enabled'),
                         ],
                       ),
                       const SizedBox(height: 14),
+                      Text(_rideStatusMessage(displayRide)),
+                      const SizedBox(height: 14),
                       _DetailRow(
                         label: 'Ride session',
-                        value: ParagoFormat.shortId(activeRide.id),
+                        value: ParagoFormat.shortId(displayRide.id),
                       ),
                       _DetailRow(
                         label: 'Boarded',
-                        value: ParagoFormat.dateTime(activeRide.boardedAt),
+                        value: ParagoFormat.dateTime(displayRide.boardedAt),
                       ),
                       _DetailRow(
                         label: 'Pickup request',
-                        value: ParagoFormat.shortId(activeRide.pickupRequestId),
+                        value: ParagoFormat.shortId(displayRide.pickupRequestId),
                       ),
+                      if (displayRide.endedAt != null)
+                        _DetailRow(
+                          label: 'Dropped off',
+                          value: ParagoFormat.dateTime(displayRide.endedAt),
+                        ),
                     ],
                   ],
                 ),

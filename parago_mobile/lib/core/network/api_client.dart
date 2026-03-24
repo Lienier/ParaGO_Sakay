@@ -32,6 +32,8 @@ class ApiClient {
   SharedPreferences? _cachePrefs;
   static const String _cachePrefix = 'parago_api_cache_v1:';
 
+  String get baseUrl => _dio.options.baseUrl;
+
   static String _normalizeBaseUrl(String rawBaseUrl) {
     final trimmed = rawBaseUrl.trim();
     if (trimmed.isEmpty) {

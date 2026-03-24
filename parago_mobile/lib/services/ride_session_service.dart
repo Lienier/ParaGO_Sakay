@@ -19,4 +19,13 @@ class RideSessionService {
             (entry) => RideSessionModel.fromJson(entry as Map<String, dynamic>))
         .toList();
   }
+
+  Future<RideSessionModel> completeRideSession(String rideSessionId) async {
+    final response = await _client.request(
+      method: 'PATCH',
+      path: '/ride-sessions/$rideSessionId/complete',
+      body: const <String, dynamic>{},
+    );
+    return RideSessionModel.fromJson(response['data'] as Map<String, dynamic>);
+  }
 }

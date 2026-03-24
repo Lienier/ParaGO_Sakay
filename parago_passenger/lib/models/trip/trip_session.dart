@@ -43,12 +43,10 @@ class TripSession {
     final route = json['routeId'];
     final jeepney = json['jeepneyId'];
     final driver = json['driverId'];
-    final jeepneyLocation = jeepney is Map
-        ? jeepney['lastKnownLocation']
-        : null;
-    final coordinates = jeepneyLocation is Map
-        ? jeepneyLocation['coordinates']
-        : null;
+    final jeepneyLocation =
+        jeepney is Map ? jeepney['lastKnownLocation'] : null;
+    final coordinates =
+        jeepneyLocation is Map ? jeepneyLocation['coordinates'] : null;
     final jeepneyCoordinates = _readCoordinatePair(coordinates);
     return TripSession(
       id: json['_id']?.toString() ?? '',

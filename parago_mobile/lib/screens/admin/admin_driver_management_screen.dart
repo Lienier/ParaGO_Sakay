@@ -611,15 +611,19 @@ class _AdminDriverManagementScreenState
                           openTrip == null
                               ? 'Trip status: No scheduled trip'
                               : 'Trip status: ${_statusLabel(openTrip.status)}',
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
                         ),
                         if (scheduleBlockReason != null) ...[
                           const SizedBox(height: 6),
                           Text(
                             scheduleBlockReason,
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(
                                   color: Theme.of(context).colorScheme.error,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -644,7 +648,8 @@ class _AdminDriverManagementScreenState
                                         strokeWidth: 2,
                                       ),
                                     )
-                                  : const Icon(Icons.playlist_add_check_circle_outlined),
+                                  : const Icon(
+                                      Icons.playlist_add_check_circle_outlined),
                               label: Text(
                                 schedulingThisDriver
                                     ? 'Scheduling...'

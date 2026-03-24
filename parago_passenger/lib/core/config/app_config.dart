@@ -12,7 +12,8 @@ class AppConfig {
 
   static final Map<String, String> _env = <String, String>{};
 
-  static String get apiBaseUrl => _read('PARAGO_API_BASE_URL', _apiBaseUrlFallback);
+  static String get apiBaseUrl =>
+      _read('PARAGO_API_BASE_URL', _apiBaseUrlFallback);
   static String get openRouteServiceApiKey => _read('ORS_API_KEY', '');
   static bool get hasGoogleClientId => googleFallbackClientId.trim().isNotEmpty;
 
