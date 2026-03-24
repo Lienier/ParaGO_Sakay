@@ -2,6 +2,7 @@ const express = require('express');
 const RideSession = require('../models/rideSession');
 const Passenger = require('../models/passenger');
 const Driver = require('../models/driver');
+const StopAlert = require('../models/stopAlert');
 const TripSession = require('../models/tripSession');
 const asyncHandler = require('../utils/asyncHandler');
 const authenticate = require('../middlewares/authenticate');
@@ -67,10 +68,25 @@ router.patch(
     if (session.status === 'completed') {
       throw new ApiError(409, 'Ride session already completed');
     }
+    if (session.status !== 'onboard') {
+      throw new ApiError(409, 'Only onboard ride sessions can be completed');
+    }
     session.status = 'completed';
     session.endedAt = new Date();
     session.canSendStopAlert = false;
     await session.save();
+    await StopAlert.updateMany(
+      {
+        rideSessionId: session._id,
+        status: { $in: ['sent', 'seen', 'acknowledged'] },
+      },
+      {
+        $set: {
+          status: 'dismissed',
+          acknowledgedAt: session.endedAt,
+        },
+      }
+    );
     const passenger = await Passenger.findById(session.passengerId).select('userId');
     await publishNotification({
       userId: passenger?.userId,

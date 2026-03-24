@@ -99,8 +99,13 @@ router.patch(
       }
     }
 
+    const driver = req.user.role === DRIVER
+      ? await Driver.findOne({ userId: req.user._id })
+      : null;
+
     alert.status = 'acknowledged';
     alert.acknowledgedAt = new Date();
+    alert.acknowledgedBy = driver?._id;
     await alert.save();
 
     const passenger = await Passenger.findById(alert.passengerId).select('userId');
