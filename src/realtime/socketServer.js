@@ -70,6 +70,8 @@ const attachSocketServer = (httpServer, { corsOrigin = '*' } = {}) => {
     },
     transports: ['websocket', 'polling'],
     path: '/socket.io',
+    pingInterval: 25000,
+    pingTimeout: 60000,
   });
 
   io.use(async (socket, next) => {
