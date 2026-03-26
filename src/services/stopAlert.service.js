@@ -5,7 +5,7 @@ const RideSession = require('../models/rideSession');
 const TripSession = require('../models/tripSession');
 const {
   stopAlertCooldownMinutes,
-  stopAlertRoadProximityMeters,
+  unloadRoadProximityMeters,
 } = require('../config/env');
 const {
   isRoutePickupNearRoad,
@@ -64,10 +64,13 @@ const createStopAlert = async ({
       latitude: lat,
       longitude: lng,
       route,
-      maxDistanceMeters: stopAlertRoadProximityMeters,
+      maxDistanceMeters: unloadRoadProximityMeters,
     })
   ) {
-    throw new ApiError(400, 'Unload point must be near the selected route');
+    throw new ApiError(
+      400,
+      `Unload point must be within ${unloadRoadProximityMeters} meters of the route`
+    );
   }
 
   return StopAlert.create({

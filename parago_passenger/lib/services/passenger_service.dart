@@ -20,25 +20,35 @@ class PassengerService {
   }
 
   Future<PickupRequestModel> createPickupRequest({
-    required String tripSessionId,
     required String routeId,
+    required double currentLat,
+    required double currentLng,
+    required double pickupLat,
+    required double pickupLng,
+    required String destinationStopRef,
+    required double destinationLat,
+    required double destinationLng,
     String? stopRef,
-    double? lat,
-    double? lng,
     String? sourceNote,
   }) async {
     final body = <String, dynamic>{
-      'tripSessionId': tripSessionId,
       'routeId': routeId,
       'stopRef': stopRef,
+      'destinationStopRef': destinationStopRef,
       'sourceNote': sourceNote,
-    };
-    if (lat != null && lng != null) {
-      body['pickupLocation'] = {
+      'pickupLocation': {
         'type': 'Point',
-        'coordinates': [lng, lat],
-      };
-    }
+        'coordinates': [pickupLng, pickupLat],
+      },
+      'currentLocation': {
+        'type': 'Point',
+        'coordinates': [currentLng, currentLat],
+      },
+      'destinationLocation': {
+        'type': 'Point',
+        'coordinates': [destinationLng, destinationLat],
+      },
+    };
     final response = await _client.request(
       method: 'POST',
       path: '/pickup-requests',

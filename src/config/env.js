@@ -33,11 +33,17 @@ module.exports = {
   stopAlertRoadProximityMeters: Number(
     process.env.STOP_ALERT_ROAD_PROXIMITY_METERS || 300
   ),
+  unloadRoadProximityMeters: Number(
+    process.env.UNLOAD_ROAD_PROXIMITY_METERS || 5
+  ),
   pickupRequestTtlMinutes: Number(process.env.PICKUP_REQUEST_TTL_MINUTES || 12),
   maxRequestsPerPassengerPerTrip: Number(
     process.env.MAX_REQUESTS_PER_PASSENGER_PER_TRIP || 2
   ),
   pickupRoadProximityMeters: Number(process.env.PICKUP_ROAD_PROXIMITY_METERS || 300),
+  pickupCurrentLocationMaxDistanceMeters: Number(
+    process.env.PICKUP_CURRENT_LOCATION_MAX_DISTANCE_METERS || 50
+  ),
 
   googleClientIds: splitCsv(process.env.GOOGLE_CLIENT_IDS),
   facebookAppToken: process.env.FACEBOOK_APP_TOKEN || '',

@@ -5,6 +5,9 @@ class RideSessionModel {
     required this.tripSessionId,
     required this.pickupRequestId,
     required this.status,
+    this.destinationStopRef,
+    this.destinationLatitude,
+    this.destinationLongitude,
     this.canSendStopAlert,
     this.boardedAt,
     this.endedAt,
@@ -15,6 +18,9 @@ class RideSessionModel {
   final String tripSessionId;
   final String pickupRequestId;
   final String status;
+  final String? destinationStopRef;
+  final double? destinationLatitude;
+  final double? destinationLongitude;
   final bool? canSendStopAlert;
   final String? boardedAt;
   final String? endedAt;
@@ -25,10 +31,33 @@ class RideSessionModel {
       passengerId: json['passengerId']?.toString() ?? '',
       tripSessionId: json['tripSessionId']?.toString() ?? '',
       pickupRequestId: json['pickupRequestId']?.toString() ?? '',
+      destinationStopRef: json['destinationStopRef']?.toString(),
+      destinationLatitude: _readLatitude(json['destinationLocation']),
+      destinationLongitude: _readLongitude(json['destinationLocation']),
       status: json['status']?.toString() ?? '',
       canSendStopAlert: json['canSendStopAlert'] as bool?,
       boardedAt: json['boardedAt']?.toString(),
       endedAt: json['endedAt']?.toString(),
     );
   }
+}
+
+double? _readLatitude(dynamic value) {
+  final coordinates = value is Map<String, dynamic>
+      ? value['coordinates']
+      : (value is Map ? value['coordinates'] : null);
+  if (coordinates is! List || coordinates.length < 2) {
+    return null;
+  }
+  return double.tryParse(coordinates[1].toString());
+}
+
+double? _readLongitude(dynamic value) {
+  final coordinates = value is Map<String, dynamic>
+      ? value['coordinates']
+      : (value is Map ? value['coordinates'] : null);
+  if (coordinates is! List || coordinates.length < 2) {
+    return null;
+  }
+  return double.tryParse(coordinates[0].toString());
 }

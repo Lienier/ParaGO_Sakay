@@ -6,11 +6,16 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 class RealtimeSocketService {
   final StreamController<Map<String, dynamic>> _notificationController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _operationsController =
+      StreamController<Map<String, dynamic>>.broadcast();
 
   io.Socket? _socket;
 
   Stream<Map<String, dynamic>> get notificationCreatedStream =>
       _notificationController.stream;
+  Stream<Map<String, dynamic>> get operationsChangedStream =>
+      _operationsController.stream;
+  bool get isConnected => _socket?.connected == true;
 
   void connect({
     required String apiBaseUrl,
@@ -30,7 +35,7 @@ class RealtimeSocketService {
       socketBaseUrl,
       io.OptionBuilder()
           .setPath('/socket.io')
-          .setTransports(['polling', 'websocket'])
+          .setTransports(['websocket', 'polling'])
           .setUpgrade(true)
           .enableForceNew()
           .disableAutoConnect()
@@ -80,6 +85,12 @@ class RealtimeSocketService {
         _notificationController.add(normalized);
       }
     });
+    socket.on('ops.changed', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) {
+        _operationsController.add(normalized);
+      }
+    });
 
     _socket = socket;
     socket.connect();
@@ -95,6 +106,7 @@ class RealtimeSocketService {
   void dispose() {
     disconnect();
     _notificationController.close();
+    _operationsController.close();
   }
 
   Map<String, dynamic> _normalizePayload(dynamic payload) {

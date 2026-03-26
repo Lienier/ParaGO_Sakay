@@ -1,3 +1,5 @@
+import 'package:latlong2/latlong.dart';
+
 class TripSession {
   const TripSession({
     required this.id,
@@ -7,8 +9,10 @@ class TripSession {
     required this.status,
     this.routeName,
     this.routeCode,
+    this.routePathSnapshotPoints = const <LatLng>[],
     this.jeepneyPlateNumber,
     this.jeepneyName,
+    this.jeepneyCapacity,
     this.driverName,
     this.jeepneyLatitude,
     this.jeepneyLongitude,
@@ -27,8 +31,10 @@ class TripSession {
   final String status;
   final String? routeName;
   final String? routeCode;
+  final List<LatLng> routePathSnapshotPoints;
   final String? jeepneyPlateNumber;
   final String? jeepneyName;
+  final int? jeepneyCapacity;
   final String? driverName;
   final double? jeepneyLatitude;
   final double? jeepneyLongitude;
@@ -56,8 +62,12 @@ class TripSession {
       status: json['status']?.toString() ?? '',
       routeName: _readMapString(route, const ['name']),
       routeCode: _readMapString(route, const ['code']),
+      routePathSnapshotPoints: _readLinePoints(json['routePathSnapshot']),
       jeepneyPlateNumber: _readMapString(jeepney, const ['plateNumber']),
       jeepneyName: _readMapString(jeepney, const ['jeepneyName', 'vehicleTag']),
+      jeepneyCapacity: int.tryParse(
+        _readMapString(jeepney, const ['capacity']) ?? '',
+      ),
       driverName: _readMapString(driver, const ['fullName', 'name']),
       jeepneyLatitude: jeepneyCoordinates?.$2,
       jeepneyLongitude: jeepneyCoordinates?.$1,
@@ -72,7 +82,7 @@ class TripSession {
 
   String get routeLabel {
     if ((routeCode ?? '').isNotEmpty && (routeName ?? '').isNotEmpty) {
-      return '$routeCode · $routeName';
+      return '$routeCode - $routeName';
     }
     return (routeName?.isNotEmpty ?? false) ? routeName! : routeId;
   }
@@ -80,7 +90,7 @@ class TripSession {
   String get jeepneyLabel {
     if ((jeepneyPlateNumber ?? '').isNotEmpty &&
         (jeepneyName ?? '').isNotEmpty) {
-      return '$jeepneyPlateNumber · $jeepneyName';
+      return '$jeepneyPlateNumber - $jeepneyName';
     }
     if ((jeepneyPlateNumber ?? '').isNotEmpty) return jeepneyPlateNumber!;
     if ((jeepneyName ?? '').isNotEmpty) return jeepneyName!;
@@ -102,6 +112,29 @@ String? _readMapString(dynamic value, List<String> keys) {
     }
   }
   return null;
+}
+
+List<LatLng> _readLinePoints(dynamic value) {
+  final coordinates = value is Map<String, dynamic>
+      ? value['coordinates']
+      : (value is Map ? value['coordinates'] : null);
+  if (coordinates is! List) {
+    return const <LatLng>[];
+  }
+  return coordinates
+      .map((entry) {
+        if (entry is! List || entry.length < 2) {
+          return null;
+        }
+        final lng = _toDouble(entry[0]);
+        final lat = _toDouble(entry[1]);
+        if (lat == null || lng == null) {
+          return null;
+        }
+        return LatLng(lat, lng);
+      })
+      .whereType<LatLng>()
+      .toList(growable: false);
 }
 
 (double, double)? _readCoordinatePair(dynamic coordinates) {

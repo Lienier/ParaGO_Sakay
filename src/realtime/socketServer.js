@@ -6,6 +6,7 @@ const { verifyAccessToken } = require('../utils/jwt');
 let ioInstance = null;
 
 const toUserRoom = (userId) => `user:${String(userId)}`;
+const toRoleRoom = (role) => `role:${String(role || '').trim().toLowerCase()}`;
 
 const normalizeBaseOrigin = (origin) => {
   const raw = String(origin || '').trim();
@@ -101,8 +102,12 @@ const attachSocketServer = (httpServer, { corsOrigin = '*' } = {}) => {
 
   io.on('connection', (socket) => {
     const userId = socket.data.user?.id;
+    const role = socket.data.user?.role;
     if (userId) {
       socket.join(toUserRoom(userId));
+      if (role) {
+        socket.join(toRoleRoom(role));
+      }
       socket.emit('socket.ready', {
         userId,
         connectedAt: new Date().toISOString(),
@@ -119,15 +124,27 @@ const emitToUser = (userId, eventName, payload) => {
   ioInstance.to(toUserRoom(userId)).emit(eventName, payload);
 };
 
+const emitToRole = (role, eventName, payload) => {
+  const normalizedRole = String(role || '').trim().toLowerCase();
+  if (!ioInstance || !normalizedRole || !eventName) return;
+  ioInstance.to(toRoleRoom(normalizedRole)).emit(eventName, payload);
+};
+
 const emitNotificationCreated = (notification) => {
   const serialized = serializeNotification(notification);
   if (!serialized || !serialized.userId) return;
   emitToUser(serialized.userId, 'notification.created', serialized);
 };
 
+const emitOperationsChanged = (payload = {}) => {
+  emitToRole('admin', 'ops.changed', payload);
+};
+
 module.exports = {
   attachSocketServer,
   emitNotificationCreated,
+  emitOperationsChanged,
+  emitToRole,
   emitToUser,
   getSocketServer: () => ioInstance,
 };

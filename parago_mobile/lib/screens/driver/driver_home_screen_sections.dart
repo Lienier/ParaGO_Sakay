@@ -401,6 +401,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
             ? const LatLng(14.6091, 121.0223)
             : routePath[math.min(routePath.length - 1, 2)]);
 
+    _syncDriverMapCamera(mapCenter);
+
     _routeDebugLines(
       focusedTrip: focusedTrip,
       assignedRoute: assignedRoute,
@@ -408,6 +410,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     );
 
     return _DriveMapPanel(
+      mapController: _driverMapController,
       cameraTarget: mapCenter,
       trip: focusedTrip,
       driverName: session.user?.fullName ?? 'Driver',

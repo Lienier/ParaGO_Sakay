@@ -5,6 +5,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/utils/action_feedback.dart';
 import '../../models/transport/route_summary.dart';
 import '../../services/open_street_map_routing_service.dart';
 import '../../services/route_preview_cache.dart';
@@ -112,6 +113,13 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
       setState(() {
         _message = 'Pin both the start and end locations on the map first.';
       });
+      if (!autoTriggered && mounted) {
+        await ActionFeedback.showInfoDialog(
+          context,
+          title: 'Pins required',
+          message: 'Pin both the start and end locations on the map first.',
+        );
+      }
       return;
     }
 
@@ -146,11 +154,26 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
             : 'Live route ready. Save it to keep the same geometry online and offline.';
         _mapVersion += 1;
       });
+      if (!autoTriggered && mounted) {
+        await ActionFeedback.showSuccessDialog(
+          context,
+          title: 'Route ready',
+          message:
+              'Live route ready. Save it to keep the same geometry online and offline.',
+        );
+      }
     } catch (error) {
       if (!mounted || requestId != _buildRequestSerial) return;
       setState(() {
         _message = 'Unable to build a road-following route: $error';
       });
+      if (!autoTriggered) {
+        await ActionFeedback.showErrorDialog(
+          context,
+          title: 'Route build failed',
+          message: ActionFeedback.messageOf(error),
+        );
+      }
     } finally {
       if (mounted && requestId == _buildRequestSerial) {
         setState(() => _buildingRoute = false);
@@ -182,35 +205,37 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     });
 
     try {
-      final saved = existing == null
-          ? await routeService.createRoute(payload)
-          : await routeService.updateRoute(existing.id, payload);
+      final saved = await ActionFeedback.run<dynamic>(
+        context: context,
+        loadingMessage: 'Saving route geometry...',
+        successMessage: existing == null
+            ? 'Route $_normalizedCode created with offline-ready geometry.'
+            : 'Route $_normalizedCode updated with offline-ready geometry.',
+        action: () async {
+          final saved = existing == null
+              ? await routeService.createRoute(payload)
+              : await routeService.updateRoute(existing.id, payload);
 
-      await _routePreviewCache.saveSnapshot(
-        routeId: saved.id,
-        routeCode: saved.code,
-        points: _previewPoints,
-        startPoint: _startPoint,
-        endPoint: _endPoint,
-        bounds: _previewBounds,
-        distanceMeters: _previewSnapshot?.distanceMeters,
-        durationSeconds: _previewSnapshot?.durationSeconds,
+          await _routePreviewCache.saveSnapshot(
+            routeId: saved.id,
+            routeCode: saved.code,
+            points: _previewPoints,
+            startPoint: _startPoint,
+            endPoint: _endPoint,
+            bounds: _previewBounds,
+            distanceMeters: _previewSnapshot?.distanceMeters,
+            durationSeconds: _previewSnapshot?.durationSeconds,
+          );
+          return saved;
+        },
+        onError: (error) async {
+          if (!mounted) return;
+          setState(() => _message = ActionFeedback.messageOf(error));
+        },
       );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            existing == null
-                ? 'Route ${saved.code} created with offline-ready geometry.'
-                : 'Route ${saved.code} updated with offline-ready geometry.',
-          ),
-        ),
-      );
-      Navigator.of(context).pop(true);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _message = error.toString());
+      if (saved != null && mounted) {
+        Navigator.of(context).pop(true);
+      }
     } finally {
       if (mounted) {
         setState(() => _savingRoute = false);

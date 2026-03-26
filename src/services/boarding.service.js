@@ -11,6 +11,9 @@ const validateBoardingAttempt = async ({
   pickupRequestId,
   lat,
   lng,
+  destinationStopRef,
+  destinationLat,
+  destinationLng,
 }) => {
   const pickupRequest = await PickupRequest.findOne({
     _id: pickupRequestId,
@@ -75,10 +78,37 @@ const validateBoardingAttempt = async ({
     throw new ApiError(409, 'Passenger already has an active ride session for this trip');
   }
 
+  const savedDestinationCoordinates = Array.isArray(
+    pickupRequest.destinationLocation?.coordinates
+  )
+    ? pickupRequest.destinationLocation.coordinates
+    : [];
+  const resolvedDestinationLat =
+    destinationLat != null ? Number(destinationLat) : Number(savedDestinationCoordinates[1]);
+  const resolvedDestinationLng =
+    destinationLng != null ? Number(destinationLng) : Number(savedDestinationCoordinates[0]);
+  const normalizedDestinationStopRef = String(
+    destinationStopRef || pickupRequest.destinationStopRef || ''
+  ).trim();
+  if (!normalizedDestinationStopRef) {
+    throw new ApiError(409, 'Pickup request is missing a saved unload destination');
+  }
+  if (
+    !Number.isFinite(resolvedDestinationLat) ||
+    !Number.isFinite(resolvedDestinationLng)
+  ) {
+    throw new ApiError(409, 'Pickup request is missing valid unload destination coordinates');
+  }
+
   const rideSession = await RideSession.create({
     passengerId,
     tripSessionId,
     pickupRequestId: pickupRequest._id,
+    destinationStopRef: normalizedDestinationStopRef,
+    destinationLocation: {
+      type: 'Point',
+      coordinates: [resolvedDestinationLng, resolvedDestinationLat],
+    },
     status: 'onboard',
     boardedAt: now,
     canSendStopAlert: true,

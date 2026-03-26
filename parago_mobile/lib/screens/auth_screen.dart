@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/user_role.dart';
+import '../core/utils/action_feedback.dart';
 import '../services/auth_service.dart';
 import '../services/session_controller.dart';
 
@@ -47,17 +48,30 @@ class _AuthScreenState extends State<AuthScreen> {
     });
 
     try {
-      final response = await auth.loginEmail(
-        email: _emailCtrl.text,
-        password: _passwordCtrl.text,
-        role: _selectedRole.label,
+      final response = await ActionFeedback.run<dynamic>(
+        context: context,
+        loadingMessage: 'Signing in to the dashboard...',
+        showSuccess: false,
+        action: () async {
+          final result = await auth.loginEmail(
+            email: _emailCtrl.text,
+            password: _passwordCtrl.text,
+            role: _selectedRole.label,
+          );
+          if (!_isStaffRole(result.user.role)) {
+            throw Exception('Invalid email/password');
+          }
+          return result;
+        },
+        onError: (error) async {
+          if (!mounted) return;
+          setState(() => _error = ActionFeedback.messageOf(error));
+        },
       );
-      if (!_isStaffRole(response.user.role)) {
-        throw Exception('Invalid email/password');
+      if (response == null) {
+        return;
       }
       await session.saveAuth(response);
-    } catch (error) {
-      setState(() => _error = error.toString());
     } finally {
       if (mounted) {
         setState(() => _loading = false);

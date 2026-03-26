@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/utils/action_feedback.dart';
 import '../../core/utils/parago_format.dart';
 import '../../models/transport/route_summary.dart';
 import '../../services/route_service.dart';
@@ -78,17 +79,16 @@ class _AdminRouteManagementScreenState
 
     setState(() => _busyRouteId = route.id);
     try {
-      await routeService.deactivateRoute(route.id);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${route.code} deactivated.')),
+      await ActionFeedback.run<void>(
+        context: context,
+        loadingMessage: 'Deactivating route...',
+        successMessage: '${route.code} deactivated.',
+        action: () => routeService.deactivateRoute(route.id),
+        onSuccess: (_) async {
+          if (!mounted) return;
+          await _load();
+        },
       );
-      await _load();
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.toString())));
     } finally {
       if (mounted) {
         setState(() => _busyRouteId = null);

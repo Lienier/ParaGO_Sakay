@@ -27,12 +27,27 @@ router.post(
     ensureObjectId(body.tripSessionId, 'tripSessionId');
     ensureObjectId(body.pickupRequestId, 'pickupRequestId');
     ensureLatLng(body.lat, body.lng);
+    let destinationLat;
+    let destinationLng;
+    if (body.destinationLocation?.coordinates || body.destinationStopRef) {
+      if (!body.destinationLocation?.coordinates || !body.destinationStopRef) {
+        throw new ApiError(
+          400,
+          'destinationStopRef and destinationLocation must both be provided together'
+        );
+      }
+      [destinationLng, destinationLat] = body.destinationLocation.coordinates;
+      ensureLatLng(destinationLat, destinationLng, 'destinationLocation');
+    }
     const result = await validateBoardingAttempt({
       passengerId: passenger._id,
       tripSessionId: body.tripSessionId,
       pickupRequestId: body.pickupRequestId,
       lat: body.lat,
       lng: body.lng,
+      destinationStopRef: body.destinationStopRef,
+      destinationLat,
+      destinationLng,
     });
     return ok(res, result, 'Boarding validated');
   })

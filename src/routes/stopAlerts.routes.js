@@ -12,6 +12,7 @@ const { PASSENGER, DRIVER, ADMIN } = require('../constants/roles');
 const { createStopAlert } = require('../services/stopAlert.service');
 const { publishNotification } = require('../services/notificationPublisher');
 const { ensureObjectId, ensureLatLng } = require('../utils/validators');
+const { serializeStopAlert } = require('../utils/realtimePayloads');
 
 const router = express.Router();
 
@@ -53,6 +54,7 @@ router.post(
         stopAlertId: alert._id.toString(),
         tripSessionId: alert.tripSessionId.toString(),
         routeId: alert.routeId.toString(),
+        stopAlert: serializeStopAlert(alert),
       },
       category: 'ride',
     });
@@ -103,6 +105,7 @@ router.patch(
       ? await Driver.findOne({ userId: req.user._id })
       : null;
 
+    const previousStatus = alert.status;
     alert.status = 'acknowledged';
     alert.acknowledgedAt = new Date();
     alert.acknowledgedBy = driver?._id;
@@ -117,6 +120,8 @@ router.patch(
       payload: {
         stopAlertId: alert._id.toString(),
         tripSessionId: alert.tripSessionId.toString(),
+        previousStatus,
+        stopAlert: serializeStopAlert(alert),
       },
       category: 'ride',
     });

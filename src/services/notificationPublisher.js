@@ -1,5 +1,8 @@
 const Notification = require('../models/notification');
-const { emitNotificationCreated } = require('../realtime/socketServer');
+const {
+  emitNotificationCreated,
+  emitOperationsChanged,
+} = require('../realtime/socketServer');
 
 const safePayload = (value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -30,6 +33,21 @@ const publishNotification = async ({
   });
 
   emitNotificationCreated(notification);
+  emitOperationsChanged({
+    type: 'notification.created',
+    notificationId: notification._id.toString(),
+    userId: notification.userId.toString(),
+    notificationType: notification.type,
+    title: notification.title,
+    body: notification.body,
+    category: notification.category,
+    payload: notification.payload && typeof notification.payload === 'object'
+      ? notification.payload
+      : {},
+    createdAt: notification.createdAt
+      ? new Date(notification.createdAt).toISOString()
+      : new Date().toISOString(),
+  });
   return notification;
 };
 

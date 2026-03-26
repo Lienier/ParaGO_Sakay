@@ -8,6 +8,7 @@ class NotificationModel {
     required this.isRead,
     this.category,
     this.createdAt,
+    this.payload = const <String, dynamic>{},
   });
 
   final String id;
@@ -18,10 +19,11 @@ class NotificationModel {
   final bool isRead;
   final String? category;
   final String? createdAt;
+  final Map<String, dynamic> payload;
 
   factory NotificationModel.fromJson(Map<String, dynamic> json) {
     return NotificationModel(
-      id: json['_id'].toString(),
+      id: (json['_id'] ?? json['id'] ?? '').toString(),
       userId: json['userId']?.toString() ?? '',
       type: json['type']?.toString() ?? '',
       title: json['title']?.toString() ?? '',
@@ -29,6 +31,17 @@ class NotificationModel {
       isRead: json['isRead'] as bool? ?? false,
       category: json['category']?.toString(),
       createdAt: json['createdAt']?.toString(),
+      payload: _normalizePayload(json['payload']),
     );
   }
+}
+
+Map<String, dynamic> _normalizePayload(dynamic value) {
+  if (value is Map<String, dynamic>) {
+    return value;
+  }
+  if (value is Map) {
+    return value.map((key, item) => MapEntry(key.toString(), item));
+  }
+  return const <String, dynamic>{};
 }

@@ -6,7 +6,12 @@ const Passenger = require('../models/passenger');
 const Driver = require('../models/driver');
 const Route = require('../models/route');
 const { publishNotification } = require('../services/notificationPublisher');
-const { isRoutePickupNearRoad, pickDefaultRouteCoordinate } = require('../utils/routeGeo');
+const {
+  isPointAfterOnRoute,
+  isRoutePickupNearRoad,
+  pickDefaultRouteCoordinate,
+} = require('../utils/routeGeo');
+const { haversineMeters } = require('../utils/geo');
 const asyncHandler = require('../utils/asyncHandler');
 const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
@@ -17,10 +22,109 @@ const {
   pickupRequestTtlMinutes,
   maxRequestsPerPassengerPerTrip,
   pickupRoadProximityMeters,
+  pickupCurrentLocationMaxDistanceMeters,
+  unloadRoadProximityMeters,
 } = require('../config/env');
 const { ensureObjectId, ensureLatLng } = require('../utils/validators');
+const {
+  serializePickupRequest,
+  serializeRideSession,
+} = require('../utils/realtimePayloads');
 
 const router = express.Router();
+
+const isFinitePositiveNumber = (value) =>
+  Number.isFinite(Number(value)) && Number(value) > 0;
+
+const pointCoordinates = (value) =>
+  Array.isArray(value?.coordinates) && value.coordinates.length >= 2
+    ? [Number(value.coordinates[0]), Number(value.coordinates[1])]
+    : null;
+
+const resolveEligibleTripForRoute = async ({
+  routeId,
+  pickupLocation,
+}) => {
+  const trips = await TripSession.find({
+    routeId,
+    status: 'active',
+    acceptRequests: true,
+  })
+    .populate('driverId', 'userId isVerified status')
+    .populate('jeepneyId', 'capacity status lastKnownLocation plateNumber jeepneyName')
+    .sort({ startedAt: -1, createdAt: -1 });
+
+  if (!trips.length) {
+    throw new ApiError(409, 'No active jeepneys are available on this route right now');
+  }
+
+  const pickupCoordinates = pointCoordinates(pickupLocation);
+  const eligibleTrips = [];
+
+  for (const trip of trips) {
+    const driver = trip.driverId;
+    const jeepney = trip.jeepneyId;
+    if (!driver || !driver.userId || !driver.isVerified || driver.status !== 'active') {
+      continue;
+    }
+    if (!jeepney || jeepney.status !== 'active' || !isFinitePositiveNumber(jeepney.capacity)) {
+      continue;
+    }
+
+    const rideCount = await RideSession.countDocuments({
+      tripSessionId: trip._id,
+      status: { $in: ['waiting', 'onboard'] },
+    });
+    const pendingRequestCount = await PickupRequest.countDocuments({
+      tripSessionId: trip._id,
+      status: { $in: ['pending', 'acknowledged'] },
+    });
+    const occupiedSeats = Number.isFinite(Number(trip.occupancyCount))
+      ? Number(trip.occupancyCount)
+      : rideCount;
+    const reservedSeats = Math.max(occupiedSeats, rideCount) + pendingRequestCount;
+    const availableSeats = Number(jeepney.capacity) - reservedSeats;
+    if (availableSeats < 1) {
+      continue;
+    }
+
+    const jeepneyCoordinates = pointCoordinates(jeepney.lastKnownLocation);
+    const distanceMeters =
+      pickupCoordinates && jeepneyCoordinates
+        ? haversineMeters(
+            pickupCoordinates[1],
+            pickupCoordinates[0],
+            jeepneyCoordinates[1],
+            jeepneyCoordinates[0]
+          )
+        : Number.POSITIVE_INFINITY;
+
+    eligibleTrips.push({
+      trip,
+      distanceMeters,
+      availableSeats,
+    });
+  }
+
+  if (!eligibleTrips.length) {
+    throw new ApiError(
+      409,
+      'No nearby jeepney on this route has enough remaining capacity for a new booking'
+    );
+  }
+
+  eligibleTrips.sort((left, right) => {
+    if (left.distanceMeters !== right.distanceMeters) {
+      return left.distanceMeters - right.distanceMeters;
+    }
+    if (left.availableSeats !== right.availableSeats) {
+      return right.availableSeats - left.availableSeats;
+    }
+    return 0;
+  });
+
+  return eligibleTrips[0].trip;
+};
 
 router.post(
   '/',
@@ -31,30 +135,12 @@ router.post(
     const passenger = await Passenger.findOne({ userId: req.user._id });
     if (!passenger) throw new ApiError(404, 'Passenger profile not found');
 
-    if (!payload.tripSessionId || !payload.routeId) {
-      throw new ApiError(400, 'tripSessionId and routeId required');
+    if (!payload.routeId) {
+      throw new ApiError(400, 'routeId is required');
     }
-    ensureObjectId(payload.tripSessionId, 'tripSessionId');
     ensureObjectId(payload.routeId, 'routeId');
     const route = await Route.findById(payload.routeId);
     if (!route) throw new ApiError(404, 'Route not found');
-
-    const trip = await TripSession.findById(payload.tripSessionId);
-    if (!trip || trip.status !== 'active' || !trip.acceptRequests) {
-      throw new ApiError(409, 'Trip not active or not accepting requests');
-    }
-    if (String(trip.routeId) !== String(route._id)) {
-      throw new ApiError(400, 'Route does not match selected trip');
-    }
-    if (trip.driverId) {
-      const driver = await Driver.findById(trip.driverId).select('userId isVerified status');
-      if (driver && !driver.isVerified) {
-        throw new ApiError(409, 'Assigned driver is not verified');
-      }
-      if (driver && driver.status !== 'active') {
-        throw new ApiError(409, 'Assigned driver is not active');
-      }
-    }
 
     let pickupLocation = payload.pickupLocation;
     if (!pickupLocation || !Array.isArray(pickupLocation.coordinates) || pickupLocation.coordinates.length < 2) {
@@ -66,6 +152,28 @@ router.post(
     const [lngPickup, latPickup] = pickupLocation.coordinates;
     ensureLatLng(latPickup, lngPickup, 'pickupLocation');
 
+    if (
+      !payload.currentLocation ||
+      !Array.isArray(payload.currentLocation.coordinates) ||
+      payload.currentLocation.coordinates.length < 2
+    ) {
+      throw new ApiError(400, 'currentLocation is required');
+    }
+    const [lngCurrent, latCurrent] = payload.currentLocation.coordinates;
+    ensureLatLng(latCurrent, lngCurrent, 'currentLocation');
+    const pickupDistanceFromPassenger = haversineMeters(
+      latPickup,
+      lngPickup,
+      Number(latCurrent),
+      Number(lngCurrent)
+    );
+    if (pickupDistanceFromPassenger > pickupCurrentLocationMaxDistanceMeters) {
+      throw new ApiError(
+        400,
+        `Pickup point must stay within ${pickupCurrentLocationMaxDistanceMeters} meters of your current location`
+      );
+    }
+
     if (!isRoutePickupNearRoad({
       latitude: latPickup,
       longitude: lngPickup,
@@ -75,8 +183,69 @@ router.post(
       throw new ApiError(400, 'Pickup point must be near the selected route');
     }
 
+    let destinationLocation = payload.destinationLocation;
+    if (
+      !destinationLocation ||
+      !Array.isArray(destinationLocation.coordinates) ||
+      destinationLocation.coordinates.length < 2
+    ) {
+      throw new ApiError(400, 'destinationLocation is required');
+    }
+    const [lngDestination, latDestination] = destinationLocation.coordinates;
+    ensureLatLng(latDestination, lngDestination, 'destinationLocation');
+
+    if (!isRoutePickupNearRoad({
+      latitude: latDestination,
+      longitude: lngDestination,
+      route,
+      maxDistanceMeters: unloadRoadProximityMeters,
+    })) {
+      throw new ApiError(
+        400,
+        `Unload point must be within ${unloadRoadProximityMeters} meters of the route`
+      );
+    }
+    if (!isPointAfterOnRoute({
+      route,
+      startLatitude: latPickup,
+      startLongitude: lngPickup,
+      endLatitude: latDestination,
+      endLongitude: lngDestination,
+    })) {
+      throw new ApiError(
+        400,
+        'Unload point must come after the pickup point along the route'
+      );
+    }
+
+    const normalizedDestinationStopRef = String(
+      payload.destinationStopRef || ''
+    ).trim();
+    if (!normalizedDestinationStopRef) {
+      throw new ApiError(400, 'destinationStopRef is required');
+    }
+
+    let trip;
+    if (payload.tripSessionId) {
+      ensureObjectId(payload.tripSessionId, 'tripSessionId');
+      trip = await TripSession.findById(payload.tripSessionId)
+        .populate('driverId', 'userId isVerified status')
+        .populate('jeepneyId', 'capacity status lastKnownLocation plateNumber jeepneyName');
+      if (!trip || trip.status !== 'active' || !trip.acceptRequests) {
+        throw new ApiError(409, 'Trip not active or not accepting requests');
+      }
+      if (String(trip.routeId) !== String(route._id)) {
+        throw new ApiError(400, 'Route does not match selected trip');
+      }
+    } else {
+      trip = await resolveEligibleTripForRoute({
+        routeId: route._id,
+        pickupLocation,
+      });
+    }
+
     const pendingCount = await PickupRequest.countDocuments({
-      tripSessionId: payload.tripSessionId,
+      tripSessionId: trip._id,
       passengerId: passenger._id,
       status: { $in: ['pending', 'acknowledged'] },
     });
@@ -90,20 +259,31 @@ router.post(
       routeId: payload.routeId,
       stopRef: payload.stopRef,
       pickupLocation,
+      destinationStopRef: normalizedDestinationStopRef,
+      destinationLocation: {
+        type: 'Point',
+        coordinates: [Number(lngDestination), Number(latDestination)],
+      },
       sourceNote: payload.sourceNote,
       expiresAt: new Date(Date.now() + pickupRequestTtlMinutes * 60 * 1000),
     });
 
-    const tripDriverUser = await Driver.findById(trip.driverId).select('userId');
+    const tripDriverUser = trip.driverId?.userId
+      ? { userId: trip.driverId.userId }
+      : await Driver.findById(trip.driverId).select('userId');
     await publishNotification({
       userId: tripDriverUser?.userId,
       type: 'pickup_request_created',
       title: 'New roadside pickup request',
-      body: `${req.user.fullName || 'Passenger'} requested ${payload.stopRef || 'a pickup stop'}`,
+      body:
+        `${req.user.fullName || 'Passenger'} requested ` +
+        `${payload.stopRef || 'a pickup stop'} to ` +
+        `${normalizedDestinationStopRef}`,
       payload: {
         requestId: request._id,
         tripSessionId: trip._id.toString(),
         routeId: route._id.toString(),
+        request: serializePickupRequest(request),
       },
       category: 'trip',
     });
@@ -171,6 +351,7 @@ router.patch(
       throw new ApiError(409, 'Trip driver missing');
     }
 
+    const previousStatus = request.status;
     request.status = 'acknowledged';
     request.acknowledgedAt = new Date();
     if (req.user.role === 'DRIVER') {
@@ -187,6 +368,8 @@ router.patch(
       payload: {
         requestId: request._id,
         tripSessionId: trip._id.toString(),
+        previousStatus,
+        request: serializePickupRequest(request),
       },
       category: 'trip',
     });
@@ -237,12 +420,18 @@ router.patch(
         throw new ApiError(409, 'Only pending/acknowledged requests can be completed');
       }
     }
+    const previousStatus = request.status;
     request.status = 'completed';
     request.acknowledgedAt = request.acknowledgedAt || new Date();
     await request.save();
-    await RideSession.findOneAndUpdate(
+    const existingRideSession = await RideSession.findOne({
+      pickupRequestId: request._id,
+    });
+    const ridePreviousStatus = existingRideSession?.status;
+    const rideSession = await RideSession.findOneAndUpdate(
       { pickupRequestId: request._id },
-      { status: 'completed', endedAt: new Date() }
+      { status: 'completed', endedAt: new Date() },
+      { new: true }
     );
     const passengerUser = await Passenger.findById(request.passengerId).select('userId');
     await publishNotification({
@@ -253,6 +442,10 @@ router.patch(
       payload: {
         requestId: request._id,
         tripSessionId: trip._id.toString(),
+        previousStatus,
+        ridePreviousStatus,
+        request: serializePickupRequest(request),
+        rideSession: serializeRideSession(rideSession),
       },
       category: 'trip',
     });

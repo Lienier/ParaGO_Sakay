@@ -7,8 +7,11 @@ class AdminService {
   final ApiClient _client;
 
   Future<Map<String, dynamic>> dashboard() async {
-    final response =
-        await _client.request(method: 'GET', path: '/admin/dashboard');
+    final response = await _client.request(
+      method: 'GET',
+      path: '/admin/dashboard',
+      useCache: false,
+    );
     return response['data'] as Map<String, dynamic>;
   }
 
@@ -17,6 +20,7 @@ class AdminService {
       method: 'GET',
       path: '/admin/recent-activity',
       queryParameters: {'limit': limit},
+      useCache: false,
     );
     final data = response['data'];
     return data is List<dynamic> ? data : <dynamic>[];
@@ -148,6 +152,7 @@ class AdminService {
         'to': toIso,
         if (routeId != null) 'routeId': routeId,
       },
+      useCache: false,
     );
     return response['data'] as Map<String, dynamic>;
   }

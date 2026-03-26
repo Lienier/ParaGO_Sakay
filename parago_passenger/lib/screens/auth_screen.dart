@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../core/utils/action_feedback.dart';
 import '../models/user_role.dart';
 import '../services/auth_service.dart';
 import '../services/firebase_auth_service.dart';
@@ -55,25 +56,41 @@ class _AuthScreenState extends State<AuthScreen> {
     });
 
     try {
-      final response = _isRegisterMode
-          ? await auth.registerEmail(
-              email: _emailCtrl.text,
-              password: _passwordCtrl.text,
-              fullName:
-                  _nameCtrl.text.isEmpty ? _emailCtrl.text : _nameCtrl.text,
-              role: _passengerRole,
-            )
-          : await auth.loginEmail(
-              email: _emailCtrl.text,
-              password: _passwordCtrl.text,
-              role: _passengerRole,
-            );
-      if (response.user.role != UserRole.passenger) {
-        throw Exception('Invalid email/password');
+      final response = await ActionFeedback.run<dynamic>(
+        context: context,
+        loadingMessage: _isRegisterMode
+            ? 'Creating your passenger account...'
+            : 'Signing you in...',
+        showSuccess: false,
+        action: () async {
+          final result = _isRegisterMode
+              ? await auth.registerEmail(
+                  email: _emailCtrl.text,
+                  password: _passwordCtrl.text,
+                  fullName: _nameCtrl.text.isEmpty
+                      ? _emailCtrl.text
+                      : _nameCtrl.text,
+                  role: _passengerRole,
+                )
+              : await auth.loginEmail(
+                  email: _emailCtrl.text,
+                  password: _passwordCtrl.text,
+                  role: _passengerRole,
+                );
+          if (result.user.role != UserRole.passenger) {
+            throw Exception('Invalid email/password');
+          }
+          return result;
+        },
+        onError: (error) async {
+          if (!mounted) return;
+          setState(() => _error = ActionFeedback.messageOf(error));
+        },
+      );
+      if (response == null) {
+        return;
       }
       await session.saveAuth(response);
-    } catch (error) {
-      setState(() => _error = error.toString());
     } finally {
       if (mounted) {
         setState(() => _loading = false);
@@ -93,29 +110,40 @@ class _AuthScreenState extends State<AuthScreen> {
     });
 
     try {
-      final firebaseIdToken = await firebaseAuthService.signInWithGoogle();
-      if (firebaseIdToken == null) {
-        if (mounted) setState(() => _loading = false);
+      final response = await ActionFeedback.run<dynamic>(
+        context: context,
+        loadingMessage: 'Connecting with Google...',
+        showSuccess: false,
+        action: () async {
+          final firebaseIdToken = await firebaseAuthService.signInWithGoogle();
+          if (firebaseIdToken == null) {
+            return null;
+          }
+
+          final result = await authService.firebaseGoogleLogin(
+            idToken: firebaseIdToken,
+            role: _passengerRole,
+          );
+          if (result.user.role != UserRole.passenger) {
+            throw Exception('Invalid email/password');
+          }
+          return result;
+        },
+        onError: (error) async {
+          if (!mounted) return;
+          if (error is PlatformException &&
+              error.code == 'sign_in_failed' &&
+              (error.message?.contains('ApiException: 10') ?? false)) {
+            setState(() => _error = _androidGoogleSetupMessage);
+            return;
+          }
+          setState(() => _error = ActionFeedback.messageOf(error));
+        },
+      );
+      if (response == null) {
         return;
       }
-
-      final response = await authService.firebaseGoogleLogin(
-        idToken: firebaseIdToken,
-        role: _passengerRole,
-      );
-      if (response.user.role != UserRole.passenger) {
-        throw Exception('Invalid email/password');
-      }
       await session.saveAuth(response);
-    } on PlatformException catch (error) {
-      if (error.code == 'sign_in_failed' &&
-          (error.message?.contains('ApiException: 10') ?? false)) {
-        setState(() => _error = _androidGoogleSetupMessage);
-      } else {
-        setState(() => _error = error.toString());
-      }
-    } catch (error) {
-      setState(() => _error = error.toString());
     } finally {
       if (mounted) {
         setState(() => _loading = false);

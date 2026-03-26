@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/utils/action_feedback.dart';
 import '../../models/transport/route_summary.dart';
 import '../../models/trip/trip_session.dart';
 import '../../services/admin_service.dart';
@@ -245,8 +246,10 @@ class _AdminDriverManagementScreenState
     final blockReason = _scheduleTripBlockReason(driver);
     if (blockReason != null) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(blockReason)),
+      await ActionFeedback.showInfoDialog(
+        context,
+        title: 'Trip cannot be scheduled',
+        message: blockReason,
       );
       return;
     }
@@ -294,24 +297,20 @@ class _AdminDriverManagementScreenState
 
     setState(() => _schedulingDriverId = driverId);
     try {
-      final trip = await admin.createTrip(
-        driverId: driverId,
-        jeepneyId: jeepneyId,
-        routeId: routeId,
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Trip scheduled for ${_driverDisplayName(driver)} (${trip.routeLabel}).',
-          ),
+      await ActionFeedback.run<dynamic>(
+        context: context,
+        loadingMessage: 'Scheduling trip...',
+        successMessage:
+            'Trip scheduled for ${_driverDisplayName(driver)} (${route['code'] ?? route['name'] ?? 'assigned route'}).',
+        action: () => admin.createTrip(
+          driverId: driverId,
+          jeepneyId: jeepneyId,
+          routeId: routeId,
         ),
-      );
-      await _load();
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.toString())),
+        onSuccess: (_) async {
+          if (!mounted) return;
+          await _load();
+        },
       );
     } finally {
       if (mounted) {
@@ -348,30 +347,29 @@ class _AdminDriverManagementScreenState
 
     setState(() => _saving = true);
     try {
-      await admin.createDriverAccount(
-        email: _createEmail!.trim(),
-        password: _createPassword!.trim(),
-        fullName: _createFullName!.trim(),
-        licenseNumber: _createLicense,
-        employeeNumber: _createEmployee,
-        phone: _createPhone,
-        routeId: _createRouteId,
-        jeepneyPlateNumber: _createJeepneyPlateNumber!.trim(),
-        jeepneyCapacity: int.parse(_createJeepneyCapacity!.trim()),
-        isVerified: _createVerified,
-        status: _createStatus,
-      );
-      if (!mounted || !sheetContext.mounted) return;
-      Navigator.of(sheetContext).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Driver and jeepney created')),
-      );
-      _resetCreateForm();
-      await _load();
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.toString())),
+      await ActionFeedback.run<dynamic>(
+        context: context,
+        loadingMessage: 'Creating driver account...',
+        successMessage: 'Driver and jeepney created successfully.',
+        action: () => admin.createDriverAccount(
+          email: _createEmail!.trim(),
+          password: _createPassword!.trim(),
+          fullName: _createFullName!.trim(),
+          licenseNumber: _createLicense,
+          employeeNumber: _createEmployee,
+          phone: _createPhone,
+          routeId: _createRouteId,
+          jeepneyPlateNumber: _createJeepneyPlateNumber!.trim(),
+          jeepneyCapacity: int.parse(_createJeepneyCapacity!.trim()),
+          isVerified: _createVerified,
+          status: _createStatus,
+        ),
+        onSuccess: (_) async {
+          if (!mounted || !sheetContext.mounted) return;
+          Navigator.of(sheetContext).pop();
+          _resetCreateForm();
+          await _load();
+        },
       );
     } finally {
       if (mounted) {
@@ -390,27 +388,26 @@ class _AdminDriverManagementScreenState
 
     setState(() => _saving = true);
     try {
-      await admin.updateDriver(
-        driverId: driverId,
-        licenseNumber: _nullableText(_editLicenseCtrl.text),
-        employeeNumber: _nullableText(_editEmployeeCtrl.text),
-        phone: _nullableText(_editPhoneCtrl.text),
-        isVerified: _verifiedSelection.value,
-        assignedRouteId: _routeSelection.value,
-        status: _statusSelection.value,
-        jeepneyPlateNumber: _editJeepneyPlateCtrl.text.trim(),
-        jeepneyCapacity: int.tryParse(_editJeepneyCapacityCtrl.text.trim()),
-      );
-      if (!mounted) return;
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Driver profile updated')),
-      );
-      await _load();
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.toString())),
+      await ActionFeedback.run<dynamic>(
+        context: context,
+        loadingMessage: 'Saving driver profile...',
+        successMessage: 'Driver profile updated successfully.',
+        action: () => admin.updateDriver(
+          driverId: driverId,
+          licenseNumber: _nullableText(_editLicenseCtrl.text),
+          employeeNumber: _nullableText(_editEmployeeCtrl.text),
+          phone: _nullableText(_editPhoneCtrl.text),
+          isVerified: _verifiedSelection.value,
+          assignedRouteId: _routeSelection.value,
+          status: _statusSelection.value,
+          jeepneyPlateNumber: _editJeepneyPlateCtrl.text.trim(),
+          jeepneyCapacity: int.tryParse(_editJeepneyCapacityCtrl.text.trim()),
+        ),
+        onSuccess: (_) async {
+          if (!mounted) return;
+          Navigator.of(context).pop();
+          await _load();
+        },
       );
     } finally {
       if (mounted) {

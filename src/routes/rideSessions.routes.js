@@ -12,6 +12,7 @@ const { ok } = require('../utils/response');
 const { PASSENGER, DRIVER, ADMIN } = require('../constants/roles');
 const { ensureObjectId } = require('../utils/validators');
 const { publishNotification } = require('../services/notificationPublisher');
+const { serializeRideSession } = require('../utils/realtimePayloads');
 
 const router = express.Router();
 
@@ -71,6 +72,7 @@ router.patch(
     if (session.status !== 'onboard') {
       throw new ApiError(409, 'Only onboard ride sessions can be completed');
     }
+    const previousStatus = session.status;
     session.status = 'completed';
     session.endedAt = new Date();
     session.canSendStopAlert = false;
@@ -96,6 +98,8 @@ router.patch(
       payload: {
         rideSessionId: session._id.toString(),
         tripSessionId: session.tripSessionId.toString(),
+        previousStatus,
+        rideSession: serializeRideSession(session),
       },
       category: 'ride',
     });

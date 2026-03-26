@@ -11,6 +11,7 @@ class RealtimeSocketService {
 
   Stream<Map<String, dynamic>> get notificationCreatedStream =>
       _notificationController.stream;
+  bool get isConnected => _socket?.connected == true;
 
   void connect({
     required String apiBaseUrl,
@@ -30,7 +31,7 @@ class RealtimeSocketService {
       socketBaseUrl,
       io.OptionBuilder()
           .setPath('/socket.io')
-          .setTransports(['polling', 'websocket'])
+          .setTransports(['websocket', 'polling'])
           .setUpgrade(true)
           .enableForceNew()
           .disableAutoConnect()

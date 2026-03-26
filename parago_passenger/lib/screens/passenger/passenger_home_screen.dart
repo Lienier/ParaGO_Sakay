@@ -1,8 +1,13 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/utils/action_feedback.dart';
 import '../../core/utils/parago_format.dart';
 import '../../models/operations/notification.dart';
 import '../../models/operations/pickup_request.dart';
@@ -27,6 +32,12 @@ class PassengerHomeScreen extends StatefulWidget {
 }
 
 class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
+  static const LatLng _defaultMapCenter = LatLng(14.6091, 121.0223);
+  static const Distance _distance = Distance();
+  static const double _pickupPinToleranceMeters = 300;
+  static const double _unloadPinToleranceMeters = 5;
+  static const double _pickupFromCurrentLocationMeters = 50;
+
   List<TripSession> _trips = [];
   List<RouteSummaryModel> _routes = [];
   List<PickupRequestModel> _requests = [];
@@ -34,20 +45,68 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   List<NotificationModel> _notifications = [];
   String? _selectedTripId;
   String? _selectedRouteId;
+  LatLng? _currentPassengerLocation;
+  DateTime? _currentPassengerLocationAt;
+  LatLng? _draftPickupPoint;
+  LatLng? _draftUnloadPoint;
+  String? _draftPickupLabel;
+  String? _draftUnloadLabel;
+  _PassengerMapSelectionMode _mapSelectionMode =
+      _PassengerMapSelectionMode.pickup;
   bool _loading = false;
   String? _statusMessage;
   Timer? _liveRefreshTimer;
   StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
+  bool _locatingPassenger = false;
   Set<String> _knownNotificationIds = <String>{};
+  final MapController _passengerMapController = MapController();
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
 
   TripSession? get _selectedTrip {
-    for (final trip in _trips) {
-      if (trip.id == _selectedTripId) return trip;
+    final selectedTripId = _selectedTripId;
+    if (selectedTripId != null && selectedTripId.isNotEmpty) {
+      for (final trip in _trips) {
+        if (trip.id == selectedTripId) {
+          return trip;
+        }
+      }
+    }
+    final selectedRouteId = _selectedRouteId;
+    if (selectedRouteId != null && selectedRouteId.isNotEmpty) {
+      final candidates = _routeTrips(selectedRouteId);
+      if (candidates.isNotEmpty) {
+        final anchor = _draftPickupPoint ?? _routeCenter(_selectedRoute);
+        if (anchor == null) {
+          return candidates.first;
+        }
+        final sorted = List<TripSession>.from(candidates)
+          ..sort((left, right) {
+            return _tripDistanceMeters(left, anchor)
+                .compareTo(_tripDistanceMeters(right, anchor));
+          });
+        return sorted.first;
+      }
     }
     return _trips.isEmpty ? null : _trips.first;
+  }
+
+  RouteSummaryModel? get _selectedRoute {
+    final selectedRouteId = _selectedRouteId;
+    if (selectedRouteId != null && selectedRouteId.isNotEmpty) {
+      for (final route in _routes) {
+        if (route.id == selectedRouteId) {
+          return route;
+        }
+      }
+    }
+    for (final route in _routes) {
+      if (route.status == 'active') {
+        return route;
+      }
+    }
+    return _routes.isEmpty ? null : _routes.first;
   }
 
   RideSessionModel? get _activeRide {
@@ -122,16 +181,22 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 
   PickupRequestModel? get _selectedTripBooking {
-    final selectedTripId = _selectedTripId;
-    if (selectedTripId == null || selectedTripId.isEmpty) {
-      return null;
+    final selectedRouteId = _selectedRouteId;
+    if (selectedRouteId != null && selectedRouteId.isNotEmpty) {
+      for (final request in _requests) {
+        if (request.routeId == selectedRouteId &&
+            (request.status == 'pending' ||
+                request.status == 'acknowledged' ||
+                request.status == 'completed')) {
+          return request;
+        }
+      }
     }
 
     for (final request in _requests) {
-      if (request.tripSessionId == selectedTripId &&
-          (request.status == 'pending' ||
-              request.status == 'acknowledged' ||
-              request.status == 'completed')) {
+      if (request.status == 'pending' ||
+          request.status == 'acknowledged' ||
+          request.status == 'completed') {
         return request;
       }
     }
@@ -164,14 +229,33 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       final notifications = results[3] as List<NotificationModel>;
       final routes = results[4] as List<RouteSummaryModel>;
 
-      final matchingTripStillExists =
-          trips.any((trip) => trip.id == _selectedTripId);
-      final nextTripId = matchingTripStillExists
-          ? _selectedTripId
-          : (trips.isNotEmpty ? trips.first.id : null);
-      final nextRouteId = nextTripId == null
-          ? null
-          : trips.firstWhere((trip) => trip.id == nextTripId).routeId;
+      final selectableRoutes = routes
+          .where((route) => route.status == 'active')
+          .toList(growable: false);
+      final nextRouteId = _selectRouteId(
+        routes: selectableRoutes.isEmpty ? routes : selectableRoutes,
+        trips: trips,
+        requests: requests,
+        rides: rides,
+      );
+      String? requestFocusedTripId;
+      if (nextRouteId != null) {
+        for (final request in requests) {
+          if (request.routeId == nextRouteId &&
+              (request.status == 'pending' ||
+                  request.status == 'acknowledged' ||
+                  request.status == 'completed')) {
+            requestFocusedTripId = request.tripSessionId;
+            break;
+          }
+        }
+      }
+      final nextTripId = requestFocusedTripId ??
+          _preferredTripIdForRoute(
+            trips,
+            nextRouteId,
+            anchor: _draftPickupPoint,
+          );
 
       if (!mounted) return;
       setState(() {
@@ -196,8 +280,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   void _startLiveRefreshLoop() {
     _liveRefreshTimer?.cancel();
-    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 8), (_) async {
-      if (!mounted || _silentRefreshActive) {
+    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      if (!mounted ||
+          _silentRefreshActive ||
+          _realtimeSocketService.isConnected) {
         return;
       }
       _silentRefreshActive = true;
@@ -207,6 +293,162 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _silentRefreshActive = false;
       }
     });
+  }
+
+  bool _applyRealtimePassengerNotification(NotificationModel notification) {
+    var needsFallback = false;
+
+    setState(() {
+      _notifications = _upsertNotificationList(_notifications, notification);
+
+      switch (notification.type) {
+        case 'pickup_request_acknowledged':
+        case 'pickup_request_completed':
+          final request = _readPassengerPickupRequest(notification.payload);
+          if (request == null) {
+            needsFallback = true;
+            return;
+          }
+          _requests = _upsertPickupRequests(_requests, request);
+
+          final ride = _readPassengerRideSession(notification.payload);
+          if (ride != null) {
+            _rides = _upsertRideSessions(_rides, ride);
+          }
+          break;
+        case 'ride_completed':
+          final ride = _readPassengerRideSession(notification.payload);
+          if (ride == null) {
+            needsFallback = true;
+            return;
+          }
+          _rides = _upsertRideSessions(_rides, ride);
+          break;
+      }
+    });
+
+    return !needsFallback;
+  }
+
+  List<NotificationModel> _upsertNotificationList(
+    List<NotificationModel> notifications,
+    NotificationModel notification,
+  ) {
+    final next = List<NotificationModel>.from(notifications);
+    final existingIndex =
+        next.indexWhere((item) => item.id == notification.id);
+    if (existingIndex >= 0) {
+      next[existingIndex] = notification;
+      return next;
+    }
+    next.insert(0, notification);
+    return next;
+  }
+
+  List<PickupRequestModel> _upsertPickupRequests(
+    List<PickupRequestModel> requests,
+    PickupRequestModel request,
+  ) {
+    final next = List<PickupRequestModel>.from(requests);
+    final existingIndex = next.indexWhere((item) => item.id == request.id);
+    if (existingIndex >= 0) {
+      next[existingIndex] = request;
+    } else {
+      next.insert(0, request);
+    }
+    next.sort((a, b) => (b.createdAt ?? '').compareTo(a.createdAt ?? ''));
+    return next;
+  }
+
+  List<RideSessionModel> _upsertRideSessions(
+    List<RideSessionModel> rides,
+    RideSessionModel ride,
+  ) {
+    final next = List<RideSessionModel>.from(rides);
+    final existingIndex = next.indexWhere((item) => item.id == ride.id);
+    if (existingIndex >= 0) {
+      next[existingIndex] = ride;
+    } else {
+      next.insert(0, ride);
+    }
+    next.sort((a, b) {
+      final endedComparison = (b.endedAt ?? '').compareTo(a.endedAt ?? '');
+      if (endedComparison != 0) {
+        return endedComparison;
+      }
+      return (b.boardedAt ?? '').compareTo(a.boardedAt ?? '');
+    });
+    return next;
+  }
+
+  PickupRequestModel? _readPassengerPickupRequest(Map<String, dynamic> payload) {
+    final raw = payload['request'];
+    if (raw is Map<String, dynamic>) {
+      return PickupRequestModel.fromJson(raw);
+    }
+    if (raw is Map) {
+      return PickupRequestModel.fromJson(
+        raw.map((key, value) => MapEntry(key.toString(), value)),
+      );
+    }
+    return null;
+  }
+
+  RideSessionModel? _readPassengerRideSession(Map<String, dynamic> payload) {
+    final raw = payload['rideSession'];
+    if (raw is Map<String, dynamic>) {
+      return RideSessionModel.fromJson(raw);
+    }
+    if (raw is Map) {
+      return RideSessionModel.fromJson(
+        raw.map((key, value) => MapEntry(key.toString(), value)),
+      );
+    }
+    return null;
+  }
+
+  void _showPassengerRealtimeSnackBar(NotificationModel notification) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${notification.title}: ${notification.body}')),
+    );
+  }
+
+  Future<void> _runPassengerAction({
+    required String loadingMessage,
+    required String successMessage,
+    required Future<dynamic> Function() action,
+    bool reloadAfter = true,
+  }) async {
+    setState(() => _loading = true);
+    try {
+      await ActionFeedback.run<void>(
+        context: context,
+        loadingMessage: loadingMessage,
+        successMessage: successMessage,
+        action: () async {
+          await action();
+          if (reloadAfter) {
+            await _load();
+          }
+        },
+        onSuccess: (_) async {
+          if (!mounted) return;
+          setState(() => _statusMessage = successMessage);
+        },
+        onError: (error) async {
+          if (!mounted) return;
+          setState(() => _statusMessage = ActionFeedback.messageOf(error));
+        },
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
   }
 
   void _handleRealtimePassengerUpdates({
@@ -243,46 +485,68 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 
   Future<void> _sendPickup() async {
-    final selectedTrip = _selectedTrip;
-    if (_selectedTripId == null ||
-        _selectedRouteId == null ||
-        selectedTrip == null) {
+    final selectedRoute = _selectedRoute;
+    if (_selectedRouteId == null || selectedRoute == null) {
       setState(() => _statusMessage =
-          'Choose an active trip before sending a booking request.');
+          'Choose a route before sending a booking request.');
+      await ActionFeedback.showInfoDialog(
+        context,
+        title: 'Route required',
+        message: 'Choose a route before sending a booking request.',
+      );
       return;
     }
 
-    if (selectedTrip.acceptRequests == false) {
+    if (_draftPickupPoint == null || _draftUnloadPoint == null) {
       setState(() => _statusMessage =
-          'This trip is currently not accepting passenger bookings.');
+          'Pin both your pickup and unload locations on the map before booking.');
+      await ActionFeedback.showInfoDialog(
+        context,
+        title: 'Pins required',
+        message:
+            'Pin both your pickup and unload locations on the map before booking.',
+      );
       return;
     }
 
     final payload = await _showPickupDialog();
     if (payload == null) return;
     if (!mounted) return;
+    final currentLocation = await _ensureCurrentPassengerLocation();
+    if (!mounted) return;
+    if (currentLocation == null) {
+      await ActionFeedback.showInfoDialog(
+        context,
+        title: 'Location required',
+        message:
+            'Your current location is required before sending a pickup request.',
+      );
+      return;
+    }
+    setState(() {
+      _draftPickupLabel = payload.pickupStopRef;
+      _draftUnloadLabel = payload.destinationStopRef;
+    });
 
     final session = context.read<SessionController>();
     final passengerService = PassengerService(session.apiClient);
-    setState(() => _loading = true);
-
-    try {
-      final request = await passengerService.createPickupRequest(
-        tripSessionId: _selectedTripId!,
+    await _runPassengerAction(
+      loadingMessage: 'Sending pickup request...',
+      successMessage:
+          'Booking request sent. The nearest eligible jeep on ${selectedRoute.label} has been notified.',
+      action: () => passengerService.createPickupRequest(
         routeId: _selectedRouteId!,
-        stopRef: payload.stopRef,
+        currentLat: currentLocation.latitude,
+        currentLng: currentLocation.longitude,
+        pickupLat: _draftPickupPoint!.latitude,
+        pickupLng: _draftPickupPoint!.longitude,
+        destinationStopRef: payload.destinationStopRef,
+        destinationLat: _draftUnloadPoint!.latitude,
+        destinationLng: _draftUnloadPoint!.longitude,
+        stopRef: payload.pickupStopRef,
         sourceNote: payload.note,
-      );
-      setState(() {
-        _statusMessage =
-            'Booking request sent for ${request.stopRef ?? 'your stop'}.';
-      });
-      await _load();
-    } catch (error) {
-      setState(() => _statusMessage = error.toString());
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
+      ),
+    );
   }
 
   Future<void> _board() async {
@@ -292,38 +556,31 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         .toList()
       ..sort((a, b) => (b.expiresAt ?? '').compareTo(a.expiresAt ?? ''));
 
-    if (pending.isEmpty || _selectedTripId == null) {
+    if (pending.isEmpty) {
       setState(() => _statusMessage =
           'You need a recent pickup request before boarding confirmation.');
+      await ActionFeedback.showInfoDialog(
+        context,
+        title: 'Pickup needed',
+        message:
+            'You need a recent pickup request before boarding confirmation.',
+      );
       return;
     }
 
-    PickupRequestModel? request;
-    for (final candidate in pending) {
-      if (candidate.tripSessionId == _selectedTripId) {
-        request = candidate;
-        break;
-      }
-    }
-    request ??= pending.first;
+    final request = _selectedTripBooking ?? pending.first;
 
     final session = context.read<SessionController>();
     final passengerService = PassengerService(session.apiClient);
-    setState(() => _loading = true);
-
-    try {
-      await passengerService.validateBoarding(
-        tripSessionId: _selectedTripId!,
+    await _runPassengerAction(
+      loadingMessage: 'Validating boarding...',
+      successMessage:
+          'Boarding validated. Saved unload point is now active for this ride.',
+      action: () => passengerService.validateBoarding(
+        tripSessionId: request.tripSessionId,
         pickupRequestId: request.id,
-      );
-      setState(() => _statusMessage =
-          'Boarding validated. Digital para alerts are now available.');
-      await _load();
-    } catch (error) {
-      setState(() => _statusMessage = error.toString());
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
+      ),
+    );
   }
 
   Future<void> _sendPara() async {
@@ -333,72 +590,75 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         ride.canSendStopAlert == false) {
       setState(() => _statusMessage =
           'Digital para alert is only available for verified onboard riders.');
+      await ActionFeedback.showInfoDialog(
+        context,
+        title: 'Para unavailable',
+        message:
+            'Digital para alert is only available for verified onboard riders.',
+      );
       return;
     }
 
-    final payload = await _showStopAlertDialog();
+    final payload = await _showStopAlertDialog(ride);
     if (payload == null) return;
     if (!mounted) return;
 
     final session = context.read<SessionController>();
     final alerts = StopAlertService(session.apiClient);
-    setState(() => _loading = true);
-
-    try {
-      await alerts.sendStopAlert(
+    await _runPassengerAction(
+      loadingMessage: 'Sending para alert...',
+      successMessage: 'Stop alert sent successfully.',
+      action: () => alerts.sendStopAlert(
         tripSessionId: ride.tripSessionId,
         stopRef: payload.stopRef,
         note: payload.note,
-      );
-      setState(() => _statusMessage = 'Stop alert sent successfully.');
-      await _load();
-    } catch (error) {
-      setState(() => _statusMessage = error.toString());
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
+        lat: ride.destinationLatitude,
+        lng: ride.destinationLongitude,
+      ),
+    );
   }
 
   Future<void> _cancelRequest(String requestId) async {
     final session = context.read<SessionController>();
     final passengerService = PassengerService(session.apiClient);
-    setState(() => _loading = true);
-
-    try {
-      await passengerService.cancelPickupRequest(requestId);
-      setState(() => _statusMessage = 'Pickup request cancelled.');
-      await _load();
-    } catch (error) {
-      setState(() => _statusMessage = error.toString());
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
+    await _runPassengerAction(
+      loadingMessage: 'Cancelling pickup request...',
+      successMessage: 'Pickup request cancelled.',
+      action: () => passengerService.cancelPickupRequest(requestId),
+    );
   }
 
   Future<void> _markAllRead() async {
     final session = context.read<SessionController>();
     final notificationService = NotificationService(session.apiClient);
-    try {
-      await notificationService.markAllRead();
-      await _load();
-    } catch (error) {
-      setState(() => _statusMessage = error.toString());
-    }
+    await _runPassengerAction(
+      loadingMessage: 'Marking notifications as read...',
+      successMessage: 'All notifications marked as read.',
+      action: () => notificationService.markAllRead(),
+    );
   }
 
-  Future<_PassengerInput?> _showPickupDialog() async {
-    final stopCtrl = TextEditingController(text: 'Nearest loading point');
+  Future<_PassengerBookingDetails?> _showPickupDialog() async {
+    final pickupStopCtrl = TextEditingController(
+      text: _draftPickupLabel ?? 'Nearest loading point',
+    );
+    final unloadStopCtrl = TextEditingController(
+      text: _draftUnloadLabel ?? 'Pinned unload point',
+    );
     final noteCtrl = TextEditingController();
-    final result = await showDialog<_PassengerInput>(
+    final result = await showDialog<_PassengerBookingDetails>(
       context: context,
       builder: (context) {
         void submit() {
           FocusManager.instance.primaryFocus?.unfocus();
           Navigator.of(context).pop(
-            _PassengerInput(
-              stopRef: stopCtrl.text.trim().isEmpty
+            _PassengerBookingDetails(
+              pickupStopRef: pickupStopCtrl.text.trim().isEmpty
                   ? 'Nearest loading point'
-                  : stopCtrl.text.trim(),
+                  : pickupStopCtrl.text.trim(),
+              destinationStopRef: unloadStopCtrl.text.trim().isEmpty
+                  ? 'Pinned unload point'
+                  : unloadStopCtrl.text.trim(),
               note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
             ),
           );
@@ -406,18 +666,29 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
         return AlertDialog(
           scrollable: true,
-          title: const Text('Book this trip'),
+          title: const Text('Book this route'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
-                controller: stopCtrl,
+                controller: pickupStopCtrl,
                 textInputAction: TextInputAction.next,
                 onTapOutside: (_) =>
                     FocusManager.instance.primaryFocus?.unfocus(),
                 onSubmitted: (_) => FocusScope.of(context).nextFocus(),
                 decoration: const InputDecoration(
                   labelText: 'Boarding landmark or stop reference',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: unloadStopCtrl,
+                textInputAction: TextInputAction.next,
+                onTapOutside: (_) =>
+                    FocusManager.instance.primaryFocus?.unfocus(),
+                onSubmitted: (_) => FocusScope.of(context).nextFocus(),
+                decoration: const InputDecoration(
+                  labelText: 'Unload landmark or stop reference',
                 ),
               ),
               const SizedBox(height: 12),
@@ -448,14 +719,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         );
       },
     );
-    stopCtrl.dispose();
+    pickupStopCtrl.dispose();
+    unloadStopCtrl.dispose();
     noteCtrl.dispose();
     return result;
   }
 
-  Future<_PassengerInput?> _showStopAlertDialog() async {
+  Future<_PassengerInput?> _showStopAlertDialog(RideSessionModel ride) async {
     final stopCtrl =
-        TextEditingController(text: 'Next preferred drop-off point');
+        TextEditingController(
+      text: ride.destinationStopRef ?? 'Next preferred drop-off point',
+    );
     final noteCtrl = TextEditingController();
     final result = await showDialog<_PassengerInput>(
       context: context,
@@ -488,6 +762,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                   labelText: 'Drop-off reference',
                 ),
               ),
+              if (ride.destinationLatitude != null &&
+                  ride.destinationLongitude != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Saved unload pin: ${ride.destinationLatitude!.toStringAsFixed(5)}, '
+                  '${ride.destinationLongitude!.toStringAsFixed(5)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
               const SizedBox(height: 12),
               TextField(
                 controller: noteCtrl,
@@ -526,6 +809,460 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       if (route.id == id) return route;
     }
     return null;
+  }
+
+  List<TripSession> _routeTrips(String routeId) {
+    return _trips
+        .where((trip) => trip.routeId == routeId && trip.status == 'active')
+        .toList(growable: false);
+  }
+
+  String? _selectRouteId({
+    required List<RouteSummaryModel> routes,
+    required List<TripSession> trips,
+    required List<PickupRequestModel> requests,
+    required List<RideSessionModel> rides,
+  }) {
+    final existingRouteId = _selectedRouteId;
+    if (existingRouteId != null &&
+        routes.any((route) => route.id == existingRouteId)) {
+      return existingRouteId;
+    }
+
+    for (final ride in rides) {
+      for (final request in requests) {
+        if (request.id == ride.pickupRequestId) {
+          return request.routeId;
+        }
+      }
+    }
+
+    for (final request in requests) {
+      if (request.status == 'pending' ||
+          request.status == 'acknowledged' ||
+          request.status == 'completed') {
+        return request.routeId;
+      }
+    }
+
+    if (trips.isNotEmpty) {
+      return trips.first.routeId;
+    }
+    if (routes.isNotEmpty) {
+      return routes.first.id;
+    }
+    return null;
+  }
+
+  String? _preferredTripIdForRoute(
+    List<TripSession> trips,
+    String? routeId, {
+    LatLng? anchor,
+  }) {
+    if (routeId == null || routeId.isEmpty) {
+      return null;
+    }
+    final candidates = trips
+        .where((trip) => trip.routeId == routeId && trip.status == 'active')
+        .toList();
+    if (candidates.isEmpty) {
+      return null;
+    }
+    final comparisonAnchor = anchor ?? _routeCenter(_routeById(routeId));
+    if (comparisonAnchor == null) {
+      return candidates.first.id;
+    }
+    candidates.sort((left, right) {
+      return _tripDistanceMeters(left, comparisonAnchor)
+          .compareTo(_tripDistanceMeters(right, comparisonAnchor));
+    });
+    return candidates.first.id;
+  }
+
+  LatLng? _routeCenter(RouteSummaryModel? route) {
+    if (route?.mapBounds != null) {
+      return route!.mapBounds!.center;
+    }
+    final referencePoints = route?.referencePoints ?? const <LatLng>[];
+    if (referencePoints.isNotEmpty) {
+      return referencePoints[referencePoints.length ~/ 2];
+    }
+    return null;
+  }
+
+  Future<LatLng?> _ensureCurrentPassengerLocation({
+    bool silent = false,
+    bool forceRefresh = false,
+  }) async {
+    final existingLocation = _currentPassengerLocation;
+    final existingTimestamp = _currentPassengerLocationAt;
+    if (!forceRefresh &&
+        existingLocation != null &&
+        existingTimestamp != null &&
+        DateTime.now().difference(existingTimestamp) <
+            const Duration(seconds: 20)) {
+      return existingLocation;
+    }
+
+    if (_locatingPassenger) {
+      return existingLocation;
+    }
+
+    if (!mounted) {
+      return existingLocation;
+    }
+    setState(() => _locatingPassenger = true);
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (!silent && mounted) {
+          setState(() {
+            _statusMessage = 'Turn on device location to place your pickup pin.';
+          });
+        }
+        return existingLocation;
+      }
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (!silent && mounted) {
+          setState(() {
+            _statusMessage =
+                'Location permission is needed so pickup stays within 50 meters of you.';
+          });
+        }
+        return existingLocation;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.best,
+        ),
+      );
+      final next = LatLng(position.latitude, position.longitude);
+      if (!mounted) {
+        return next;
+      }
+      setState(() {
+        _currentPassengerLocation = next;
+        _currentPassengerLocationAt = DateTime.now();
+      });
+      _passengerMapController.move(next, 16);
+      return next;
+    } catch (_) {
+      if (!silent && mounted) {
+        setState(() {
+          _statusMessage =
+              'Unable to read your current location right now. Try again in an open area.';
+        });
+      }
+      return existingLocation;
+    } finally {
+      if (mounted) {
+        setState(() => _locatingPassenger = false);
+      }
+    }
+  }
+
+  Future<void> _primeCurrentPassengerLocation() async {
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    if (!mounted) {
+      return;
+    }
+    await _ensureCurrentPassengerLocation(
+      silent: true,
+      forceRefresh: true,
+    );
+  }
+
+  double _tripDistanceMeters(TripSession trip, LatLng anchor) {
+    if (trip.jeepneyLatitude == null || trip.jeepneyLongitude == null) {
+      return double.infinity;
+    }
+    return _distance.as(
+      LengthUnit.Meter,
+      anchor,
+      LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!),
+    );
+  }
+
+  List<LatLng> _routeMapPath(RouteSummaryModel? route, TripSession? trip) {
+    final routePath = route?.mapPath ?? const <LatLng>[];
+    if (routePath.length >= 2) {
+      return routePath;
+    }
+    final tripPath = trip?.routePathSnapshotPoints ?? const <LatLng>[];
+    if (tripPath.length >= 2) {
+      return tripPath;
+    }
+    return const <LatLng>[];
+  }
+
+  List<LatLng> _orderedRoutePoints(RouteSummaryModel? route) {
+    if (route == null) {
+      return const <LatLng>[];
+    }
+    final mapPath = route.mapPath;
+    if (mapPath.isNotEmpty) {
+      return mapPath;
+    }
+    return route.stopPoints.map((stop) => stop.position).toList(growable: false);
+  }
+
+  _RouteProjection? _nearestRouteProjection(RouteSummaryModel? route, LatLng point) {
+    final orderedPoints = _orderedRoutePoints(route);
+    if (orderedPoints.isEmpty) {
+      return null;
+    }
+    if (orderedPoints.length == 1) {
+      return _RouteProjection(
+        point: orderedPoints.first,
+        distanceMeters: _distance.as(
+          LengthUnit.Meter,
+          point,
+          orderedPoints.first,
+        ),
+        progress: 0.0,
+      );
+    }
+
+    _RouteProjection? nearestProjection;
+    for (var index = 0; index < orderedPoints.length - 1; index += 1) {
+      final candidate = _projectOntoSegment(
+        point: point,
+        start: orderedPoints[index],
+        end: orderedPoints[index + 1],
+      );
+      final projection = _RouteProjection(
+        point: candidate.point,
+        distanceMeters: candidate.distanceMeters,
+        progress: index + candidate.fraction,
+      );
+      if (nearestProjection == null ||
+          projection.distanceMeters < nearestProjection.distanceMeters) {
+        nearestProjection = projection;
+      }
+    }
+    return nearestProjection;
+  }
+
+  double? _distanceToRoute(RouteSummaryModel? route, LatLng point) {
+    return _nearestRouteProjection(route, point)?.distanceMeters;
+  }
+
+  bool _isUnloadAfterPickup(
+    RouteSummaryModel? route,
+    LatLng pickup,
+    LatLng unload,
+  ) {
+    final pickupProjection = _nearestRouteProjection(route, pickup);
+    final unloadProjection = _nearestRouteProjection(route, unload);
+    if (pickupProjection == null || unloadProjection == null) {
+      return true;
+    }
+    return unloadProjection.progress > pickupProjection.progress;
+  }
+
+  _ProjectedPoint _projectOntoSegment({
+    required LatLng point,
+    required LatLng start,
+    required LatLng end,
+  }) {
+    final originLat = (point.latitude + start.latitude + end.latitude) / 3;
+    final originLng = (point.longitude + start.longitude + end.longitude) / 3;
+    final localPoint = _toLocalMeters(
+      point,
+      originLat: originLat,
+      originLng: originLng,
+    );
+    final localStart = _toLocalMeters(
+      start,
+      originLat: originLat,
+      originLng: originLng,
+    );
+    final localEnd = _toLocalMeters(
+      end,
+      originLat: originLat,
+      originLng: originLng,
+    );
+    final dx = localEnd.dx - localStart.dx;
+    final dy = localEnd.dy - localStart.dy;
+    final segmentLengthSquared = dx * dx + dy * dy;
+    if (segmentLengthSquared <= 0) {
+      return _ProjectedPoint(
+        point: start,
+        distanceMeters: _distance.as(LengthUnit.Meter, point, start),
+        fraction: 0.0,
+      );
+    }
+
+    final rawFraction =
+        ((localPoint.dx - localStart.dx) * dx +
+                (localPoint.dy - localStart.dy) * dy) /
+            segmentLengthSquared;
+    final fraction = rawFraction.clamp(0.0, 1.0).toDouble();
+    final projectedLocal = Offset(
+      localStart.dx + dx * fraction,
+      localStart.dy + dy * fraction,
+    );
+    final projectedPoint = _fromLocalMeters(
+      projectedLocal,
+      originLat: originLat,
+      originLng: originLng,
+    );
+    return _ProjectedPoint(
+      point: projectedPoint,
+      distanceMeters: _distance.as(LengthUnit.Meter, point, projectedPoint),
+      fraction: fraction,
+    );
+  }
+
+  Offset _toLocalMeters(
+    LatLng point, {
+    required double originLat,
+    required double originLng,
+  }) {
+    const metersPerDegreeLat = 111320.0;
+    final metersPerDegreeLng =
+        metersPerDegreeLat * math.cos(originLat * math.pi / 180);
+    return Offset(
+      (point.longitude - originLng) * metersPerDegreeLng,
+      (point.latitude - originLat) * metersPerDegreeLat,
+    );
+  }
+
+  LatLng _fromLocalMeters(
+    Offset point, {
+    required double originLat,
+    required double originLng,
+  }) {
+    const metersPerDegreeLat = 111320.0;
+    final metersPerDegreeLng =
+        metersPerDegreeLat * math.cos(originLat * math.pi / 180);
+    return LatLng(
+      originLat + point.dy / metersPerDegreeLat,
+      originLng + point.dx / (metersPerDegreeLng == 0 ? 1 : metersPerDegreeLng),
+    );
+  }
+
+  Future<void> _onPassengerMapTap(LatLng point) async {
+    final route = _selectedRoute;
+    final currentLocation = await _ensureCurrentPassengerLocation();
+    if (!mounted) {
+      return;
+    }
+    final tappedDistanceToRoute = _distanceToRoute(route, point);
+    final snappedPoint = _nearestRouteProjection(route, point)?.point;
+    setState(() {
+      if (route == null || tappedDistanceToRoute == null || snappedPoint == null) {
+        _statusMessage = 'Choose a route with a visible path before placing pins.';
+        return;
+      }
+      if (_mapSelectionMode == _PassengerMapSelectionMode.pickup) {
+        if (tappedDistanceToRoute > _pickupPinToleranceMeters) {
+          _statusMessage =
+              'Pickup pin must stay close to the route. Move it within ${_pickupPinToleranceMeters.toInt()} meters of the road.';
+          return;
+        }
+        if (currentLocation == null) {
+          _statusMessage =
+              'Your current location is needed before placing the pickup pin.';
+          return;
+        }
+        final pickupDistanceFromCurrentLocation = _distance.as(
+          LengthUnit.Meter,
+          currentLocation,
+          snappedPoint,
+        );
+        if (pickupDistanceFromCurrentLocation >
+            _pickupFromCurrentLocationMeters) {
+          _statusMessage =
+              'Pickup pin must stay within ${_pickupFromCurrentLocationMeters.toInt()} meters of your current location.';
+          return;
+        }
+        _draftPickupPoint = snappedPoint;
+        _draftPickupLabel = _nearestRoutePlaceName(
+          route,
+          snappedPoint,
+          fallback: 'Pinned pickup point',
+        );
+        _selectedTripId = _preferredTripIdForRoute(
+          _trips,
+          _selectedRouteId,
+          anchor: snappedPoint,
+        );
+        if (_draftUnloadPoint != null &&
+            !_isUnloadAfterPickup(route, snappedPoint, _draftUnloadPoint!)) {
+          _draftUnloadPoint = null;
+          _draftUnloadLabel = null;
+          _mapSelectionMode = _PassengerMapSelectionMode.pickup;
+          _statusMessage =
+              'Unload pin was cleared because it must come after the pickup point on the route.';
+        }
+      } else {
+        final pickupPoint = _draftPickupPoint;
+        if (pickupPoint == null) {
+          _statusMessage = 'Pin your pickup point first before placing unload.';
+          _mapSelectionMode = _PassengerMapSelectionMode.pickup;
+          return;
+        }
+        if (tappedDistanceToRoute > _unloadPinToleranceMeters) {
+          _statusMessage =
+              'Unload pin must stay on the route and within ${_unloadPinToleranceMeters.toInt()} meters of the road.';
+          return;
+        }
+        if (!_isUnloadAfterPickup(route, pickupPoint, snappedPoint)) {
+          _statusMessage =
+              'Unload pin must come after the pickup point along the route.';
+          return;
+        }
+        _draftUnloadPoint = snappedPoint;
+        _draftUnloadLabel = _nearestRoutePlaceName(
+          route,
+          snappedPoint,
+          fallback: 'Pinned unload point',
+        );
+      }
+    });
+  }
+
+  String _nearestRoutePlaceName(
+    RouteSummaryModel? route,
+    LatLng point, {
+    required String fallback,
+  }) {
+    final stops = route?.stopPoints ?? const <RouteStopPoint>[];
+    if (stops.isEmpty) {
+      return fallback;
+    }
+
+    RouteStopPoint? nearest;
+    var nearestDistance = double.infinity;
+    for (final stop in stops) {
+      final distance = _distance.as(
+        LengthUnit.Meter,
+        point,
+        stop.position,
+      );
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = stop;
+      }
+    }
+
+    if (nearest == null) {
+      return fallback;
+    }
+
+    final roundedDistance = nearestDistance.round();
+    if (nearestDistance <= 35) {
+      return nearest.name;
+    }
+    return '${nearest.name} ($roundedDistance m)';
   }
 
   String _tripRouteLabel(TripSession trip) {
@@ -570,12 +1307,284 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
   }
 
+  Widget _buildPassengerMapCard({
+    required RouteSummaryModel? selectedRoute,
+    required TripSession? selectedTrip,
+    required List<TripSession> routeTrips,
+  }) {
+    final routePath = _routeMapPath(selectedRoute, selectedTrip);
+    final tripMarkers = routeTrips
+        .where(
+          (trip) => trip.jeepneyLatitude != null && trip.jeepneyLongitude != null,
+        )
+        .map(
+          (trip) => Marker(
+            point: LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!),
+            width: trip.id == selectedTrip?.id ? 52 : 44,
+            height: trip.id == selectedTrip?.id ? 52 : 44,
+            child: Icon(
+              Icons.directions_bus_filled,
+              color: trip.id == selectedTrip?.id
+                  ? const Color(0xFF0F6A5F)
+                  : const Color(0xFF2157A5),
+              size: trip.id == selectedTrip?.id ? 36 : 30,
+            ),
+          ),
+        )
+        .toList(growable: true);
+
+    if (_currentPassengerLocation != null) {
+      tripMarkers.add(
+        Marker(
+          point: _currentPassengerLocation!,
+          width: 180,
+          height: 42,
+          alignment: Alignment.topCenter,
+          child: const _PassengerMapLabel(
+            label: 'Your current location',
+          ),
+        ),
+      );
+    }
+
+    if (_draftPickupPoint != null) {
+      tripMarkers.add(
+        Marker(
+          point: _draftPickupPoint!,
+          width: 180,
+          height: 78,
+          alignment: Alignment.topCenter,
+          child: _PassengerMapPin(
+            label: _draftPickupLabel ?? 'Pinned pickup point',
+            icon: Icons.person_pin_circle,
+            color: const Color(0xFFE29B2D),
+          ),
+        ),
+      );
+    }
+    if (_draftUnloadPoint != null) {
+      tripMarkers.add(
+        Marker(
+          point: _draftUnloadPoint!,
+          width: 180,
+          height: 78,
+          alignment: Alignment.topCenter,
+          child: _PassengerMapPin(
+            label: _draftUnloadLabel ?? 'Pinned unload point',
+            icon: Icons.flag_circle,
+            color: const Color(0xFFD84315),
+          ),
+        ),
+      );
+    }
+
+    final mapCenter = _currentPassengerLocation ??
+        _draftPickupPoint ??
+        _draftUnloadPoint ??
+        (selectedTrip?.jeepneyLatitude != null &&
+                selectedTrip?.jeepneyLongitude != null
+            ? LatLng(
+                selectedTrip!.jeepneyLatitude!,
+                selectedTrip!.jeepneyLongitude!,
+              )
+            : _routeCenter(selectedRoute)) ??
+        _defaultMapCenter;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Passenger live map',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              selectedRoute == null
+                  ? 'Choose a route first, then tap the map to pin where you will board and unload.'
+                  : 'Tap near the route to place pins. The blue radar is your 50-meter pickup zone, centered on your current location. Pickup must stay inside it and within 300 meters of the route, while unload must be pinned after pickup and within about 5 meters of the route.',
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                ChoiceChip(
+                  label: const Text('Pin pickup'),
+                  selected:
+                      _mapSelectionMode == _PassengerMapSelectionMode.pickup,
+                  onSelected: (_) {
+                    setState(() {
+                      _mapSelectionMode = _PassengerMapSelectionMode.pickup;
+                    });
+                  },
+                ),
+                ChoiceChip(
+                  label: const Text('Pin unload'),
+                  selected:
+                      _mapSelectionMode == _PassengerMapSelectionMode.unload,
+                  onSelected: _draftPickupPoint == null
+                      ? null
+                      : (_) {
+                          setState(() {
+                            _mapSelectionMode =
+                                _PassengerMapSelectionMode.unload;
+                          });
+                        },
+                ),
+                TextButton.icon(
+                  onPressed: _locatingPassenger
+                      ? null
+                      : () => _ensureCurrentPassengerLocation(forceRefresh: true),
+                  icon: _locatingPassenger
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.my_location_outlined),
+                  label: const Text('Refresh my location'),
+                ),
+                TextButton.icon(
+                  onPressed:
+                      _draftPickupPoint == null && _draftUnloadPoint == null
+                          ? null
+                          : () {
+                              setState(() {
+                                _draftPickupPoint = null;
+                                _draftUnloadPoint = null;
+                                _draftPickupLabel = null;
+                                _draftUnloadLabel = null;
+                                _mapSelectionMode =
+                                    _PassengerMapSelectionMode.pickup;
+                              });
+                            },
+                  icon: const Icon(Icons.layers_clear_outlined),
+                  label: const Text('Clear pins'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(24),
+              child: SizedBox(
+                height: 340,
+                width: double.infinity,
+                child: FlutterMap(
+                  mapController: _passengerMapController,
+                  options: MapOptions(
+                    initialCenter: mapCenter,
+                    initialZoom: _currentPassengerLocation == null
+                        ? (selectedRoute == null ? 13 : 14)
+                        : 16,
+                    onTap: (_, point) => _onPassengerMapTap(point),
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate:
+                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.parago.passenger',
+                    ),
+                    if (_currentPassengerLocation != null)
+                      CircleLayer(
+                        circles: [
+                          CircleMarker(
+                            point: _currentPassengerLocation!,
+                            radius: _pickupFromCurrentLocationMeters,
+                            useRadiusInMeter: true,
+                            color: const Color(0x332157A5),
+                            borderStrokeWidth: 2,
+                            borderColor: const Color(0xCC2157A5),
+                          ),
+                          CircleMarker(
+                            point: _currentPassengerLocation!,
+                            radius: 10,
+                            color: const Color(0xCC2157A5),
+                            borderStrokeWidth: 4,
+                            borderColor: Colors.white,
+                          ),
+                        ],
+                      ),
+                    if (routePath.length >= 2)
+                      PolylineLayer(
+                        polylines: [
+                          Polyline(
+                            points: routePath,
+                            strokeWidth: 5,
+                            color: const Color(0xFF0F6A5F),
+                          ),
+                        ],
+                      ),
+                    MarkerLayer(markers: tripMarkers),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            _DetailRow(
+              label: 'Selected route',
+              value: selectedRoute?.label ?? 'Choose a route below',
+            ),
+            _DetailRow(
+              label: 'Visible jeepneys',
+              value: routeTrips.length.toString(),
+            ),
+            _DetailRow(
+              label: 'Your location',
+              value: _currentPassengerLocation == null
+                  ? 'Location not ready'
+                  : '${_currentPassengerLocation!.latitude.toStringAsFixed(5)}, '
+                      '${_currentPassengerLocation!.longitude.toStringAsFixed(5)}',
+            ),
+            _DetailRow(
+              label: 'Pickup radar',
+              value: _currentPassengerLocation == null
+                  ? 'Waiting for current location'
+                  : '${_pickupFromCurrentLocationMeters.toInt()} meters around you',
+            ),
+            _DetailRow(
+              label: 'Tap mode',
+              value: _mapSelectionMode == _PassengerMapSelectionMode.pickup
+                  ? 'Pickup pin'
+                  : 'Unload pin',
+            ),
+            _DetailRow(
+              label: 'Pickup pin',
+              value: _draftPickupPoint == null
+                  ? 'Not pinned'
+                  : '${_draftPickupPoint!.latitude.toStringAsFixed(5)}, '
+                      '${_draftPickupPoint!.longitude.toStringAsFixed(5)}',
+            ),
+            _DetailRow(
+              label: 'Pickup place',
+              value: _draftPickupLabel ?? 'Not pinned',
+            ),
+            _DetailRow(
+              label: 'Unload pin',
+              value: _draftUnloadPoint == null
+                  ? 'Not pinned'
+                  : '${_draftUnloadPoint!.latitude.toStringAsFixed(5)}, '
+                      '${_draftUnloadPoint!.longitude.toStringAsFixed(5)}',
+            ),
+            _DetailRow(
+              label: 'Unload place',
+              value: _draftUnloadLabel ?? 'Not pinned',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _load();
       _connectRealtimeSocket();
+      await _load();
+      unawaited(_primeCurrentPassengerLocation());
     });
     _startLiveRefreshLoop();
   }
@@ -597,13 +1606,42 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
     _realtimeNotificationSubscription?.cancel();
     _realtimeNotificationSubscription =
-        _realtimeSocketService.notificationCreatedStream.listen((_) {
-      _refreshFromSocketEvent();
-    });
+        _realtimeSocketService.notificationCreatedStream.listen(
+      _handleRealtimeSocketNotification,
+    );
     _realtimeSocketService.connect(
       apiBaseUrl: session.apiClient.baseUrl,
       token: token,
     );
+  }
+
+  Future<void> _handleRealtimeSocketNotification(
+    Map<String, dynamic> event,
+  ) async {
+    if (!mounted) {
+      return;
+    }
+
+    final notification = NotificationModel.fromJson(event);
+    if (notification.id.isEmpty) {
+      return;
+    }
+
+    final alreadyKnown =
+        _knownNotificationIds.contains(notification.id) ||
+        _notifications.any((item) => item.id == notification.id);
+    final applied = _applyRealtimePassengerNotification(notification);
+    _knownNotificationIds = {..._knownNotificationIds, notification.id};
+    _realtimePrimed = true;
+
+    if (!applied) {
+      await _refreshFromSocketEvent();
+      return;
+    }
+
+    if (!alreadyKnown) {
+      _showPassengerRealtimeSnackBar(notification);
+    }
   }
 
   Future<void> _refreshFromSocketEvent() async {
@@ -629,10 +1667,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         .length;
     final onboardCount =
         _rides.where((ride) => ride.status == 'onboard').length;
+    final availableRoutes = _routes
+        .where((route) => route.status == 'active')
+        .toList(growable: false);
+    final selectedRoute = _selectedRoute;
     final selectedTrip = _selectedTrip;
     final activeRide = _activeRide;
     final displayRide = _displayRide;
     final selectedBooking = _selectedTripBooking;
+    final routeTrips = selectedRoute == null
+        ? const <TripSession>[]
+        : _routeTrips(selectedRoute.id);
 
     return Scaffold(
       appBar: AppBar(
@@ -653,7 +1698,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
             _RoleHero(
               title: 'Book your next jeepney ride',
               subtitle:
-                  'Choose an active trip, send a booking request, confirm boarding without QR, and trigger digital para alerts once you are verified onboard.',
+                  'Select a route, pin your pickup and unload points on the map, and let the nearest eligible jeep on that route receive your booking request.',
               accent: Theme.of(context).colorScheme.secondary,
               badge: session.user?.fullName ?? 'Passenger',
             ),
@@ -674,12 +1719,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                   childAspectRatio: compact ? 1.7 : 1.05,
                   children: [
                     MetricCard(
-                      label: 'Active trips',
+                      label: 'Live jeeps',
                       value: _trips.length.toString(),
-                      icon: Icons.route_outlined,
+                      icon: Icons.directions_bus_filled_outlined,
                       accent: const Color(0xFF0F6A5F),
-                      caption:
-                          'Trips currently accepting or serving passengers',
+                      caption: 'Jeepneys currently broadcasting on active trips',
                     ),
                     MetricCard(
                       label: 'Active bookings',
@@ -710,6 +1754,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
               },
             ),
             const SizedBox(height: 18),
+            _buildPassengerMapCard(
+              selectedRoute: selectedRoute,
+              selectedTrip: selectedTrip,
+              routeTrips: routeTrips,
+            ),
+            const SizedBox(height: 18),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(20),
@@ -720,41 +1770,49 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                         style: Theme.of(context).textTheme.titleLarge),
                     const SizedBox(height: 8),
                     const Text(
-                      'Pick an active trip first, then book your boarding point. After the driver accepts, you can confirm boarding and later send para.',
+                      'Choose your route, pin where you will board and unload on the map, then send one booking request to the nearest jeep with available capacity.',
                     ),
                     const SizedBox(height: 16),
-                    if (_trips.isEmpty)
+                    if (availableRoutes.isEmpty)
                       const Text(
-                        'No active jeepney trips are available right now.',
+                        'No active routes are available right now.',
                       )
                     else ...[
                       DropdownButtonFormField<String>(
-                        initialValue: _selectedTripId,
+                        initialValue: selectedRoute?.id,
                         isExpanded: true,
                         decoration: const InputDecoration(
-                          labelText: 'Active trip to book',
+                          labelText: 'Route to ride',
                         ),
-                        items: _trips
+                        items: availableRoutes
                             .map(
-                              (trip) => DropdownMenuItem<String>(
-                                value: trip.id,
-                                child: Text(_tripRouteLabel(trip)),
+                              (route) => DropdownMenuItem<String>(
+                                value: route.id,
+                                child: Text(route.label),
                               ),
                             )
                             .toList(),
                         onChanged: (value) {
                           if (value == null) return;
-                          final trip =
-                              _trips.firstWhere((entry) => entry.id == value);
                           setState(() {
-                            _selectedTripId = value;
-                            _selectedRouteId = trip.routeId;
+                            _selectedRouteId = value;
+                            _selectedTripId = _preferredTripIdForRoute(
+                              _trips,
+                              value,
+                              anchor: _draftPickupPoint,
+                            );
+                            _draftPickupPoint = null;
+                            _draftUnloadPoint = null;
+                            _draftPickupLabel = null;
+                            _draftUnloadLabel = null;
+                            _mapSelectionMode =
+                                _PassengerMapSelectionMode.pickup;
                           });
                         },
                       ),
                       const SizedBox(height: 14),
                     ],
-                    if (selectedTrip != null) ...[
+                    if (selectedRoute != null) ...[
                       Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
@@ -771,36 +1829,41 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                               spacing: 10,
                               runSpacing: 10,
                               children: [
-                                StatusBadge(status: selectedTrip.status),
+                                StatusBadge(status: selectedRoute.status),
                                 StatusBadge(
-                                  status: selectedTrip.acceptRequests == false
-                                      ? 'paused'
-                                      : 'booking open',
+                                  status: routeTrips.isEmpty
+                                      ? 'no live jeep'
+                                      : '${routeTrips.length} live jeep${routeTrips.length == 1 ? '' : 's'}',
                                 ),
                               ],
                             ),
                             const SizedBox(height: 14),
                             _DetailRow(
                               label: 'Route',
-                              value: _tripRouteLabel(selectedTrip),
+                              value: selectedRoute.label,
                             ),
                             _DetailRow(
-                              label: 'Jeepney',
-                              value: selectedTrip.jeepneyLabel.isEmpty
-                                  ? ParagoFormat.shortId(selectedTrip.jeepneyId)
+                              label: 'Stops',
+                              value: selectedRoute.stopsCount.toString(),
+                            ),
+                            _DetailRow(
+                              label: 'Nearest jeep',
+                              value: selectedTrip == null
+                                  ? 'Waiting for an active jeep on this route'
                                   : selectedTrip.jeepneyLabel,
                             ),
                             _DetailRow(
                               label: 'Driver',
-                              value: selectedTrip.driverName?.isNotEmpty == true
-                                  ? selectedTrip.driverName!
+                              value: selectedTrip?.driverName?.isNotEmpty == true
+                                  ? selectedTrip!.driverName!
                                   : 'Not available',
                             ),
-                            _DetailRow(
-                              label: 'Started',
-                              value:
-                                  ParagoFormat.dateTime(selectedTrip.startedAt),
-                            ),
+                            if (selectedTrip?.startedAt != null)
+                              _DetailRow(
+                                label: 'Started',
+                                value:
+                                    ParagoFormat.dateTime(selectedTrip!.startedAt),
+                              ),
                           ],
                         ),
                       ),
@@ -833,6 +1896,28 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                             ),
                             const SizedBox(height: 4),
                             Text(_bookingStateText(selectedBooking)),
+                            const SizedBox(height: 8),
+                            _DetailRow(
+                              label: 'Unload destination',
+                              value: selectedBooking.destinationStopRef ??
+                                  'Not saved',
+                            ),
+                            if (selectedBooking.pickupLatitude != null &&
+                                selectedBooking.pickupLongitude != null)
+                              _DetailRow(
+                                label: 'Pickup pin',
+                                value:
+                                    '${selectedBooking.pickupLatitude!.toStringAsFixed(5)}, '
+                                    '${selectedBooking.pickupLongitude!.toStringAsFixed(5)}',
+                              ),
+                            if (selectedBooking.destinationLatitude != null &&
+                                selectedBooking.destinationLongitude != null)
+                              _DetailRow(
+                                label: 'Unload pin',
+                                value:
+                                    '${selectedBooking.destinationLatitude!.toStringAsFixed(5)}, '
+                                    '${selectedBooking.destinationLongitude!.toStringAsFixed(5)}',
+                              ),
                             if ((selectedBooking.sourceNote ?? '')
                                 .isNotEmpty) ...[
                               const SizedBox(height: 6),
@@ -859,9 +1944,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                     ],
                     _PassengerActionButton(
                       icon: Icons.event_seat_outlined,
-                      title: 'Book this trip',
+                      title: 'Book this route',
                       subtitle:
-                          'Create a booking request for your selected boarding point',
+                          'Send your pinned pickup and unload points to the nearest eligible jeep',
                       onPressed: _loading ? null : _sendPickup,
                     ),
                     const SizedBox(height: 12),
@@ -869,7 +1954,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                       icon: Icons.fact_check_outlined,
                       title: 'I boarded',
                       subtitle:
-                          'Validate recent pickup request and activate the ride session',
+                          'Validate boarding using the unload point already saved in your booking',
                       onPressed: _loading ? null : _board,
                     ),
                     const SizedBox(height: 12),
@@ -903,7 +1988,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                     const SizedBox(height: 10),
                     if (displayRide == null)
                       const Text(
-                        'No verified ride session yet. Send a pickup request, then confirm boarding after entering the jeepney.',
+                        'No verified ride session yet. Pin your pickup and unload points, send a route booking, then confirm boarding after entering the jeepney.',
                       )
                     else ...[
                       Wrap(
@@ -930,6 +2015,18 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                         label: 'Pickup request',
                         value: ParagoFormat.shortId(displayRide.pickupRequestId),
                       ),
+                      _DetailRow(
+                        label: 'Unload destination',
+                        value: displayRide.destinationStopRef ?? 'Not saved',
+                      ),
+                      if (displayRide.destinationLatitude != null &&
+                          displayRide.destinationLongitude != null)
+                        _DetailRow(
+                          label: 'Destination pin',
+                          value:
+                              '${displayRide.destinationLatitude!.toStringAsFixed(5)}, '
+                              '${displayRide.destinationLongitude!.toStringAsFixed(5)}',
+                        ),
                       if (displayRide.endedAt != null)
                         _DetailRow(
                           label: 'Dropped off',
@@ -1056,14 +2153,138 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 }
 
+enum _PassengerMapSelectionMode {
+  pickup,
+  unload,
+}
+
 class _PassengerInput {
   const _PassengerInput({
     required this.stopRef,
     this.note,
+    this.lat,
+    this.lng,
   });
 
   final String stopRef;
   final String? note;
+  final double? lat;
+  final double? lng;
+}
+
+class _PassengerBookingDetails {
+  const _PassengerBookingDetails({
+    required this.pickupStopRef,
+    required this.destinationStopRef,
+    this.note,
+  });
+
+  final String pickupStopRef;
+  final String destinationStopRef;
+  final String? note;
+}
+
+class _RouteProjection {
+  const _RouteProjection({
+    required this.point,
+    required this.distanceMeters,
+    required this.progress,
+  });
+
+  final LatLng point;
+  final double distanceMeters;
+  final double progress;
+}
+
+class _ProjectedPoint {
+  const _ProjectedPoint({
+    required this.point,
+    required this.distanceMeters,
+    required this.fraction,
+  });
+
+  final LatLng point;
+  final double distanceMeters;
+  final double fraction;
+}
+
+class _PassengerMapPin extends StatelessWidget {
+  const _PassengerMapPin({
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(999),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.14),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Icon(icon, color: color, size: 36),
+      ],
+    );
+  }
+}
+
+class _PassengerMapLabel extends StatelessWidget {
+  const _PassengerMapLabel({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(999),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.14),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
 }
 
 class _RoleHero extends StatelessWidget {
