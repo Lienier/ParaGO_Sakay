@@ -97,6 +97,11 @@ class AppConfig {
       candidates.add(normalized);
     }
 
+    if (kIsWeb) {
+      addCandidate('http://localhost:5000/api/v1');
+      addCandidate('http://127.0.0.1:5000/api/v1');
+    }
+
     addCandidate(_read('PARAGO_API_BASE_URL', _apiBaseUrlFallback));
 
     final configuredList =
@@ -108,8 +113,6 @@ class AppConfig {
     }
 
     if (kIsWeb) {
-      addCandidate('http://localhost:5000/api/v1');
-      addCandidate('http://127.0.0.1:5000/api/v1');
       return candidates;
     }
 

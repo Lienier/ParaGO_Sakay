@@ -273,47 +273,6 @@ class _AuthScreenState extends State<AuthScreen> {
                   ),
                 ),
               ),
-              if ((_challenge?.developmentCode ?? '').isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: scheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(18),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Development OTP',
-                        style: TextStyle(
-                          color: scheme.onPrimaryContainer,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _challenge!.developmentCode!,
-                        style:
-                            Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                  color: scheme.onPrimaryContainer,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                      ),
-                      if ((_challenge?.deliveryWarning ?? '').isNotEmpty) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          _challenge!.deliveryWarning!,
-                          style: TextStyle(
-                            color: scheme.onPrimaryContainer,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
               const SizedBox(height: 14),
               TextField(
                 controller: _codeCtrl,
