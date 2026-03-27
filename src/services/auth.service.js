@@ -337,24 +337,12 @@ const startAdminLoginOtp = async ({ email, password, phone }) => {
     expiresInSeconds: Math.floor(ADMIN_OTP_EXPIRY_MS / 1000),
   };
 
-  try {
-    await sendSms({
-      recipient: targetPhone,
-      message: `Your ParaGO admin verification code is ${otpCode}. It expires in 5 minutes.`,
-    });
-    return responsePayload;
-  } catch (error) {
-    if (nodeEnv === 'development') {
-      return {
-        ...responsePayload,
-        developmentCode: otpCode,
-        deliveryMode: 'development',
-        deliveryWarning:
-          'SMS delivery is unavailable in development, so the verification code is returned directly.',
-      };
-    }
-    throw error;
-  }
+  await sendSms({
+    recipient: targetPhone,
+    message: `Your ParaGO admin verification code is ${otpCode}. It expires in 5 minutes.`,
+  });
+
+  return responsePayload;
 };
 
 const verifyAdminLoginOtp = async ({ challengeId, code }) => {
