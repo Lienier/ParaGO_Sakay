@@ -26,12 +26,18 @@ class AdminLoginChallenge {
     required this.maskedPhone,
     required this.expiresAt,
     required this.expiresInSeconds,
+    this.developmentCode,
+    this.deliveryMode,
+    this.deliveryWarning,
   });
 
   final String challengeId;
   final String maskedPhone;
   final DateTime? expiresAt;
   final int expiresInSeconds;
+  final String? developmentCode;
+  final String? deliveryMode;
+  final String? deliveryWarning;
 
   factory AdminLoginChallenge.fromJson(Map<String, dynamic> json) {
     final expiresAtRaw = json['expiresAt']?.toString();
@@ -43,6 +49,9 @@ class AdminLoginChallenge {
           : DateTime.tryParse(expiresAtRaw),
       expiresInSeconds:
           int.tryParse(json['expiresInSeconds']?.toString() ?? '') ?? 0,
+      developmentCode: json['developmentCode']?.toString(),
+      deliveryMode: json['deliveryMode']?.toString(),
+      deliveryWarning: json['deliveryWarning']?.toString(),
     );
   }
 }
