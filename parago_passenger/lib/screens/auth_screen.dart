@@ -67,9 +67,8 @@ class _AuthScreenState extends State<AuthScreen> {
               ? await auth.registerEmail(
                   email: _emailCtrl.text,
                   password: _passwordCtrl.text,
-                  fullName: _nameCtrl.text.isEmpty
-                      ? _emailCtrl.text
-                      : _nameCtrl.text,
+                  fullName:
+                      _nameCtrl.text.isEmpty ? _emailCtrl.text : _nameCtrl.text,
                   role: _passengerRole,
                 )
               : await auth.loginEmail(

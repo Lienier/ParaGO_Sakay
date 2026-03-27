@@ -30,6 +30,14 @@ const {
   serializePickupRequest,
   serializeRideSession,
 } = require('../utils/realtimePayloads');
+const {
+  requireCurrentDriver,
+  requireCurrentPassenger,
+  requireTrip,
+  requirePickupRequest,
+  ensureDriverAssignedToTrip,
+  ensurePassengerOwnsPickupRequest,
+} = require('../services/routeContext.service');
 
 const router = express.Router();
 
@@ -132,8 +140,9 @@ router.post(
   authorize(PASSENGER),
   asyncHandler(async (req, res) => {
     const payload = req.body || {};
-    const passenger = await Passenger.findOne({ userId: req.user._id });
-    if (!passenger) throw new ApiError(404, 'Passenger profile not found');
+    const passenger = await requireCurrentPassenger(req.user, {
+      notFoundMessage: 'Passenger profile not found',
+    });
 
     if (!payload.routeId) {
       throw new ApiError(400, 'routeId is required');
@@ -228,10 +237,16 @@ router.post(
     let trip;
     if (payload.tripSessionId) {
       ensureObjectId(payload.tripSessionId, 'tripSessionId');
-      trip = await TripSession.findById(payload.tripSessionId)
-        .populate('driverId', 'userId isVerified status')
-        .populate('jeepneyId', 'capacity status lastKnownLocation plateNumber jeepneyName');
-      if (!trip || trip.status !== 'active' || !trip.acceptRequests) {
+      trip = await requireTrip(payload.tripSessionId, {
+        populate: [
+          { path: 'driverId', select: 'userId isVerified status' },
+          {
+            path: 'jeepneyId',
+            select: 'capacity status lastKnownLocation plateNumber jeepneyName',
+          },
+        ],
+      });
+      if (trip.status !== 'active' || !trip.acceptRequests) {
         throw new ApiError(409, 'Trip not active or not accepting requests');
       }
       if (String(trip.routeId) !== String(route._id)) {
@@ -297,8 +312,9 @@ router.get(
   authenticate,
   authorize(PASSENGER),
   asyncHandler(async (req, res) => {
-    const passenger = await Passenger.findOne({ userId: req.user._id });
-    if (!passenger) throw new ApiError(404, 'Passenger profile not found');
+    const passenger = await requireCurrentPassenger(req.user, {
+      notFoundMessage: 'Passenger profile not found',
+    });
     const list = await PickupRequest.find({ passengerId: passenger._id }).sort({ createdAt: -1 });
     return ok(res, list, 'Passenger pickup requests');
   })
@@ -310,13 +326,11 @@ router.get(
   authorize(DRIVER, ADMIN),
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.tripSessionId, 'tripSessionId');
-    const trip = await TripSession.findById(req.params.tripSessionId);
-    if (!trip) throw new ApiError(404, 'Trip not found');
+    const trip = await requireTrip(req.params.tripSessionId);
     if (req.user.role === DRIVER) {
-      const driver = await Driver.findOne({ userId: req.user._id });
-      if (!driver || String(driver._id) !== String(trip.driverId)) {
-        throw new ApiError(403, 'Driver not assigned to this trip');
-      }
+      await ensureDriverAssignedToTrip(req.user, trip, {
+        forbiddenMessage: 'Driver not assigned to this trip',
+      });
     }
     const list = await PickupRequest.find({ tripSessionId: req.params.tripSessionId }).sort({
       status: 1,
@@ -332,20 +346,19 @@ router.patch(
   authorize(DRIVER, ADMIN),
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'pickup request id');
-    const request = await PickupRequest.findById(req.params.id);
-    if (!request) throw new ApiError(404, 'Pickup request not found');
+    const request = await requirePickupRequest(req.params.id);
     if (request.status === 'completed' || request.status === 'cancelled') {
       throw new ApiError(409, 'Request cannot be acknowledged in current state');
     }
-    const trip = await TripSession.findById(request.tripSessionId);
-    if (!trip || trip.status !== 'active') {
+    const trip = await requireTrip(request.tripSessionId);
+    if (trip.status !== 'active') {
       throw new ApiError(409, 'Trip is not active for acknowledgment');
     }
+    let driver;
     if (req.user.role === DRIVER) {
-      const driver = await Driver.findOne({ userId: req.user._id });
-      if (!driver || String(driver._id) !== String(trip.driverId)) {
-        throw new ApiError(403, 'You are not assigned to this request');
-      }
+      driver = await ensureDriverAssignedToTrip(req.user, trip, {
+        forbiddenMessage: 'You are not assigned to this request',
+      });
     }
     if (!trip.driverId) {
       throw new ApiError(409, 'Trip driver missing');
@@ -354,8 +367,8 @@ router.patch(
     const previousStatus = request.status;
     request.status = 'acknowledged';
     request.acknowledgedAt = new Date();
-    if (req.user.role === 'DRIVER') {
-      const driver = await Driver.findOne({ userId: req.user._id });
+    if (req.user.role === DRIVER) {
+      driver ??= await requireCurrentDriver(req.user);
       request.acknowledgedBy = driver?._id || null;
     }
     await request.save();
@@ -383,14 +396,12 @@ router.patch(
   authorize(PASSENGER, ADMIN),
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'pickup request id');
-    const request = await PickupRequest.findById(req.params.id);
-    if (!request) throw new ApiError(404, 'Pickup request not found');
+    const request = await requirePickupRequest(req.params.id);
 
     if (req.user.role === PASSENGER) {
-      const passenger = await Passenger.findOne({ userId: req.user._id });
-      if (!passenger || String(request.passengerId) !== String(passenger._id)) {
-        throw new ApiError(403, 'You can only cancel your own request');
-      }
+      await ensurePassengerOwnsPickupRequest(req.user, request, {
+        forbiddenMessage: 'You can only cancel your own request',
+      });
     }
 
     request.status = 'cancelled';
@@ -405,15 +416,14 @@ router.patch(
   authorize(DRIVER, ADMIN),
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'pickup request id');
-    const request = await PickupRequest.findById(req.params.id);
-    if (!request) throw new ApiError(404, 'Pickup request not found');
-    const trip = await TripSession.findById(request.tripSessionId);
-    if (!trip) throw new ApiError(404, 'Trip not found for this request');
+    const request = await requirePickupRequest(req.params.id);
+    const trip = await requireTrip(request.tripSessionId, {
+      notFoundMessage: 'Trip not found for this request',
+    });
     if (req.user.role === DRIVER) {
-      const driver = await Driver.findOne({ userId: req.user._id });
-      if (!driver || String(driver._id) !== String(trip.driverId)) {
-        throw new ApiError(403, 'You are not assigned to this request');
-      }
+      await ensureDriverAssignedToTrip(req.user, trip, {
+        forbiddenMessage: 'You are not assigned to this request',
+      });
     }
     if (request.status !== 'acknowledged') {
       if (request.status !== 'pending') {

@@ -415,8 +415,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       trip: focusedTrip,
       driverName: session.user?.fullName ?? 'Driver',
       statusMessage: _statusMessage,
+      availabilityNote: _availabilityNote,
       isOnline: _isOnline,
-      onOnlineChanged: _setOnline,
       activePickupCount: focusedRequests
           .where(
             (request) =>

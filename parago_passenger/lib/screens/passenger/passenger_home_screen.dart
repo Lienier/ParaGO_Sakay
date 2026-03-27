@@ -22,6 +22,7 @@ import '../../services/session_controller.dart';
 import '../../services/stop_alert_service.dart';
 import '../../services/trip_service.dart';
 import '../../widgets/metric_card.dart';
+import '../../widgets/passenger_home_dashboard_widgets.dart';
 import '../../widgets/status_badge.dart';
 
 class PassengerHomeScreen extends StatefulWidget {
@@ -37,6 +38,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const double _pickupPinToleranceMeters = 300;
   static const double _unloadPinToleranceMeters = 5;
   static const double _pickupFromCurrentLocationMeters = 50;
+  static const double _autoUnloadDistanceMeters = 120;
+  static const int _autoUnloadConsecutiveOutsideChecks = 3;
+  static const Duration _autoUnloadSustainedSeparation = Duration(seconds: 60);
+  static const Duration _autoUnloadForceAfterPrompt = Duration(minutes: 2);
+  static const double _sheetCollapsedSize = 0.09;
+  static const double _sheetPeekSize = 0.38;
+  static const double _sheetExpandedSize = 0.90;
+  static const Duration _autoUnloadRetryCooldown = Duration(seconds: 45);
 
   List<TripSession> _trips = [];
   List<RouteSummaryModel> _routes = [];
@@ -60,9 +69,22 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
   bool _locatingPassenger = false;
+  bool _autoUnloadInFlight = false;
+  bool _passengerSheetCollapsed = false;
+  int _outsideAutoUnloadWindowCount = 0;
+  DateTime? _outsideAutoUnloadSince;
+  DateTime? _autoUnloadPromptedAt;
+  String? _autoUnloadWindowRideId;
+  String? _lastAutoUnloadRideId;
+  DateTime? _lastAutoUnloadAt;
+  String? _lastMapPromptMessage;
   Set<String> _knownNotificationIds = <String>{};
   final MapController _passengerMapController = MapController();
+  final DraggableScrollableController _sheetController =
+      DraggableScrollableController();
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
+  OverlayEntry? _mapPromptOverlayEntry;
+  Timer? _mapPromptOverlayTimer;
 
   TripSession? get _selectedTrip {
     final selectedTripId = _selectedTripId;
@@ -157,7 +179,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         }
       }
       for (final ride in _rides) {
-        if (ride.tripSessionId == selectedTripId && ride.status == 'completed') {
+        if (ride.tripSessionId == selectedTripId &&
+            ride.status == 'completed') {
           return ride;
         }
       }
@@ -271,6 +294,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         notifications: notifications,
         silent: silent,
       );
+      unawaited(_maybeAutoUnloadWhenSeparated());
     } catch (error) {
       setState(() => _statusMessage = error.toString());
     } finally {
@@ -281,13 +305,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   void _startLiveRefreshLoop() {
     _liveRefreshTimer?.cancel();
     _liveRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
-      if (!mounted ||
-          _silentRefreshActive ||
-          _realtimeSocketService.isConnected) {
+      if (!mounted || _silentRefreshActive) {
         return;
       }
       _silentRefreshActive = true;
       try {
+        await _ensureCurrentPassengerLocation(
+          silent: true,
+          forceRefresh: true,
+        );
         await _load(silent: true);
       } finally {
         _silentRefreshActive = false;
@@ -335,8 +361,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     NotificationModel notification,
   ) {
     final next = List<NotificationModel>.from(notifications);
-    final existingIndex =
-        next.indexWhere((item) => item.id == notification.id);
+    final existingIndex = next.indexWhere((item) => item.id == notification.id);
     if (existingIndex >= 0) {
       next[existingIndex] = notification;
       return next;
@@ -381,7 +406,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     return next;
   }
 
-  PickupRequestModel? _readPassengerPickupRequest(Map<String, dynamic> payload) {
+  PickupRequestModel? _readPassengerPickupRequest(
+      Map<String, dynamic> payload) {
     final raw = payload['request'];
     if (raw is Map<String, dynamic>) {
       return PickupRequestModel.fromJson(raw);
@@ -487,8 +513,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   Future<void> _sendPickup() async {
     final selectedRoute = _selectedRoute;
     if (_selectedRouteId == null || selectedRoute == null) {
-      setState(() => _statusMessage =
-          'Choose a route before sending a booking request.');
+      setState(() =>
+          _statusMessage = 'Choose a route before sending a booking request.');
       await ActionFeedback.showInfoDialog(
         context,
         title: 'Route required',
@@ -618,6 +644,189 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     );
   }
 
+  Future<void> _markUnloaded() async {
+    final ride = _activeRide;
+    if (ride == null || ride.status != 'onboard') {
+      setState(() => _statusMessage =
+          'A verified onboard ride is required before you can mark yourself as unloaded.');
+      await ActionFeedback.showInfoDialog(
+        context,
+        title: 'Unload unavailable',
+        message:
+            'A verified onboard ride is required before you can mark yourself as unloaded.',
+      );
+      return;
+    }
+
+    final confirmed = await _showUnloadConfirmationDialog(
+      title: 'Confirm unload',
+      message:
+          'Mark your ride as unloaded near ${ride.destinationStopRef ?? 'your saved destination'}?',
+    );
+
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    final session = context.read<SessionController>();
+    final passengerService = PassengerService(session.apiClient);
+    await _runPassengerAction(
+      loadingMessage: 'Closing your ride session...',
+      successMessage: 'Your ride has been marked as unloaded.',
+      action: () => passengerService.completeRideSession(ride.id),
+    );
+  }
+
+  Future<bool> _showUnloadConfirmationDialog({
+    required String title,
+    required String message,
+    String confirmLabel = 'I unloaded',
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Not yet'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(confirmLabel),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
+  void _resetAutoUnloadWindow({String? rideId}) {
+    _outsideAutoUnloadWindowCount = 0;
+    _outsideAutoUnloadSince = null;
+    _autoUnloadPromptedAt = null;
+    _autoUnloadWindowRideId = rideId;
+  }
+
+  Future<void> _maybeAutoUnloadWhenSeparated() async {
+    final ride = _activeRide;
+    if (!mounted || ride == null || ride.status != 'onboard') {
+      _resetAutoUnloadWindow();
+      return;
+    }
+
+    if (_autoUnloadWindowRideId != ride.id) {
+      _resetAutoUnloadWindow(rideId: ride.id);
+    }
+
+    final trip = _tripById(ride.tripSessionId);
+    if (trip == null ||
+        trip.jeepneyLatitude == null ||
+        trip.jeepneyLongitude == null) {
+      _resetAutoUnloadWindow(rideId: ride.id);
+      return;
+    }
+
+    if (_autoUnloadInFlight) {
+      return;
+    }
+
+    final lastAttemptRideId = _lastAutoUnloadRideId;
+    final lastAttemptAt = _lastAutoUnloadAt;
+    if (lastAttemptRideId == ride.id &&
+        lastAttemptAt != null &&
+        DateTime.now().difference(lastAttemptAt) < _autoUnloadRetryCooldown) {
+      return;
+    }
+
+    final passengerLocation = await _ensureCurrentPassengerLocation(
+      silent: true,
+      triggerAutoUnload: false,
+    );
+    if (!mounted || passengerLocation == null) {
+      return;
+    }
+
+    final distanceMeters = _distance.as(
+      LengthUnit.Meter,
+      passengerLocation,
+      LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!),
+    );
+    if (distanceMeters < _autoUnloadDistanceMeters) {
+      _resetAutoUnloadWindow(rideId: ride.id);
+      return;
+    }
+
+    final now = DateTime.now();
+    _outsideAutoUnloadSince ??= now;
+    _outsideAutoUnloadWindowCount += 1;
+    final outsideDuration = now.difference(_outsideAutoUnloadSince!);
+    final sustainedSeparation =
+        _outsideAutoUnloadWindowCount >= _autoUnloadConsecutiveOutsideChecks ||
+            outsideDuration >= _autoUnloadSustainedSeparation;
+    if (!sustainedSeparation) {
+      return;
+    }
+
+    var confirmed = false;
+    if (_autoUnloadPromptedAt == null) {
+      _autoUnloadPromptedAt = now;
+      final roundedDistance = distanceMeters.round();
+      confirmed = await _showUnloadConfirmationDialog(
+        title: 'You seem far from the jeepney',
+        message:
+            'You are about $roundedDistance meters away from your jeepney. If you already unloaded, confirm now to close this ride session.',
+        confirmLabel: 'Yes, close ride',
+      );
+      if (!mounted) {
+        return;
+      }
+    }
+
+    final promptedAt = _autoUnloadPromptedAt;
+    final allowForcedCompletion =
+        promptedAt != null &&
+        DateTime.now().difference(promptedAt) >= _autoUnloadForceAfterPrompt;
+    if (!confirmed && !allowForcedCompletion) {
+      return;
+    }
+
+    _autoUnloadInFlight = true;
+    _lastAutoUnloadRideId = ride.id;
+    _lastAutoUnloadAt = DateTime.now();
+
+    try {
+      final session = context.read<SessionController>();
+      final passengerService = PassengerService(session.apiClient);
+      await passengerService.completeRideSession(ride.id);
+      if (!mounted) {
+        return;
+      }
+      await _load(silent: true);
+      if (!mounted) {
+        return;
+      }
+      final roundedDistance = distanceMeters.round();
+      final message = confirmed
+          ? 'Ride closed after you confirmed unload at about $roundedDistance meters away from the jeepney.'
+          : 'Ride closed automatically after sustained separation of about $roundedDistance meters from the jeepney.';
+      setState(() => _statusMessage = message);
+      _resetAutoUnloadWindow(rideId: ride.id);
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _statusMessage = ActionFeedback.messageOf(error));
+    } finally {
+      _autoUnloadInFlight = false;
+    }
+  }
+
   Future<void> _cancelRequest(String requestId) async {
     final session = context.read<SessionController>();
     final passengerService = PassengerService(session.apiClient);
@@ -726,8 +935,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 
   Future<_PassengerInput?> _showStopAlertDialog(RideSessionModel ride) async {
-    final stopCtrl =
-        TextEditingController(
+    final stopCtrl = TextEditingController(
       text: ride.destinationStopRef ?? 'Next preferred drop-off point',
     );
     final noteCtrl = TextEditingController();
@@ -893,6 +1101,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   Future<LatLng?> _ensureCurrentPassengerLocation({
     bool silent = false,
     bool forceRefresh = false,
+    bool triggerAutoUnload = true,
   }) async {
     final existingLocation = _currentPassengerLocation;
     final existingTimestamp = _currentPassengerLocationAt;
@@ -917,7 +1126,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       if (!serviceEnabled) {
         if (!silent && mounted) {
           setState(() {
-            _statusMessage = 'Turn on device location to place your pickup pin.';
+            _statusMessage =
+                'Turn on device location to place your pickup pin.';
           });
         }
         return existingLocation;
@@ -952,6 +1162,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _currentPassengerLocationAt = DateTime.now();
       });
       _passengerMapController.move(next, 16);
+      if (triggerAutoUnload) {
+        unawaited(_maybeAutoUnloadWhenSeparated());
+      }
       return next;
     } catch (_) {
       if (!silent && mounted) {
@@ -990,6 +1203,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     );
   }
 
+  TripSession? _tripById(String tripId) {
+    for (final trip in _trips) {
+      if (trip.id == tripId) {
+        return trip;
+      }
+    }
+    return null;
+  }
+
   List<LatLng> _routeMapPath(RouteSummaryModel? route, TripSession? trip) {
     final routePath = route?.mapPath ?? const <LatLng>[];
     if (routePath.length >= 2) {
@@ -1010,10 +1232,13 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     if (mapPath.isNotEmpty) {
       return mapPath;
     }
-    return route.stopPoints.map((stop) => stop.position).toList(growable: false);
+    return route.stopPoints
+        .map((stop) => stop.position)
+        .toList(growable: false);
   }
 
-  _RouteProjection? _nearestRouteProjection(RouteSummaryModel? route, LatLng point) {
+  _RouteProjection? _nearestRouteProjection(
+      RouteSummaryModel? route, LatLng point) {
     final orderedPoints = _orderedRoutePoints(route);
     if (orderedPoints.isEmpty) {
       return null;
@@ -1100,10 +1325,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       );
     }
 
-    final rawFraction =
-        ((localPoint.dx - localStart.dx) * dx +
-                (localPoint.dy - localStart.dy) * dy) /
-            segmentLengthSquared;
+    final rawFraction = ((localPoint.dx - localStart.dx) * dx +
+            (localPoint.dy - localStart.dy) * dy) /
+        segmentLengthSquared;
     final fraction = rawFraction.clamp(0.0, 1.0).toDouble();
     final projectedLocal = Offset(
       localStart.dx + dx * fraction,
@@ -1158,8 +1382,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final tappedDistanceToRoute = _distanceToRoute(route, point);
     final snappedPoint = _nearestRouteProjection(route, point)?.point;
     setState(() {
-      if (route == null || tappedDistanceToRoute == null || snappedPoint == null) {
-        _statusMessage = 'Choose a route with a visible path before placing pins.';
+      if (route == null ||
+          tappedDistanceToRoute == null ||
+          snappedPoint == null) {
+        _statusMessage =
+            'Choose a route with a visible path before placing pins.';
         return;
       }
       if (_mapSelectionMode == _PassengerMapSelectionMode.pickup) {
@@ -1265,14 +1492,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     return '${nearest.name} ($roundedDistance m)';
   }
 
-  String _tripRouteLabel(TripSession trip) {
-    if (trip.routeName != null && trip.routeName!.isNotEmpty) {
-      return trip.routeLabel;
-    }
-    final route = _routeById(trip.routeId);
-    return route?.label ?? ParagoFormat.shortId(trip.routeId);
-  }
-
   String _bookingStateText(PickupRequestModel request) {
     switch (request.status) {
       case 'pending':
@@ -1307,6 +1526,144 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
   }
 
+  Widget _buildPassengerMapSurface({
+    required RouteSummaryModel? selectedRoute,
+    required TripSession? selectedTrip,
+    required List<TripSession> routeTrips,
+  }) {
+    final routePath = _routeMapPath(selectedRoute, selectedTrip);
+    final tripMarkers = routeTrips
+        .where(
+          (trip) =>
+              trip.jeepneyLatitude != null && trip.jeepneyLongitude != null,
+        )
+        .map(
+          (trip) => Marker(
+            point: LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!),
+            width: trip.id == selectedTrip?.id ? 52 : 44,
+            height: trip.id == selectedTrip?.id ? 52 : 44,
+            child: Icon(
+              Icons.directions_bus_filled,
+              color: trip.id == selectedTrip?.id
+                  ? const Color(0xFF0F6A5F)
+                  : const Color(0xFF2157A5),
+              size: trip.id == selectedTrip?.id ? 36 : 30,
+            ),
+          ),
+        )
+        .toList(growable: true);
+
+    if (_currentPassengerLocation != null) {
+      tripMarkers.add(
+        Marker(
+          point: _currentPassengerLocation!,
+          width: 180,
+          height: 42,
+          alignment: Alignment.topCenter,
+          child: const _PassengerMapLabel(
+            label: 'Your location',
+          ),
+        ),
+      );
+    }
+
+    if (_draftPickupPoint != null) {
+      tripMarkers.add(
+        Marker(
+          point: _draftPickupPoint!,
+          width: 180,
+          height: 78,
+          alignment: Alignment.topCenter,
+          child: _PassengerMapPin(
+            label: _draftPickupLabel ?? 'Pinned pickup point',
+            icon: Icons.person_pin_circle,
+            color: const Color(0xFFE29B2D),
+          ),
+        ),
+      );
+    }
+    if (_draftUnloadPoint != null) {
+      tripMarkers.add(
+        Marker(
+          point: _draftUnloadPoint!,
+          width: 180,
+          height: 78,
+          alignment: Alignment.topCenter,
+          child: _PassengerMapPin(
+            label: _draftUnloadLabel ?? 'Pinned unload point',
+            icon: Icons.flag_circle,
+            color: const Color(0xFFD84315),
+          ),
+        ),
+      );
+    }
+
+    final selectedTripLat = selectedTrip?.jeepneyLatitude;
+    final selectedTripLng = selectedTrip?.jeepneyLongitude;
+
+    final mapCenter = _currentPassengerLocation ??
+        _draftPickupPoint ??
+        _draftUnloadPoint ??
+        (selectedTripLat != null && selectedTripLng != null
+            ? LatLng(selectedTripLat, selectedTripLng)
+            : _routeCenter(selectedRoute)) ??
+        _defaultMapCenter;
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: FlutterMap(
+            mapController: _passengerMapController,
+            options: MapOptions(
+              initialCenter: mapCenter,
+              initialZoom: _currentPassengerLocation == null
+                  ? (selectedRoute == null ? 13 : 14)
+                  : 16,
+              onTap: (_, point) => _onPassengerMapTap(point),
+            ),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.parago.passenger',
+              ),
+              if (_currentPassengerLocation != null)
+                CircleLayer(
+                  circles: [
+                    CircleMarker(
+                      point: _currentPassengerLocation!,
+                      radius: _pickupFromCurrentLocationMeters,
+                      useRadiusInMeter: true,
+                      color: const Color(0x332157A5),
+                      borderStrokeWidth: 2,
+                      borderColor: const Color(0xCC2157A5),
+                    ),
+                    CircleMarker(
+                      point: _currentPassengerLocation!,
+                      radius: 10,
+                      color: const Color(0xCC2157A5),
+                      borderStrokeWidth: 4,
+                      borderColor: Colors.white,
+                    ),
+                  ],
+                ),
+              if (routePath.length >= 2)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: routePath,
+                      strokeWidth: 5,
+                      color: const Color(0xFF0F6A5F),
+                    ),
+                  ],
+                ),
+              MarkerLayer(markers: tripMarkers),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildPassengerMapCard({
     required RouteSummaryModel? selectedRoute,
     required TripSession? selectedTrip,
@@ -1315,7 +1672,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final routePath = _routeMapPath(selectedRoute, selectedTrip);
     final tripMarkers = routeTrips
         .where(
-          (trip) => trip.jeepneyLatitude != null && trip.jeepneyLongitude != null,
+          (trip) =>
+              trip.jeepneyLatitude != null && trip.jeepneyLongitude != null,
         )
         .map(
           (trip) => Marker(
@@ -1378,14 +1736,16 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       );
     }
 
+    final selectedTripLat = selectedTrip?.jeepneyLatitude;
+    final selectedTripLng = selectedTrip?.jeepneyLongitude;
+
     final mapCenter = _currentPassengerLocation ??
         _draftPickupPoint ??
         _draftUnloadPoint ??
-        (selectedTrip?.jeepneyLatitude != null &&
-                selectedTrip?.jeepneyLongitude != null
+        (selectedTripLat != null && selectedTripLng != null
             ? LatLng(
-                selectedTrip!.jeepneyLatitude!,
-                selectedTrip!.jeepneyLongitude!,
+                selectedTripLat,
+                selectedTripLng,
               )
             : _routeCenter(selectedRoute)) ??
         _defaultMapCenter;
@@ -1437,7 +1797,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                 TextButton.icon(
                   onPressed: _locatingPassenger
                       ? null
-                      : () => _ensureCurrentPassengerLocation(forceRefresh: true),
+                      : () =>
+                          _ensureCurrentPassengerLocation(forceRefresh: true),
                   icon: _locatingPassenger
                       ? const SizedBox(
                           width: 16,
@@ -1584,6 +1945,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _connectRealtimeSocket();
       await _load();
+      if (mounted) {
+        _showMapPromptNotification(route: _selectedRoute, force: true);
+      }
       unawaited(_primeCurrentPassengerLocation());
     });
     _startLiveRefreshLoop();
@@ -1593,6 +1957,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   void dispose() {
     _liveRefreshTimer?.cancel();
     _realtimeNotificationSubscription?.cancel();
+    _dismissMapPromptNotification();
     _realtimeSocketService.dispose();
     super.dispose();
   }
@@ -1627,8 +1992,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       return;
     }
 
-    final alreadyKnown =
-        _knownNotificationIds.contains(notification.id) ||
+    final alreadyKnown = _knownNotificationIds.contains(notification.id) ||
         _notifications.any((item) => item.id == notification.id);
     final applied = _applyRealtimePassengerNotification(notification);
     _knownNotificationIds = {..._knownNotificationIds, notification.id};
@@ -1656,6 +2020,1071 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
   }
 
+  void _expandPassengerSheet() {
+    if (mounted && _passengerSheetCollapsed) {
+      setState(() => _passengerSheetCollapsed = false);
+    }
+    if (!_sheetController.isAttached) {
+      return;
+    }
+    unawaited(
+      _sheetController.animateTo(
+        _sheetPeekSize,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      ),
+    );
+  }
+
+  void _collapsePassengerSheet() {
+    if (mounted && !_passengerSheetCollapsed) {
+      setState(() => _passengerSheetCollapsed = true);
+    }
+    if (!_sheetController.isAttached) {
+      return;
+    }
+    unawaited(
+      _sheetController.animateTo(
+        _sheetCollapsedSize,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+      ),
+    );
+  }
+
+  void _togglePassengerSheet() {
+    if (_passengerSheetCollapsed) {
+      _expandPassengerSheet();
+      return;
+    }
+    _collapsePassengerSheet();
+  }
+
+  Future<void> _handleDashboardAction(
+    SessionController session,
+    String action,
+  ) async {
+    switch (action) {
+      case 'logout':
+        session.logout();
+        return;
+      case 'refresh':
+        await _load();
+        return;
+    }
+  }
+
+  Future<void> _openRoutePicker() async {
+    final routes = _routes
+        .where((route) => route.status == 'active')
+        .toList(growable: false);
+    final fallbackRoutes = routes.isEmpty ? _routes : routes;
+    if (fallbackRoutes.isEmpty) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusMessage = 'No active routes are available right now.';
+      });
+      return;
+    }
+
+    final selectedRouteId = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: Colors.white,
+      builder: (context) {
+        return SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            children: [
+              Text(
+                'Choose a route',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Select the route you want to book so the map and quick actions stay focused.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 14),
+              for (final route in fallbackRoutes) ...[
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: CircleAvatar(
+                    backgroundColor: route.id == _selectedRouteId
+                        ? const Color(0xFF0F6A5F)
+                        : const Color(0xFFEAF5F2),
+                    foregroundColor: route.id == _selectedRouteId
+                        ? Colors.white
+                        : const Color(0xFF0F6A5F),
+                    child: Text(
+                      route.code.isEmpty
+                          ? '${route.stopsCount}'
+                          : route.code.characters.first,
+                    ),
+                  ),
+                  title: Text(route.label),
+                  subtitle: Text(
+                    '${route.stopsCount} stops · ${_routeTrips(route.id).length} live jeep${_routeTrips(route.id).length == 1 ? '' : 's'}',
+                  ),
+                  trailing: route.id == _selectedRouteId
+                      ? const Icon(
+                          Icons.check_circle,
+                          color: Color(0xFF0F6A5F),
+                        )
+                      : null,
+                  onTap: () => Navigator.of(context).pop(route.id),
+                ),
+                const Divider(),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+
+    if (!mounted || selectedRouteId == null) {
+      return;
+    }
+    _selectPassengerRoute(selectedRouteId);
+  }
+
+  void _selectPassengerRoute(String routeId) {
+    final nextRoute = _routeById(routeId);
+    setState(() {
+      _selectedRouteId = routeId;
+      _selectedTripId = _preferredTripIdForRoute(
+        _trips,
+        routeId,
+        anchor: _draftPickupPoint,
+      );
+      _draftPickupPoint = null;
+      _draftUnloadPoint = null;
+      _draftPickupLabel = null;
+      _draftUnloadLabel = null;
+      _mapSelectionMode = _PassengerMapSelectionMode.pickup;
+      _statusMessage = nextRoute == null
+          ? _statusMessage
+          : 'Map updated for ${nextRoute.label}. Pin your pickup point first.';
+    });
+
+    final center = _routeCenter(nextRoute);
+    if (center != null) {
+      _passengerMapController.move(center, 14);
+    }
+    _showMapPromptNotification(route: nextRoute, force: true);
+    _expandPassengerSheet();
+  }
+
+  String _mapPromptMessage(RouteSummaryModel? selectedRoute) {
+    if (selectedRoute == null) {
+      return 'Choose a route first so the live map can guide your pickup.';
+    }
+    if (_mapSelectionMode == _PassengerMapSelectionMode.pickup) {
+      return 'Place your pickup pin within 50m of your location.';
+    }
+    return 'Place your unload pin ahead on the route before you ride.';
+  }
+
+  void _dismissMapPromptNotification() {
+    _mapPromptOverlayTimer?.cancel();
+    _mapPromptOverlayTimer = null;
+    _mapPromptOverlayEntry?.remove();
+    _mapPromptOverlayEntry = null;
+  }
+
+  void _showMapPromptNotification({
+    RouteSummaryModel? route,
+    bool force = false,
+  }) {
+    if (!mounted) {
+      return;
+    }
+
+    final message = _mapPromptMessage(route);
+    if (!force && _lastMapPromptMessage == message) {
+      return;
+    }
+    _lastMapPromptMessage = message;
+
+    final overlay = Overlay.of(context, rootOverlay: true);
+    if (overlay == null) {
+      return;
+    }
+
+    _dismissMapPromptNotification();
+
+    _mapPromptOverlayEntry = OverlayEntry(
+      builder: (context) {
+        final topInset = MediaQuery.of(context).padding.top + 88;
+        return Positioned(
+          top: topInset,
+          left: 16,
+          right: 16,
+          child: IgnorePointer(
+            ignoring: false,
+            child: Material(
+              color: Colors.transparent,
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.10),
+                          blurRadius: 24,
+                          offset: const Offset(0, 12),
+                        ),
+                      ],
+                    ),
+                    child: InkWell(
+                      onTap: _dismissMapPromptNotification,
+                      borderRadius: BorderRadius.circular(24),
+                      child: Padding(
+                        padding: const EdgeInsets.all(18),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 42,
+                              height: 42,
+                              decoration: const BoxDecoration(
+                                color: Color(0xFFEAF5F2),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                _mapSelectionMode ==
+                                        _PassengerMapSelectionMode.pickup
+                                    ? Icons.info_outline_rounded
+                                    : Icons.flag_circle_outlined,
+                                color: const Color(0xFF0F6A5F),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                message,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyLarge
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      color: const Color(0xFF1F2B2A),
+                                    ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    overlay.insert(_mapPromptOverlayEntry!);
+    _mapPromptOverlayTimer = Timer(
+      const Duration(seconds: 3),
+      _dismissMapPromptNotification,
+    );
+  }
+
+  String _compactDistanceLabel(
+    double? meters, {
+    String fallback = 'Distance pending',
+  }) {
+    if (meters == null || meters.isNaN || !meters.isFinite) {
+      return fallback;
+    }
+    if (meters >= 1000) {
+      return '${(meters / 1000).toStringAsFixed(meters >= 10000 ? 0 : 1)} km';
+    }
+    return '${meters.round()} m';
+  }
+
+  String _compactDurationLabel(
+    double? seconds, {
+    String fallback = 'ETA pending',
+  }) {
+    if (seconds == null || seconds.isNaN || !seconds.isFinite) {
+      return fallback;
+    }
+    final minutes = (seconds / 60).round();
+    if (minutes < 60) {
+      return '$minutes min';
+    }
+    final hours = minutes ~/ 60;
+    final remainingMinutes = minutes % 60;
+    return remainingMinutes == 0
+        ? '$hours hr'
+        : '$hours hr $remainingMinutes min';
+  }
+
+  double? _distanceFromPassengerToTrip(TripSession? trip) {
+    if (trip == null) {
+      return null;
+    }
+    final anchor = _draftPickupPoint ??
+        _currentPassengerLocation ??
+        _routeCenter(_selectedRoute);
+    if (anchor == null) {
+      return null;
+    }
+    return _tripDistanceMeters(trip, anchor);
+  }
+
+  int? _availableSeats(TripSession? trip) {
+    final capacity = trip?.jeepneyCapacity;
+    final occupancy = trip?.occupancyCount;
+    if (capacity == null) {
+      return null;
+    }
+    return math.max(capacity - (occupancy ?? 0), 0);
+  }
+
+  String _availableSeatsLabel(TripSession? trip) {
+    final seats = _availableSeats(trip);
+    if (seats == null) {
+      return 'Capacity sync pending';
+    }
+    return '$seats seat${seats == 1 ? '' : 's'} available';
+  }
+
+  String _routeQuickMeta(RouteSummaryModel route) {
+    final liveCount = _routeTrips(route.id).length;
+    final eta = _compactDurationLabel(
+      route.durationSeconds,
+      fallback: '${route.stopsCount} stops',
+    );
+    return '$eta · $liveCount live jeep${liveCount == 1 ? '' : 's'}';
+  }
+
+  Widget _buildRouteSearchBar({
+    required RouteSummaryModel? selectedRoute,
+    required int liveTripCount,
+  }) {
+    return Material(
+      color: Colors.white.withValues(alpha: 0.95),
+      borderRadius: BorderRadius.circular(26),
+      child: InkWell(
+        onTap: () {
+          unawaited(_openRoutePicker());
+        },
+        borderRadius: BorderRadius.circular(26),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.search_rounded,
+                color: Color(0xFF0F6A5F),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      selectedRoute?.label ?? 'Where are you going?',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: selectedRoute == null
+                                ? const Color(0xFF7D8784)
+                                : const Color(0xFF1F2B2A),
+                          ),
+                    ),
+                    if (selectedRoute != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        '$liveTripCount live jeep${liveTripCount == 1 ? '' : 's'} on this route',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: const Color(0xFF67726E),
+                            ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Container(
+                width: 40,
+                height: 40,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFEAF5F2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  color: Color(0xFF0F6A5F),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSummaryChip({
+    required String label,
+    required String value,
+    required IconData icon,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF6F7F2),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: const BoxDecoration(
+              color: Color(0xFFEAF5F2),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, size: 18, color: const Color(0xFF0F6A5F)),
+          ),
+          const SizedBox(width: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                value,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+              Text(
+                label,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: const Color(0xFF67726E),
+                    ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSelectedRouteCard({
+    required RouteSummaryModel? selectedRoute,
+    required TripSession? selectedTrip,
+    required PickupRequestModel? selectedBooking,
+    required List<TripSession> routeTrips,
+  }) {
+    if (selectedRoute == null) {
+      return Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8F8F5),
+          borderRadius: BorderRadius.circular(28),
+        ),
+        child: const Text(
+          'Choose a route to unlock the pickup map, quick routes, and ride actions.',
+        ),
+      );
+    }
+
+    final nearestDistance = _distanceFromPassengerToTrip(selectedTrip);
+    final routeMeta = _compactDurationLabel(
+      selectedRoute.durationSeconds,
+      fallback: _compactDistanceLabel(
+        selectedRoute.distanceMeters,
+        fallback: 'Route ready',
+      ),
+    );
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 74,
+                height: 74,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF5F2),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Icon(
+                  Icons.directions_bus_filled_rounded,
+                  size: 40,
+                  color: Color(0xFF0F6A5F),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            selectedRoute.name,
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleLarge
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: routeTrips.isEmpty
+                                ? const Color(0xFFF0F2ED)
+                                : const Color(0xFFFFE083),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            routeTrips.isEmpty ? 'WAITING' : 'FASTEST',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF5A4A14),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${selectedRoute.code} · ${selectedRoute.direction}',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                            color: const Color(0xFF0F6A5F),
+                            fontWeight: FontWeight.w800,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      selectedTrip == null
+                          ? 'No live jeepney is broadcasting on this route yet.'
+                          : '${_compactDistanceLabel(nearestDistance)} away · ${selectedTrip.jeepneyLabel}',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: const Color(0xFF4E5A56),
+                          ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      selectedTrip?.driverName?.isNotEmpty == true
+                          ? 'Driver ${selectedTrip!.driverName}'
+                          : routeMeta,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: const Color(0xFF67726E),
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF6F7F2),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Route est.',
+                        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                              color: const Color(0xFF8A928F),
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        routeMeta,
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF6F7F2),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Seats available',
+                        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                              color: const Color(0xFF8A928F),
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _availableSeatsLabel(selectedTrip),
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (selectedBooking != null) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFDF7E8),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: const Color(0xFFFFE1A6)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.place_outlined,
+                    color: Color(0xFFE29B2D),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '${selectedBooking.stopRef ?? 'Pickup saved'} to ${selectedBooking.destinationStopRef ?? 'Unload saved'}',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                  ),
+                  StatusBadge(status: selectedBooking.status),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRideSnapshotCard(RideSessionModel? displayRide) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F8F5),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFFE8E9E3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          PassengerSectionHeading(
+            title: 'Ride snapshot',
+            actionLabel: displayRide == null ? null : 'DETAILS',
+            onActionPressed: _expandPassengerSheet,
+          ),
+          const SizedBox(height: 10),
+          if (displayRide == null)
+            const Text(
+              'No verified ride session yet. Book a route, board, and your live ride details will appear here.',
+            )
+          else ...[
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                StatusBadge(status: displayRide.status),
+                if (displayRide.canSendStopAlert == true)
+                  const StatusBadge(status: 'para enabled'),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(_rideStatusMessage(displayRide)),
+            const SizedBox(height: 12),
+            _DetailRow(
+              label: 'Ride',
+              value: ParagoFormat.shortId(displayRide.id),
+            ),
+            _DetailRow(
+              label: 'Boarded',
+              value: ParagoFormat.dateTime(displayRide.boardedAt),
+            ),
+            _DetailRow(
+              label: 'Destination',
+              value: displayRide.destinationStopRef ?? 'Not saved',
+            ),
+            if (displayRide.endedAt != null)
+              _DetailRow(
+                label: 'Dropped off',
+                value: ParagoFormat.dateTime(displayRide.endedAt),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPassengerBottomSheet({
+    required List<RouteSummaryModel> quickRoutes,
+    required RouteSummaryModel? selectedRoute,
+    required TripSession? selectedTrip,
+    required RideSessionModel? activeRide,
+    required RideSessionModel? displayRide,
+    required PickupRequestModel? selectedBooking,
+    required List<TripSession> routeTrips,
+    required List<PickupRequestModel> recentRequests,
+    required int pendingCount,
+    required int onboardCount,
+    required int unreadCount,
+  }) {
+    return NotificationListener<DraggableScrollableNotification>(
+      onNotification: (notification) {
+        final shouldCollapse = notification.extent <= (_sheetCollapsedSize + 0.01);
+        if (shouldCollapse != _passengerSheetCollapsed && mounted) {
+          setState(() => _passengerSheetCollapsed = shouldCollapse);
+        }
+        return false;
+      },
+      child: DraggableScrollableSheet(
+        controller: _sheetController,
+        initialChildSize:
+            _passengerSheetCollapsed ? _sheetCollapsedSize : _sheetPeekSize,
+        minChildSize: _sheetCollapsedSize,
+        maxChildSize: _sheetExpandedSize,
+        snap: true,
+        snapSizes: const [_sheetCollapsedSize, _sheetPeekSize],
+        builder: (context, scrollController) {
+          return Container(
+            decoration: const BoxDecoration(
+              color: Color(0xFFFFFEFB),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(34)),
+            ),
+            child: RefreshIndicator(
+              onRefresh: _load,
+              child: CustomScrollView(
+                controller: scrollController,
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        18,
+                        12,
+                        18,
+                        24 + MediaQuery.of(context).padding.bottom,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Align(
+                                  child: Container(
+                                    width: 58,
+                                    height: 6,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFD9DDD7),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              IconButton(
+                                onPressed: _togglePassengerSheet,
+                                icon: Icon(
+                                  _passengerSheetCollapsed
+                                      ? Icons.keyboard_arrow_up_rounded
+                                      : Icons.keyboard_arrow_down_rounded,
+                                  color: const Color(0xFF0F6A5F),
+                                ),
+                                tooltip: _passengerSheetCollapsed
+                                    ? 'Show panel'
+                                    : 'Hide panel',
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          if (_passengerSheetCollapsed) ...[
+                            Center(
+                              child: Text(
+                                'Swipe up or tap the arrow to show the panel',
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                      color: const Color(0xFF67726E),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                          ] else ...[
+                            const SizedBox(height: 8),
+                        if (_statusMessage != null) ...[
+                          _InfoBanner(message: _statusMessage!),
+                          const SizedBox(height: 16),
+                        ],
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: [
+                            _buildSummaryChip(
+                              label: 'Live jeeps',
+                              value: '${routeTrips.length}',
+                              icon: Icons.directions_bus_filled_outlined,
+                            ),
+                            _buildSummaryChip(
+                              label: 'Bookings',
+                              value: '$pendingCount',
+                              icon: Icons.event_seat_outlined,
+                            ),
+                            _buildSummaryChip(
+                              label: 'Onboard',
+                              value: '$onboardCount',
+                              icon: Icons.pin_drop_outlined,
+                            ),
+                            _buildSummaryChip(
+                              label: 'Alerts',
+                              value: '$unreadCount',
+                              icon: Icons.notifications_active_outlined,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+                        _buildSelectedRouteCard(
+                          selectedRoute: selectedRoute,
+                          selectedTrip: selectedTrip,
+                          selectedBooking: selectedBooking,
+                          routeTrips: routeTrips,
+                        ),
+                        const SizedBox(height: 16),
+                        PassengerPrimaryButton(
+                          label: 'Request pickup',
+                          icon: Icons.near_me_rounded,
+                          onPressed: _loading ? null : _sendPickup,
+                        ),
+                        const SizedBox(height: 22),
+                        PassengerSectionHeading(
+                          title: 'Quick routes',
+                          actionLabel: 'SEE ALL',
+                          onActionPressed: () {
+                            unawaited(_openRoutePicker());
+                          },
+                        ),
+                        const SizedBox(height: 10),
+                        if (quickRoutes.isEmpty)
+                          Container(
+                            padding: const EdgeInsets.all(18),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF8F8F5),
+                              borderRadius: BorderRadius.circular(24),
+                            ),
+                            child: const Text(
+                              'Quick routes will appear here once route data is available.',
+                            ),
+                          )
+                        else
+                          GridView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: quickRoutes.length,
+                            gridDelegate:
+                                const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 2,
+                              crossAxisSpacing: 12,
+                              mainAxisSpacing: 12,
+                              childAspectRatio: 1.02,
+                            ),
+                            itemBuilder: (context, index) {
+                              final route = quickRoutes[index];
+                              final colors = <Color>[
+                                const Color(0xFF0F6A5F),
+                                const Color(0xFF2157A5),
+                                const Color(0xFFE29B2D),
+                                const Color(0xFF8C5E12),
+                              ];
+                              final icons = <IconData>[
+                                Icons.home_rounded,
+                                Icons.work_rounded,
+                                Icons.route_rounded,
+                                Icons.place_rounded,
+                              ];
+                              return PassengerQuickRouteCard(
+                                title: route.name,
+                                subtitle: route.code,
+                                meta: _routeQuickMeta(route),
+                                icon: icons[index % icons.length],
+                                color: colors[index % colors.length],
+                                selected: route.id == selectedRoute?.id,
+                                onTap: () => _selectPassengerRoute(route.id),
+                              );
+                            },
+                          ),
+                        const SizedBox(height: 22),
+                        PassengerSectionHeading(title: 'Ride actions'),
+                        const SizedBox(height: 10),
+                        PassengerSecondaryActionCard(
+                          icon: Icons.fact_check_outlined,
+                          title: 'I boarded',
+                          subtitle:
+                              'Validate boarding using your current booking.',
+                          color: const Color(0xFF2157A5),
+                          enabled: !_loading,
+                          onTap: _loading ? null : _board,
+                        ),
+                        const SizedBox(height: 12),
+                        PassengerSecondaryActionCard(
+                          icon: Icons.notifications_active_outlined,
+                          title: 'Send para alert',
+                          subtitle:
+                              'Available only for verified onboard passengers.',
+                          color: const Color(0xFFE29B2D),
+                          enabled:
+                              !_loading && activeRide?.status == 'onboard',
+                          onTap: _loading || activeRide?.status != 'onboard'
+                              ? null
+                              : _sendPara,
+                        ),
+                        const SizedBox(height: 12),
+                        PassengerSecondaryActionCard(
+                          icon: Icons.exit_to_app_outlined,
+                          title: 'I unloaded',
+                          subtitle:
+                              'Close your ride manually when you get off.',
+                          color: const Color(0xFF0F6A5F),
+                          enabled:
+                              !_loading && activeRide?.status == 'onboard',
+                          onTap: _loading || activeRide?.status != 'onboard'
+                              ? null
+                              : _markUnloaded,
+                        ),
+                        if (_loading) ...[
+                          const SizedBox(height: 14),
+                          const LinearProgressIndicator(),
+                        ],
+                        const SizedBox(height: 22),
+                        _buildRideSnapshotCard(displayRide),
+                        const SizedBox(height: 22),
+                        PassengerSectionHeading(title: 'Recent trips'),
+                        const SizedBox(height: 10),
+                        if (recentRequests.isEmpty)
+                          Container(
+                            padding: const EdgeInsets.all(18),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF8F8F5),
+                              borderRadius: BorderRadius.circular(24),
+                            ),
+                            child: const Text(
+                              'Your recent bookings and ride history will show up here.',
+                            ),
+                          )
+                        else
+                          for (final request in recentRequests.take(3)) ...[
+                            PassengerActivityTile(
+                              icon: Icons.history_rounded,
+                              title: request.destinationStopRef ??
+                                  request.stopRef ??
+                                  'Recent booking',
+                              subtitle:
+                                  '${_bookingStateText(request)} · ${ParagoFormat.relative(request.createdAt)}',
+                              trailing: _canCancelRequest(request)
+                                  ? TextButton(
+                                      onPressed: _loading
+                                          ? null
+                                          : () => _cancelRequest(request.id),
+                                      child: const Text('Cancel'),
+                                    )
+                                  : StatusBadge(status: request.status),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
+                        if (_notifications.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          PassengerSectionHeading(
+                            title: 'Alerts',
+                            actionLabel: unreadCount == 0 ? null : 'MARK ALL',
+                            onActionPressed: unreadCount == 0
+                                ? null
+                                : () {
+                                    unawaited(_markAllRead());
+                                  },
+                          ),
+                          const SizedBox(height: 10),
+                          for (final notification in _notifications.take(2)) ...[
+                            PassengerActivityTile(
+                              icon: notification.isRead
+                                  ? Icons.mark_email_read_outlined
+                                  : Icons.notifications_active_outlined,
+                              title: notification.title,
+                              subtitle:
+                                  '${notification.body} · ${ParagoFormat.relative(notification.createdAt)}',
+                              trailing: Icon(
+                                notification.isRead
+                                    ? Icons.done_all_rounded
+                                    : Icons.circle,
+                                size: notification.isRead ? 20 : 10,
+                                color: notification.isRead
+                                    ? const Color(0xFF95A09B)
+                                    : const Color(0xFF0F6A5F),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
+                        ],
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final session = context.read<SessionController>();
@@ -1678,6 +3107,161 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final routeTrips = selectedRoute == null
         ? const <TripSession>[]
         : _routeTrips(selectedRoute.id);
+    final quickRoutes = (availableRoutes.isEmpty ? _routes : availableRoutes)
+        .take(4)
+        .toList(growable: false);
+    final recentRequests = List<PickupRequestModel>.from(_requests)
+      ..sort((a, b) => (b.createdAt ?? '').compareTo(a.createdAt ?? ''));
+    final showDashboardRedesign = DateTime.now().year >= 2024;
+
+    if (showDashboardRedesign) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFEAF1ED),
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: _buildPassengerMapSurface(
+                selectedRoute: selectedRoute,
+                selectedTrip: selectedTrip,
+                routeTrips: routeTrips,
+              ),
+            ),
+            Positioned.fill(
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.black.withValues(alpha: 0.04),
+                        Colors.transparent,
+                        const Color(0xFF17312C).withValues(alpha: 0.28),
+                      ],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      stops: const [0.0, 0.38, 1.0],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    PassengerDashboardTopBar(
+                      unreadCount: unreadCount,
+                      onMenuPressed: _expandPassengerSheet,
+                      onRefreshPressed: () {
+                        _showMapPromptNotification(route: selectedRoute);
+                        unawaited(_load());
+                      },
+                      onAccountSelected: (action) {
+                        unawaited(_handleDashboardAction(session, action));
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    _buildRouteSearchBar(
+                      selectedRoute: selectedRoute,
+                      liveTripCount: routeTrips.length,
+                    ),
+                    const SizedBox(height: 12),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          PassengerMapControlChip(
+                            label: 'Pickup',
+                            icon: Icons.person_pin_circle_outlined,
+                            selected: _mapSelectionMode ==
+                                _PassengerMapSelectionMode.pickup,
+                            onTap: () {
+                              setState(() {
+                                _mapSelectionMode =
+                                    _PassengerMapSelectionMode.pickup;
+                              });
+                              _showMapPromptNotification(
+                                route: selectedRoute,
+                                force: true,
+                              );
+                            },
+                          ),
+                          const SizedBox(width: 10),
+                          PassengerMapControlChip(
+                            label: 'Unload',
+                            icon: Icons.flag_circle_outlined,
+                            selected: _mapSelectionMode ==
+                                _PassengerMapSelectionMode.unload,
+                            onTap: _draftPickupPoint == null
+                                ? null
+                                : () {
+                                    setState(() {
+                                      _mapSelectionMode =
+                                          _PassengerMapSelectionMode.unload;
+                                    });
+                                    _showMapPromptNotification(
+                                      route: selectedRoute,
+                                      force: true,
+                                    );
+                                  },
+                          ),
+                          const SizedBox(width: 10),
+                          PassengerMapControlChip(
+                            label: _locatingPassenger
+                                ? 'Locating'
+                                : 'Refresh location',
+                            icon: Icons.my_location_rounded,
+                            selected: false,
+                            onTap: _locatingPassenger
+                                ? null
+                                : () => _ensureCurrentPassengerLocation(
+                                      forceRefresh: true,
+                                    ),
+                          ),
+                          const SizedBox(width: 10),
+                          PassengerMapControlChip(
+                            label: 'Clear pins',
+                            icon: Icons.layers_clear_outlined,
+                            selected: false,
+                            onTap: _draftPickupPoint == null &&
+                                    _draftUnloadPoint == null
+                                ? null
+                                : () {
+                                    setState(() {
+                                      _draftPickupPoint = null;
+                                      _draftUnloadPoint = null;
+                                      _draftPickupLabel = null;
+                                      _draftUnloadLabel = null;
+                                      _mapSelectionMode =
+                                          _PassengerMapSelectionMode.pickup;
+                                    });
+                                  },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            _buildPassengerBottomSheet(
+              quickRoutes: quickRoutes,
+              selectedRoute: selectedRoute,
+              selectedTrip: selectedTrip,
+              activeRide: activeRide,
+              displayRide: displayRide,
+              selectedBooking: selectedBooking,
+              routeTrips: routeTrips,
+              recentRequests: recentRequests,
+              pendingCount: pendingCount,
+              onboardCount: onboardCount,
+              unreadCount: unreadCount,
+            ),
+          ],
+        ),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -1723,7 +3307,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                       value: _trips.length.toString(),
                       icon: Icons.directions_bus_filled_outlined,
                       accent: const Color(0xFF0F6A5F),
-                      caption: 'Jeepneys currently broadcasting on active trips',
+                      caption:
+                          'Jeepneys currently broadcasting on active trips',
                     ),
                     MetricCard(
                       label: 'Active bookings',
@@ -1854,15 +3439,16 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                             ),
                             _DetailRow(
                               label: 'Driver',
-                              value: selectedTrip?.driverName?.isNotEmpty == true
-                                  ? selectedTrip!.driverName!
-                                  : 'Not available',
+                              value:
+                                  selectedTrip?.driverName?.isNotEmpty == true
+                                      ? selectedTrip!.driverName!
+                                      : 'Not available',
                             ),
                             if (selectedTrip?.startedAt != null)
                               _DetailRow(
                                 label: 'Started',
-                                value:
-                                    ParagoFormat.dateTime(selectedTrip!.startedAt),
+                                value: ParagoFormat.dateTime(
+                                    selectedTrip!.startedAt),
                               ),
                           ],
                         ),
@@ -1968,6 +3554,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                           : _sendPara,
                       highlight: const Color(0xFFE29B2D),
                     ),
+                    const SizedBox(height: 12),
+                    _PassengerActionButton(
+                      icon: Icons.exit_to_app_outlined,
+                      title: 'I unloaded',
+                      subtitle:
+                          'Manually close your ride after you get off the jeepney',
+                      onPressed: _loading || activeRide?.status != 'onboard'
+                          ? null
+                          : _markUnloaded,
+                      highlight: const Color(0xFF0F6A5F),
+                    ),
                     if (_loading) ...[
                       const SizedBox(height: 16),
                       const LinearProgressIndicator(),
@@ -2013,7 +3610,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                       ),
                       _DetailRow(
                         label: 'Pickup request',
-                        value: ParagoFormat.shortId(displayRide.pickupRequestId),
+                        value:
+                            ParagoFormat.shortId(displayRide.pickupRequestId),
                       ),
                       _DetailRow(
                         label: 'Unload destination',
@@ -2162,14 +3760,10 @@ class _PassengerInput {
   const _PassengerInput({
     required this.stopRef,
     this.note,
-    this.lat,
-    this.lng,
   });
 
   final String stopRef;
   final String? note;
-  final double? lat;
-  final double? lng;
 }
 
 class _PassengerBookingDetails {

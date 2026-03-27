@@ -1,6 +1,5 @@
 const express = require('express');
 const RideSession = require('../models/rideSession');
-const Passenger = require('../models/passenger');
 const asyncHandler = require('../utils/asyncHandler');
 const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
@@ -9,6 +8,7 @@ const { ok } = require('../utils/response');
 const { PASSENGER } = require('../constants/roles');
 const { validateBoardingAttempt } = require('../services/boarding.service');
 const { ensureObjectId, ensureLatLng } = require('../utils/validators');
+const { requireCurrentPassenger } = require('../services/routeContext.service');
 
 const router = express.Router();
 
@@ -17,8 +17,7 @@ router.post(
   authenticate,
   authorize(PASSENGER),
   asyncHandler(async (req, res) => {
-    const passenger = await Passenger.findOne({ userId: req.user._id });
-    if (!passenger) throw new ApiError(404, 'Passenger profile missing');
+    const passenger = await requireCurrentPassenger(req.user);
 
     const body = req.body || {};
     if (!body.tripSessionId || !body.pickupRequestId) {
@@ -58,8 +57,7 @@ router.get(
   authenticate,
   authorize(PASSENGER),
   asyncHandler(async (req, res) => {
-    const passenger = await Passenger.findOne({ userId: req.user._id });
-    if (!passenger) throw new ApiError(404, 'Passenger profile missing');
+    const passenger = await requireCurrentPassenger(req.user);
     const sessions = await RideSession.find({ passengerId: passenger._id }).sort({ updatedAt: -1 });
     return ok(res, sessions, 'Passenger ride sessions');
   })

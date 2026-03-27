@@ -22,8 +22,8 @@ class ActionFeedback {
         context: context,
         barrierDismissible: false,
         useRootNavigator: true,
-        builder: (dialogContext) => WillPopScope(
-          onWillPop: () async => false,
+        builder: (dialogContext) => PopScope(
+          canPop: false,
           child: AlertDialog(
             content: Row(
               children: [

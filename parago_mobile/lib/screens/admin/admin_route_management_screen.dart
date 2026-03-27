@@ -73,6 +73,7 @@ class _AdminRouteManagementScreenState
     );
 
     if (confirmed != true) return;
+    if (!mounted) return;
 
     final session = context.read<SessionController>();
     final routeService = RouteService(session.apiClient);

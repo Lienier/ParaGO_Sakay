@@ -39,7 +39,8 @@ class DriverHomeScreen extends StatefulWidget {
   State<DriverHomeScreen> createState() => _DriverHomeScreenState();
 }
 
-class _DriverHomeScreenState extends State<DriverHomeScreen> {
+class _DriverHomeScreenState extends State<DriverHomeScreen>
+    with WidgetsBindingObserver {
   static const _pickupStatuses = {'pending', 'acknowledged'};
   static const _activeAlertStatuses = {'sent', 'seen'};
 
@@ -54,17 +55,23 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   String? _assignedRouteId;
   String? _focusedTripId;
   int _tabIndex = 0;
-  bool _isOnline = true;
+  bool _isOnline = false;
+  bool _hasInternet = true;
   bool _loading = false;
   String? _statusMessage;
+  String _availabilityNote = 'Checking driver availability...';
   LatLng? _vehicleLocation;
   Timer? _vehicleLocationTimer;
   Timer? _liveRefreshTimer;
+  Timer? _availabilityTimer;
   StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
   bool _locationPluginUnavailable = false;
   bool _locationLoopActive = true;
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
+  bool _availabilitySyncInFlight = false;
+  bool? _lastPublishedOnline;
+  AppLifecycleState? _appLifecycleState;
   int _loadGeneration = 0;
   Set<String> _knownNotificationIds = <String>{};
   Set<String> _knownActiveStopAlertIds = <String>{};
@@ -82,29 +89,253 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      _connectRealtimeSocket();
       await _load();
       if (mounted) {
         _startVehicleLocationHeartbeat();
+        unawaited(
+          _refreshAutomaticAvailability(
+            probeNetwork: false,
+            forcePush: true,
+          ),
+        );
       }
     });
     _startLiveRefreshLoop();
+    _startAutomaticAvailabilityLoop();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _vehicleLocationTimer?.cancel();
     _liveRefreshTimer?.cancel();
+    _availabilityTimer?.cancel();
     _realtimeNotificationSubscription?.cancel();
     _realtimeSocketService.dispose();
     super.dispose();
   }
 
-  void _connectRealtimeSocket() {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appLifecycleState = state;
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshAutomaticAvailability(forcePush: true));
+      return;
+    }
+
+    if (state == AppLifecycleState.inactive) {
+      unawaited(
+        _refreshAutomaticAvailability(
+          probeNetwork: false,
+          forcePush: true,
+        ),
+      );
+      return;
+    }
+
+    _realtimeSocketService.disconnect();
+    unawaited(
+      _refreshAutomaticAvailability(
+        probeNetwork: false,
+        forcePush: true,
+      ),
+    );
+  }
+
+  bool get _isAppForeground {
+    switch (_appLifecycleState) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        return false;
+      case AppLifecycleState.resumed:
+      case AppLifecycleState.inactive:
+      case null:
+        return true;
+    }
+  }
+
+  bool _shouldBeOnline(SessionController session, {bool? hasInternet}) {
+    return session.isAuthenticated &&
+        _isAppForeground &&
+        (hasInternet ?? _hasInternet);
+  }
+
+  String _availabilityNoteFor(
+    SessionController session, {
+    required bool hasInternet,
+    required bool isOnline,
+  }) {
+    if (!session.isAuthenticated) {
+      return 'Driver stays offline until the account is signed in.';
+    }
+    if (!_isAppForeground) {
+      return 'Driver goes offline automatically while the app is in the background.';
+    }
+    if (!hasInternet) {
+      return 'Driver is offline because the device cannot reach the ParaGO server.';
+    }
+    if (isOnline) {
+      return 'Driver is online automatically while signed in, in-app, and connected.';
+    }
+    return 'Checking driver availability...';
+  }
+
+  void _applyAutomaticAvailabilityState(
+    SessionController session, {
+    bool? hasInternet,
+  }) {
+    if (!mounted) {
+      return;
+    }
+
+    final nextHasInternet = hasInternet ?? _hasInternet;
+    final nextOnline = _shouldBeOnline(session, hasInternet: nextHasInternet);
+    final nextNote = _availabilityNoteFor(
+      session,
+      hasInternet: nextHasInternet,
+      isOnline: nextOnline,
+    );
+
+    if (_hasInternet == nextHasInternet &&
+        _isOnline == nextOnline &&
+        _availabilityNote == nextNote) {
+      return;
+    }
+
+    setState(() {
+      _hasInternet = nextHasInternet;
+      _isOnline = nextOnline;
+      _availabilityNote = nextNote;
+    });
+  }
+
+  bool _looksLikeConnectivityIssue(Object error) {
+    final message = ActionFeedback.messageOf(error).toLowerCase();
+    return message.contains('network') ||
+        message.contains('connection') ||
+        message.contains('socket') ||
+        message.contains('timed out') ||
+        message.contains('timeout') ||
+        message.contains('host lookup') ||
+        message.contains('failed host lookup') ||
+        message.contains('xmlhttprequest') ||
+        message.contains('fetch');
+  }
+
+  Future<bool> _probeServerReachability(SessionController session) async {
+    try {
+      await DriverService(session.apiClient).pingServer();
+      return true;
+    } catch (error) {
+      if (_looksLikeConnectivityIssue(error)) {
+        return false;
+      }
+      return true;
+    }
+  }
+
+  Future<void> _syncAutomaticAvailability(
+    SessionController session, {
+    bool forcePush = false,
+  }) async {
+    final targetOnline = _shouldBeOnline(session);
+    if (_availabilitySyncInFlight) {
+      return;
+    }
+    if (!forcePush && _lastPublishedOnline == targetOnline) {
+      return;
+    }
+
+    _availabilitySyncInFlight = true;
+    try {
+      await DriverService(session.apiClient).setStatus(active: targetOnline);
+      _lastPublishedOnline = targetOnline;
+    } catch (error) {
+      if (_looksLikeConnectivityIssue(error)) {
+        _applyAutomaticAvailabilityState(session, hasInternet: false);
+        _syncRealtimeSocket(session);
+        return;
+      }
+
+      if (mounted) {
+        setState(() => _statusMessage = ActionFeedback.messageOf(error));
+      }
+    } finally {
+      _availabilitySyncInFlight = false;
+    }
+  }
+
+  Future<void> _refreshAutomaticAvailability({
+    bool probeNetwork = true,
+    bool forcePush = false,
+  }) async {
+    if (!mounted) {
+      return;
+    }
+
     final session = context.read<SessionController>();
+    final previousHasInternet = _hasInternet;
+    if (!session.isAuthenticated) {
+      _applyAutomaticAvailabilityState(session);
+      _syncRealtimeSocket(session);
+      return;
+    }
+
+    if (probeNetwork && _isAppForeground) {
+      final hasInternet = await _probeServerReachability(session);
+      if (!mounted) {
+        return;
+      }
+      _applyAutomaticAvailabilityState(session, hasInternet: hasInternet);
+    } else {
+      _applyAutomaticAvailabilityState(session);
+    }
+
+    _syncRealtimeSocket(
+      session,
+      forceReconnect: forcePush || (!previousHasInternet && _hasInternet),
+    );
+    await _syncAutomaticAvailability(session, forcePush: forcePush);
+  }
+
+  void _startAutomaticAvailabilityLoop() {
+    _availabilityTimer?.cancel();
+    _availabilityTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(_refreshAutomaticAvailability());
+    });
+  }
+
+  Future<void> _logoutDriver() async {
+    final session = context.read<SessionController>();
+    _realtimeSocketService.disconnect();
+    try {
+      await DriverService(session.apiClient).setStatus(active: false);
+      _lastPublishedOnline = false;
+    } catch (_) {
+      // Keep logout resilient even when the status endpoint cannot be reached.
+    }
+    await session.logout();
+  }
+
+  void _syncRealtimeSocket(
+    SessionController session, {
+    bool forceReconnect = false,
+  }) {
     final token = session.token?.trim() ?? '';
-    if (token.isEmpty) {
+    final shouldConnect = _shouldBeOnline(session);
+    if (!shouldConnect || token.isEmpty) {
+      _realtimeSocketService.disconnect();
+      return;
+    }
+    if (!forceReconnect &&
+        (_realtimeSocketService.isConnected ||
+            _realtimeSocketService.hasActiveSocket)) {
       return;
     }
 
@@ -131,8 +362,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       return;
     }
 
-    final alreadyKnown =
-        _knownNotificationIds.contains(notification.id) ||
+    final alreadyKnown = _knownNotificationIds.contains(notification.id) ||
         _notifications.any((item) => item.id == notification.id);
     final applied = _applyRealtimeDriverNotification(notification);
     _knownNotificationIds = {..._knownNotificationIds, notification.id};
@@ -194,7 +424,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           ? const <TripSession>[]
           : trips.where((trip) => trip.id == nextFocus).toList(growable: false);
       final initialRouteIds = <String>{
-        if (assignedRouteId != null && assignedRouteId.isNotEmpty) assignedRouteId,
+        if (assignedRouteId != null && assignedRouteId.isNotEmpty)
+          assignedRouteId,
         for (final trip in focusedTrips) trip.routeId,
       };
       final cachedRoutePreviewPoints = await _loadRoutePreviewPoints(
@@ -218,6 +449,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         _assignedRouteId = assignedRouteId;
         if (driverStatus == 'active' || driverStatus == 'inactive') {
           _isOnline = driverStatus == 'active';
+          _lastPublishedOnline = _isOnline;
         }
         _tripRequests = focusedHydration.requestsByTrip;
         _tripAlerts = focusedHydration.alertsByTrip;
@@ -229,6 +461,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             trip.id: _manualOnboardAdjustments[trip.id] ?? 0,
         };
       });
+      _applyAutomaticAvailabilityState(session, hasInternet: true);
+      unawaited(_syncAutomaticAvailability(session));
       _handleRealtimeDriverUpdates(
         notifications: notifications,
         alertsByTrip: focusedHydration.alertsByTrip,
@@ -250,6 +484,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         );
       }
     } catch (error) {
+      if (_looksLikeConnectivityIssue(error)) {
+        _applyAutomaticAvailabilityState(session, hasInternet: false);
+      }
       setState(() => _statusMessage = error.toString());
     } finally {
       if (mounted && !silent) setState(() => _loading = false);
@@ -358,11 +595,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     required StopAlertService stopAlertService,
     required RideSessionService rideSessionService,
   }) async {
-    final remainingTrips = trips
-        .where((trip) => trip.id != focusedTripId)
-        .toList(growable: false);
+    final remainingTrips =
+        trips.where((trip) => trip.id != focusedTripId).toList(growable: false);
     final hydratedRouteIds = <String>{
-      if (assignedRouteId != null && assignedRouteId.isNotEmpty) assignedRouteId,
+      if (assignedRouteId != null && assignedRouteId.isNotEmpty)
+        assignedRouteId,
       if (focusedTripId != null && focusedTripId.isNotEmpty)
         ...trips
             .where((trip) => trip.id == focusedTripId)
@@ -545,8 +782,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     NotificationModel notification,
   ) {
     final next = List<NotificationModel>.from(notifications);
-    final existingIndex =
-        next.indexWhere((item) => item.id == notification.id);
+    final existingIndex = next.indexWhere((item) => item.id == notification.id);
     if (existingIndex >= 0) {
       next[existingIndex] = notification;
       return next;
@@ -709,8 +945,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final session = context.read<SessionController>();
     final tripService = TripService(session.apiClient);
     await _runDriverAction(
-      loadingMessage:
-          accept ? 'Reopening pickup requests...' : 'Pausing pickup requests...',
+      loadingMessage: accept
+          ? 'Reopening pickup requests...'
+          : 'Pausing pickup requests...',
       successMessage:
           accept ? 'Pickup requests reopened.' : 'Pickup requests paused.',
       action: () => tripService.setTripAvailability(tripId, accept),
@@ -755,37 +992,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       successMessage:
           'Passenger unloaded near ${alert.stopRef}. Ride session closed.',
       action: () => rideService.completeRideSession(alert.rideSessionId),
-    );
-  }
-
-  void _setOnline(bool value) async {
-    final previous = _isOnline;
-    final session = context.read<SessionController>();
-    final driverService = DriverService(session.apiClient);
-    if (!mounted) return;
-    await ActionFeedback.run<void>(
-      context: context,
-      loadingMessage: 'Saving availability...',
-      successMessage: value
-          ? 'Driver is online and can receive route ride alerts.'
-          : 'Driver is offline and hidden from new route ride alerts.',
-      action: () => driverService.setStatus(active: value),
-      onSuccess: (_) async {
-        if (!mounted) return;
-        setState(() {
-          _isOnline = value;
-          _statusMessage = value
-              ? 'Driver is online and can receive route ride alerts.'
-              : 'Driver is offline and hidden from new route ride alerts.';
-        });
-      },
-      onError: (error) async {
-        if (!mounted) return;
-        setState(() {
-          _isOnline = previous;
-          _statusMessage = ActionFeedback.messageOf(error);
-        });
-      },
     );
   }
 
@@ -880,6 +1086,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       final driverService = DriverService(session.apiClient);
       await driverService.updateLocation(
           lat: next.latitude, lng: next.longitude);
+      if (!_hasInternet) {
+        _applyAutomaticAvailabilityState(session, hasInternet: true);
+        unawaited(_syncAutomaticAvailability(session, forcePush: true));
+      }
       if (_statusMessage != null &&
           _statusMessage!.toLowerCase().contains('location')) {
         _setStatusMessage(null);
@@ -1020,7 +1230,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           ),
           IconButton(
             tooltip: 'Logout',
-            onPressed: () => session.logout(),
+            onPressed: _logoutDriver,
             icon: const Icon(Icons.logout),
           ),
         ],
@@ -1097,13 +1307,13 @@ class _DriverOverviewHeader extends StatelessWidget {
     required this.name,
     required this.routeLabel,
     required this.isOnline,
-    required this.onOnlineChanged,
+    required this.availabilityNote,
   });
 
   final String name;
   final String routeLabel;
   final bool isOnline;
-  final ValueChanged<bool> onOnlineChanged;
+  final String availabilityNote;
 
   @override
   Widget build(BuildContext context) {
@@ -1149,25 +1359,35 @@ class _DriverOverviewHeader extends StatelessWidget {
               child: Row(
                 children: [
                   Expanded(
-                    child: _OnlineToggleChip(
-                      label: 'Online',
-                      selected: isOnline,
-                      selectedBackground: const Color(0xFFD8F3E6),
-                      selectedForeground: const Color(0xFF13623E),
-                      onTap: () => onOnlineChanged(true),
+                    child: _DriverStatusChip(
+                      icon: Icons.autorenew_rounded,
+                      label: 'Automatic',
+                      selectedBackground: const Color(0xFFE2EDE7),
+                      selectedForeground: const Color(0xFF245245),
                     ),
                   ),
                   Expanded(
-                    child: _OnlineToggleChip(
-                      label: 'Offline',
-                      selected: !isOnline,
-                      selectedBackground: const Color(0xFFE9E2D4),
-                      selectedForeground: const Color(0xFF7A4E16),
-                      onTap: () => onOnlineChanged(false),
+                    child: _DriverStatusChip(
+                      icon: isOnline ? Icons.wifi_tethering : Icons.cloud_off,
+                      label: isOnline ? 'Online' : 'Offline',
+                      selectedBackground: isOnline
+                          ? const Color(0xFFD8F3E6)
+                          : const Color(0xFFE9E2D4),
+                      selectedForeground: isOnline
+                          ? const Color(0xFF13623E)
+                          : const Color(0xFF7A4E16),
                     ),
                   ),
                 ],
               ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              availabilityNote,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: scheme.outline,
+                    fontWeight: FontWeight.w600,
+                  ),
             ),
           ],
         ),
@@ -1176,45 +1396,45 @@ class _DriverOverviewHeader extends StatelessWidget {
   }
 }
 
-class _OnlineToggleChip extends StatelessWidget {
-  const _OnlineToggleChip({
+class _DriverStatusChip extends StatelessWidget {
+  const _DriverStatusChip({
+    required this.icon,
     required this.label,
-    required this.selected,
     required this.selectedBackground,
     required this.selectedForeground,
-    required this.onTap,
   });
 
+  final IconData icon;
   final String label;
-  final bool selected;
   final Color selectedBackground;
   final Color selectedForeground;
-  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: selectedBackground,
         borderRadius: BorderRadius.circular(999),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: selected ? selectedBackground : Colors.transparent,
-            borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            icon,
+            size: 18,
+            color: selectedForeground,
           ),
-          child: Text(
+          const SizedBox(width: 8),
+          Text(
             label,
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: selected
-                  ? selectedForeground
-                  : Theme.of(context).colorScheme.outline,
+              color: selectedForeground,
               fontWeight: FontWeight.w700,
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -1260,8 +1480,8 @@ class _DriveMapPanel extends StatelessWidget {
     required this.cameraTarget,
     required this.driverName,
     required this.statusMessage,
+    required this.availabilityNote,
     required this.isOnline,
-    required this.onOnlineChanged,
     required this.activePickupCount,
     required this.routeLabel,
     required this.displayedOnboard,
@@ -1283,8 +1503,8 @@ class _DriveMapPanel extends StatelessWidget {
   final LatLng cameraTarget;
   final String driverName;
   final String? statusMessage;
+  final String availabilityNote;
   final bool isOnline;
-  final ValueChanged<bool> onOnlineChanged;
   final int activePickupCount;
   final String routeLabel;
   final int displayedOnboard;
@@ -1342,7 +1562,7 @@ class _DriveMapPanel extends StatelessWidget {
                           ? 'Listening for route ride alerts'
                           : routeLabel,
                       isOnline: isOnline,
-                      onOnlineChanged: onOnlineChanged,
+                      availabilityNote: availabilityNote,
                     ),
                     if (statusMessage != null) ...[
                       const SizedBox(height: 12),

@@ -3,28 +3,49 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
+import '../core/config/app_config.dart';
+
 class RealtimeSocketService {
   final StreamController<Map<String, dynamic>> _notificationController =
       StreamController<Map<String, dynamic>>.broadcast();
 
   io.Socket? _socket;
+  String? _currentSocketBaseUrl;
+  String? _currentToken;
+  bool _networkFailureReported = false;
 
   Stream<Map<String, dynamic>> get notificationCreatedStream =>
       _notificationController.stream;
   bool get isConnected => _socket?.connected == true;
+  bool get hasActiveSocket => _socket != null;
 
   void connect({
     required String apiBaseUrl,
     required String token,
   }) {
+    if (!AppConfig.enableRealtime) {
+      debugPrint('Realtime socket disabled by PARAGO_ENABLE_REALTIME.');
+      disconnect();
+      return;
+    }
+
     final trimmedToken = token.trim();
     if (trimmedToken.isEmpty) {
       return;
     }
 
+    final socketBaseUrl = _socketBaseUrl(apiBaseUrl);
+    if (_socket != null &&
+        _currentSocketBaseUrl == socketBaseUrl &&
+        _currentToken == trimmedToken) {
+      return;
+    }
+
     disconnect();
 
-    final socketBaseUrl = _socketBaseUrl(apiBaseUrl);
+    _currentSocketBaseUrl = socketBaseUrl;
+    _currentToken = trimmedToken;
+    _networkFailureReported = false;
     debugPrint('Realtime socket target: $socketBaseUrl');
 
     final socket = io.io(
@@ -36,9 +57,9 @@ class RealtimeSocketService {
           .enableForceNew()
           .disableAutoConnect()
           .enableReconnection()
-          .setReconnectionAttempts(999999)
-          .setReconnectionDelay(500)
-          .setReconnectionDelayMax(5000)
+          .setReconnectionAttempts(6)
+          .setReconnectionDelay(1000)
+          .setReconnectionDelayMax(10000)
           .setTimeout(30000)
           .setQuery(<String, dynamic>{'token': trimmedToken})
           .setExtraHeaders(<String, dynamic>{
@@ -49,6 +70,7 @@ class RealtimeSocketService {
     );
 
     socket.onConnect((_) {
+      _networkFailureReported = false;
       debugPrint('Realtime socket connected.');
     });
     socket.onDisconnect((reason) {
@@ -58,19 +80,24 @@ class RealtimeSocketService {
       debugPrint('Realtime socket reconnected on attempt $attempt.');
     });
     socket.onReconnectAttempt((attempt) {
-      debugPrint('Realtime socket reconnect attempt $attempt.');
+      if (attempt == 1 || attempt % 3 == 0) {
+        debugPrint('Realtime socket reconnect attempt $attempt.');
+      }
     });
     socket.onReconnectError((error) {
       debugPrint('Realtime socket reconnect error: $error');
+      _stopRetryingOnNetworkError(socket, error, source: 'reconnect');
     });
     socket.onReconnectFailed((_) {
       debugPrint('Realtime socket reconnect failed.');
     });
     socket.onConnectError((error) {
       debugPrint('Realtime socket connect error: $error');
+      _stopRetryingOnNetworkError(socket, error, source: 'connect');
     });
     socket.onError((error) {
       debugPrint('Realtime socket error: $error');
+      _stopRetryingOnNetworkError(socket, error, source: 'generic');
     });
     socket.on('socket.ready', (payload) {
       debugPrint('Realtime socket ready: $payload');
@@ -89,6 +116,9 @@ class RealtimeSocketService {
   void disconnect() {
     final socket = _socket;
     _socket = null;
+    _currentSocketBaseUrl = null;
+    _currentToken = null;
+    _networkFailureReported = false;
     socket?.disconnect();
     socket?.dispose();
   }
@@ -125,5 +155,36 @@ class RealtimeSocketService {
 
     final explicitPort = uri.hasPort ? ':${uri.port}' : '';
     return '$scheme://$host$explicitPort';
+  }
+
+  void _stopRetryingOnNetworkError(
+    io.Socket socket,
+    Object error, {
+    required String source,
+  }) {
+    if (!identical(_socket, socket) || !_looksLikeConnectivityIssue(error)) {
+      return;
+    }
+
+    if (!_networkFailureReported) {
+      debugPrint(
+        'Realtime socket stopped after $source network failure. Waiting for an explicit reconnect.',
+      );
+      _networkFailureReported = true;
+    }
+    disconnect();
+  }
+
+  bool _looksLikeConnectivityIssue(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('failed host lookup') ||
+        message.contains('no address associated with hostname') ||
+        message.contains('socketexception') ||
+        message.contains('network') ||
+        message.contains('connection') ||
+        message.contains('timed out') ||
+        message.contains('timeout') ||
+        message.contains('xmlhttprequest') ||
+        message.contains('fetch');
   }
 }

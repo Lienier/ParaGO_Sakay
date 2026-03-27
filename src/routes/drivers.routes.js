@@ -11,6 +11,7 @@ const ApiError = require('../utils/apiError');
 const { ensureLatLng } = require('../utils/validators');
 const { hasOwn } = require('../utils/object');
 const validateObjectId = require('../middlewares/validateObjectId');
+const { requireCurrentDriver } = require('../services/routeContext.service');
 
 const router = express.Router();
 
@@ -19,42 +20,47 @@ router.get(
   authenticate,
   authorize(DRIVER),
   asyncHandler(async (req, res) => {
-    const profile = await Driver.findOne({ userId: req.user._id });
+    const profile = await requireCurrentDriver(req.user);
     return ok(res, profile, 'Driver profile');
   })
 );
 
-router.patch(
-  '/me/status',
-  authenticate,
-  authorize(DRIVER),
-  asyncHandler(async (req, res) => {
-    const status = String(req.body?.status || '').toLowerCase();
-    if (!['active', 'inactive'].includes(status)) {
-      throw new ApiError(400, 'status must be one of: active, inactive');
-    }
-    let profile = await Driver.findOneAndUpdate(
-      { userId: req.user._id },
-      { $set: { status } },
-      { new: true }
-    );
-    if (!profile) {
-      profile = await Driver.create({
-        userId: req.user._id,
-        status,
-      });
-    }
-    return ok(res, { status: profile.status }, 'Driver status updated');
-  })
-);
+const updateDriverStatus = async (req, res) => {
+  const status = String(req.body?.status || '').toLowerCase();
+  if (!['active', 'inactive'].includes(status)) {
+    throw new ApiError(400, 'status must be one of: active, inactive');
+  }
+  let profile = await Driver.findOneAndUpdate(
+    { userId: req.user._id },
+    { $set: { status } },
+    { new: true }
+  );
+  if (!profile) {
+    profile = await Driver.create({
+      userId: req.user._id,
+      status,
+    });
+  }
+  return ok(res, { status: profile.status }, 'Driver status updated');
+};
+
+for (const method of ['patch', 'post', 'put']) {
+  router[method](
+    '/me/status',
+    authenticate,
+    authorize(DRIVER),
+    asyncHandler(updateDriverStatus)
+  );
+}
 
 router.get(
   '/me/active-trips',
   authenticate,
   authorize(DRIVER),
   asyncHandler(async (req, res) => {
-    const driver = await Driver.findOne({ userId: req.user._id });
-    if (!driver) throw new ApiError(404, 'Driver record missing');
+    const driver = await requireCurrentDriver(req.user, {
+      notFoundMessage: 'Driver record missing',
+    });
     const trips = await TripSession.find({
       driverId: driver._id,
       status: { $in: ['active', 'scheduled'] },
@@ -95,8 +101,7 @@ const updateDriverJeepneyLocation = async (req, res) => {
   const body = req.body || {};
   ensureLatLng(body.lat, body.lng, 'location');
 
-  const driver = await Driver.findOne({ userId: req.user._id });
-  if (!driver) throw new ApiError(404, 'Driver profile missing');
+  const driver = await requireCurrentDriver(req.user);
 
   let jeepneyId = driver.assignedJeepneyId;
   if (!jeepneyId) {

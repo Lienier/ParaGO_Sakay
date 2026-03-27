@@ -13,6 +13,11 @@ const { createStopAlert } = require('../services/stopAlert.service');
 const { publishNotification } = require('../services/notificationPublisher');
 const { ensureObjectId, ensureLatLng } = require('../utils/validators');
 const { serializeStopAlert } = require('../utils/realtimePayloads');
+const {
+  requireCurrentPassenger,
+  requireTrip,
+  ensureDriverAssignedToTrip,
+} = require('../services/routeContext.service');
 
 const router = express.Router();
 
@@ -21,8 +26,7 @@ router.post(
   authenticate,
   authorize(PASSENGER),
   asyncHandler(async (req, res) => {
-    const passenger = await Passenger.findOne({ userId: req.user._id });
-    if (!passenger) throw new ApiError(404, 'Passenger profile missing');
+    const passenger = await requireCurrentPassenger(req.user);
     const body = req.body || {};
     if (!body.tripSessionId || !body.stopRef) {
       throw new ApiError(400, 'tripSessionId and stopRef are required');
@@ -69,13 +73,11 @@ router.get(
   authorize(DRIVER, ADMIN),
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.tripSessionId, 'tripSessionId');
-    const trip = await TripSession.findById(req.params.tripSessionId);
-    if (!trip) throw new ApiError(404, 'Trip not found');
+    const trip = await requireTrip(req.params.tripSessionId);
     if (req.user.role === DRIVER) {
-      const driver = await Driver.findOne({ userId: req.user._id });
-      if (!driver || String(driver._id) !== String(trip.driverId)) {
-        throw new ApiError(403, 'Not authorized for this trip');
-      }
+      await ensureDriverAssignedToTrip(req.user, trip, {
+        forbiddenMessage: 'Not authorized for this trip',
+      });
     }
     const alerts = await StopAlert.find({
       tripSessionId: req.params.tripSessionId,
@@ -92,17 +94,11 @@ router.patch(
     ensureObjectId(req.params.id, 'stop alert id');
     const alert = await StopAlert.findById(req.params.id);
     if (!alert) throw new ApiError(404, 'Stop alert not found');
-    const trip = await TripSession.findById(alert.tripSessionId);
-    if (!trip) throw new ApiError(404, 'Trip not found for this stop alert');
-    if (req.user.role === DRIVER) {
-      const driver = await Driver.findOne({ userId: req.user._id });
-      if (!driver || String(driver._id) !== String(trip.driverId)) {
-        throw new ApiError(403, 'You are not assigned to this trip');
-      }
-    }
-
+    const trip = await requireTrip(alert.tripSessionId, {
+      notFoundMessage: 'Trip not found for this stop alert',
+    });
     const driver = req.user.role === DRIVER
-      ? await Driver.findOne({ userId: req.user._id })
+      ? await ensureDriverAssignedToTrip(req.user, trip)
       : null;
 
     const previousStatus = alert.status;

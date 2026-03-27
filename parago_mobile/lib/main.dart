@@ -26,6 +26,7 @@ Future<void> _initializeFirebaseIfSupported() async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppConfig.load();
+  await AppConfig.resolveApiBaseUrl();
   await _initializeFirebaseIfSupported();
 
   final apiClient = ApiClient(baseUrl: AppConfig.apiBaseUrl);

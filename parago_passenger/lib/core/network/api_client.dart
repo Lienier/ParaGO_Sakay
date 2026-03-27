@@ -29,6 +29,7 @@ class ApiClient {
 
   final Dio _dio;
   final Map<String, _ApiCachedResponse> _memoryCache = {};
+  final Map<String, Future<Map<String, dynamic>>> _pendingGetRequests = {};
   SharedPreferences? _cachePrefs;
   static const String _cachePrefix = 'parago_api_cache_v1:';
 
@@ -205,25 +206,17 @@ class ApiClient {
     await _clearAllCache();
   }
 
-  Future<Map<String, dynamic>> request({
-    required String method,
+  Future<Map<String, dynamic>> _performRequest({
+    required String upperMethod,
     required String path,
+    required String requestPath,
+    required String cacheKey,
     Map<String, dynamic>? queryParameters,
     dynamic body,
-    bool useCache = true,
+    required bool useCache,
     Duration? cacheTtl,
   }) async {
-    final requestPath = _normalizePathForRequest(path);
-    final upperMethod = method.toUpperCase();
     final isGet = upperMethod == 'GET';
-    final cacheKey = _cacheKey(requestPath, queryParameters);
-
-    if (isGet && useCache) {
-      final cached = await _getCachedResponse(cacheKey: cacheKey);
-      if (cached != null) {
-        return cached;
-      }
-    }
 
     try {
       final response = await _dio.request(
@@ -268,6 +261,56 @@ class ApiClient {
           : error.message ?? 'Network error';
       throw ApiException(status, message);
     }
+  }
+
+  Future<Map<String, dynamic>> request({
+    required String method,
+    required String path,
+    Map<String, dynamic>? queryParameters,
+    dynamic body,
+    bool useCache = true,
+    Duration? cacheTtl,
+  }) async {
+    final requestPath = _normalizePathForRequest(path);
+    final upperMethod = method.toUpperCase();
+    final isGet = upperMethod == 'GET';
+    final cacheKey = _cacheKey(requestPath, queryParameters);
+
+    if (isGet && useCache) {
+      final cached = await _getCachedResponse(cacheKey: cacheKey);
+      if (cached != null) {
+        return cached;
+      }
+    }
+
+    if (isGet) {
+      final pending = _pendingGetRequests[cacheKey];
+      if (pending != null) {
+        return pending;
+      }
+    }
+
+    late final Future<Map<String, dynamic>> requestFuture;
+    requestFuture = _performRequest(
+      upperMethod: upperMethod,
+      path: path,
+      requestPath: requestPath,
+      cacheKey: cacheKey,
+      queryParameters: queryParameters,
+      body: body,
+      useCache: useCache,
+      cacheTtl: cacheTtl,
+    ).whenComplete(() {
+      if (identical(_pendingGetRequests[cacheKey], requestFuture)) {
+        _pendingGetRequests.remove(cacheKey);
+      }
+    });
+
+    if (isGet) {
+      _pendingGetRequests[cacheKey] = requestFuture;
+    }
+
+    return requestFuture;
   }
 
   Future<List<dynamic>> getList({

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/config/app_config.dart';
 import '../../core/utils/parago_format.dart';
 import '../../models/transport/route_summary.dart';
 import '../../services/admin_service.dart';
@@ -30,6 +31,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   List<RouteSummaryModel> _routes = [];
   bool _loading = false;
   String? _error;
+  Timer? _pollingTimer;
   StreamSubscription<Map<String, dynamic>>? _operationsSubscription;
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
 
@@ -74,16 +76,31 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      _connectRealtimeSocket();
+      if (AppConfig.enableRealtime) {
+        _connectRealtimeSocket();
+      } else {
+        _startPolling();
+      }
       await _load();
     });
   }
 
   @override
   void dispose() {
+    _pollingTimer?.cancel();
     _operationsSubscription?.cancel();
     _realtimeSocketService.dispose();
     super.dispose();
+  }
+
+  void _startPolling() {
+    _pollingTimer?.cancel();
+    _pollingTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      if (!mounted || _loading) {
+        return;
+      }
+      await _load(silent: true);
+    });
   }
 
   void _connectRealtimeSocket() {
@@ -238,7 +255,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     if (index >= 0) {
       rows[index] = <String, dynamic>{
         ...rows[index],
-        'count': (_readIntMetric(rows[index]['count']) + delta).clamp(0, 1 << 30),
+        'count':
+            (_readIntMetric(rows[index]['count']) + delta).clamp(0, 1 << 30),
       };
       return;
     }

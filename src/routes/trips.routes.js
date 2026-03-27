@@ -1,6 +1,5 @@
 const express = require('express');
 const TripSession = require('../models/tripSession');
-const Driver = require('../models/driver');
 const Jeepney = require('../models/jeepney');
 const Route = require('../models/route');
 const asyncHandler = require('../utils/asyncHandler');
@@ -10,6 +9,11 @@ const ApiError = require('../utils/apiError');
 const { ok } = require('../utils/response');
 const { DRIVER, ADMIN, PASSENGER } = require('../constants/roles');
 const { ensureObjectId, ensureEnum } = require('../utils/validators');
+const {
+  requireCurrentDriver,
+  requireTrip,
+  ensureDriverAssignedToTrip,
+} = require('../services/routeContext.service');
 
 const router = express.Router();
 
@@ -44,8 +48,7 @@ router.get(
   authenticate,
   authorize(DRIVER),
   asyncHandler(async (req, res) => {
-    const driver = await Driver.findOne({ userId: req.user._id });
-    if (!driver) throw new ApiError(404, 'Driver profile missing');
+    const driver = await requireCurrentDriver(req.user);
     const trips = await TripSession.find({
       driverId: driver._id,
       status: { $in: ['scheduled', 'active'] },
@@ -86,8 +89,7 @@ router.post(
       throw new ApiError(409, 'Route is not active');
     }
     if (req.user.role === DRIVER) {
-      const driver = await Driver.findOne({ userId: req.user._id });
-      if (!driver) throw new ApiError(404, 'Driver profile missing');
+      const driver = await requireCurrentDriver(req.user);
       if (driver.status !== 'active') {
         throw new ApiError(403, 'Driver account must be active to create trips');
       }
@@ -121,8 +123,7 @@ router.patch(
   authorize(DRIVER, ADMIN),
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'trip id');
-    const trip = await TripSession.findById(req.params.id);
-    if (!trip) throw new ApiError(404, 'Trip not found');
+    const trip = await requireTrip(req.params.id);
     if (trip.status === 'active') {
       throw new ApiError(409, 'Trip already active');
     }
@@ -130,10 +131,7 @@ router.patch(
       throw new ApiError(409, 'Trip is already closed');
     }
     if (req.user.role === DRIVER) {
-      const driver = await Driver.findOne({ userId: req.user._id });
-      if (!driver || String(driver._id) !== String(trip.driverId)) {
-        throw new ApiError(403, 'You are not assigned to this trip');
-      }
+      const driver = await ensureDriverAssignedToTrip(req.user, trip);
       if (driver.status !== 'active') {
         throw new ApiError(403, 'Driver account must be active to start a trip');
       }
@@ -163,16 +161,12 @@ router.patch(
   authorize(DRIVER, ADMIN),
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'trip id');
-    const trip = await TripSession.findById(req.params.id);
-    if (!trip) throw new ApiError(404, 'Trip not found');
+    const trip = await requireTrip(req.params.id);
     if (trip.status === 'completed' || trip.status === 'cancelled') {
       throw new ApiError(409, 'Trip already closed');
     }
     if (req.user.role === DRIVER) {
-      const driver = await Driver.findOne({ userId: req.user._id });
-      if (!driver || String(driver._id) !== String(trip.driverId)) {
-        throw new ApiError(403, 'You are not assigned to this trip');
-      }
+      await ensureDriverAssignedToTrip(req.user, trip);
     }
     trip.status = 'completed';
     trip.endedAt = new Date();
@@ -189,12 +183,8 @@ router.patch(
   authorize(DRIVER),
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'trip id');
-    const trip = await TripSession.findById(req.params.id);
-    if (!trip) throw new ApiError(404, 'Trip not found');
-    const driver = await Driver.findOne({ userId: req.user._id });
-    if (!driver || String(driver._id) !== String(trip.driverId)) {
-      throw new ApiError(403, 'You are not assigned to this trip');
-    }
+    const trip = await requireTrip(req.params.id);
+    await ensureDriverAssignedToTrip(req.user, trip);
     trip.acceptRequests = Boolean(req.body.acceptRequests);
     await trip.save();
     return ok(res, trip, 'Trip availability updated');

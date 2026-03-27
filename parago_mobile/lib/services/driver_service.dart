@@ -7,6 +7,14 @@ class DriverService {
 
   final ApiClient _client;
 
+  Future<void> pingServer() async {
+    await _client.request(
+      method: 'GET',
+      path: '/',
+      useCache: false,
+    );
+  }
+
   Future<Map<String, dynamic>> getProfile() async {
     final response = await _client.request(
       method: 'GET',
@@ -21,21 +29,27 @@ class DriverService {
 
   Future<void> setStatus({required bool active}) async {
     final body = {'status': active ? 'active' : 'inactive'};
-    try {
-      await _client.request(
-        method: 'PATCH',
-        path: '/drivers/me/status',
-        body: body,
-      );
-    } on ApiException catch (error) {
-      if (error.statusCode != 404 && error.statusCode != 405) {
-        rethrow;
+    ApiException? lastError;
+    final attempts = <String>['PATCH', 'POST', 'PUT'];
+
+    for (final method in attempts) {
+      try {
+        await _client.request(
+          method: method,
+          path: '/drivers/me/status',
+          body: body,
+        );
+        return;
+      } on ApiException catch (error) {
+        lastError = error;
+        if (error.statusCode != 404 && error.statusCode != 405) {
+          rethrow;
+        }
       }
-      await _client.request(
-        method: 'PUT',
-        path: '/drivers/me',
-        body: body,
-      );
+    }
+
+    if (lastError != null) {
+      throw lastError;
     }
   }
 

@@ -9,6 +9,7 @@ const ApiError = require('../utils/apiError');
 const RouteModel = require('../models/route');
 const { ensureObjectId } = require('../utils/validators');
 const { hasOwn, isPlainObject } = require('../utils/object');
+const { requireCurrentPassenger } = require('../services/routeContext.service');
 
 const router = express.Router();
 
@@ -17,7 +18,7 @@ router.get(
   authenticate,
   authorize(PASSENGER),
   asyncHandler(async (req, res) => {
-    const profile = await Passenger.findOne({ userId: req.user._id });
+    const profile = await requireCurrentPassenger(req.user);
     return ok(res, profile, 'Passenger profile');
   })
 );
@@ -68,8 +69,11 @@ router.put(
       throw new ApiError(400, 'No valid passenger profile fields provided');
     }
 
-    const profile = await Passenger.findOneAndUpdate(
-      { userId: req.user._id },
+    const passenger = await requireCurrentPassenger(req.user, {
+      select: '_id',
+    });
+    const profile = await Passenger.findByIdAndUpdate(
+      passenger._id,
       updateAction,
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
