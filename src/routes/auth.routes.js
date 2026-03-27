@@ -2,6 +2,8 @@ const express = require('express');
 const {
   registerEmail,
   loginEmail,
+  startAdminLoginOtp,
+  verifyAdminLoginOtp,
   socialLogin,
   firebaseGoogleLogin,
   refreshSession,
@@ -63,6 +65,35 @@ router.post(
     }
     const result = await loginEmail({ email, password, role: requestedRole || undefined });
     return ok(res, result, 'Login successful');
+  })
+);
+
+router.post(
+  '/admin/login/start',
+  asyncHandler(async (req, res) => {
+    const { email, password, phone } = req.body || {};
+    if (!email || !password) {
+      throw new ApiError(400, 'email and password required');
+    }
+    if (!emailPattern.test(String(email).trim())) {
+      throw new ApiError(400, 'Invalid email format');
+    }
+
+    const result = await startAdminLoginOtp({
+      email,
+      password,
+      phone,
+    });
+    return ok(res, result, 'Verification code sent');
+  })
+);
+
+router.post(
+  '/admin/login/verify',
+  asyncHandler(async (req, res) => {
+    const { challengeId, code } = req.body || {};
+    const result = await verifyAdminLoginOtp({ challengeId, code });
+    return ok(res, result, 'Admin login successful');
   })
 );
 

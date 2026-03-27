@@ -11,21 +11,31 @@ const User = require('../models/user');
 const Passenger = require('../models/passenger');
 const Driver = require('../models/driver');
 const Admin = require('../models/admin');
+const AdminLoginChallenge = require('../models/adminLoginChallenge');
 const RefreshToken = require('../models/refreshToken');
 const PasswordResetToken = require('../models/passwordResetToken');
 const { signToken, verifyRefreshToken } = require('../utils/jwt');
 const tokenHash = require('../utils/tokenHash');
 const ApiError = require('../utils/apiError');
+const { sendSms } = require('./sms.service');
 
 const GENERIC_LOGIN_FAILURE_MESSAGE = 'Invalid email/password';
 const GENERIC_ROLE_SCOPED_LOGIN_FAILURE_MESSAGE =
   'Invalid email/password';
 const GENERIC_PASSENGER_REGISTRATION_FAILURE_MESSAGE =
   'Unable to create passenger account with the provided details';
+const ADMIN_OTP_EXPIRY_MS = 5 * 60 * 1000;
+const ADMIN_OTP_MAX_ATTEMPTS = 5;
 
 const buildProfile = async (user) => {
   if (!user) return null;
-  const profile = { role: user.role, fullName: user.fullName, email: user.email };
+  const profile = {
+    _id: user._id?.toString() || null,
+    role: user.role,
+    fullName: user.fullName,
+    email: user.email,
+    phone: user.phone || null,
+  };
   if (user.role === 'PASSENGER') {
     const passenger = await Passenger.findOne({ userId: user._id });
     return { ...profile, passengerId: passenger?._id || null };
@@ -54,6 +64,39 @@ const ensureStrongPassword = (password) => {
 
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
 const normalizeRole = (role) => String(role || '').trim().toUpperCase();
+const normalizeAdminPhone = (phone) => {
+  const raw = String(phone || '').trim();
+  const digits = raw.replace(/\D/g, '');
+
+  if (!digits) {
+    return '';
+  }
+  if (digits.length === 10 && digits.startsWith('9')) {
+    return `+63${digits}`;
+  }
+  if (digits.length === 11 && digits.startsWith('09')) {
+    return `+63${digits.slice(1)}`;
+  }
+  if (digits.length === 12 && digits.startsWith('63')) {
+    return `+${digits}`;
+  }
+  throw new ApiError(400, 'Enter a valid Philippine mobile number');
+};
+const tryNormalizeAdminPhone = (phone) => {
+  try {
+    return normalizeAdminPhone(phone);
+  } catch (_error) {
+    return '';
+  }
+};
+const maskPhone = (phone) => {
+  const normalized = normalizeAdminPhone(phone);
+  if (normalized.length < 6) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 5)}***${normalized.slice(-2)}`;
+};
+const generateOtpCode = () => crypto.randomInt(0, 1000000).toString().padStart(6, '0');
 
 const ensureAllowedRequestedRole = (role) => {
   const normalizedRole = normalizeRole(role);
@@ -128,6 +171,38 @@ const issueSession = async (user, replacedTokenHash = null) => {
   return { token: accessToken, refreshToken, user: await buildProfile(user) };
 };
 
+const authenticateLocalUser = async ({ email, password, role }) => {
+  const requestedRole = ensureAllowedRequestedRole(role);
+  const user = await User.findOne({ email: normalizeEmail(email), authProvider: 'local' }).select(
+    '+passwordHash'
+  );
+  if (!user) {
+    if (isRoleScopedRequest(requestedRole)) {
+      throwRoleScopedLoginFailure();
+    }
+    throw new ApiError(404, GENERIC_LOGIN_FAILURE_MESSAGE);
+  }
+  if (requestedRole && user.role !== requestedRole) {
+    throwRoleScopedLoginFailure();
+  }
+  if (isRoleScopedRequest(requestedRole) && user.status !== 'active') {
+    throwRoleScopedLoginFailure();
+  }
+  ensureActiveUser(user);
+
+  const valid = await bcrypt.compare(password, user.passwordHash);
+  if (!valid) {
+    if (isRoleScopedRequest(requestedRole)) {
+      throwRoleScopedLoginFailure();
+    }
+    throw new ApiError(401, GENERIC_LOGIN_FAILURE_MESSAGE);
+  }
+
+  user.lastLoginAt = new Date();
+  await user.save();
+  return user;
+};
+
 const registerEmail = async ({ email, password, fullName, role = 'PASSENGER' }) => {
   const normalizedEmail = normalizeEmail(email);
   const normalizedRole = ensureAllowedRequestedRole(role) || 'PASSENGER';
@@ -167,6 +242,7 @@ const createUserByAdmin = async ({
   fullName,
   role = 'PASSENGER',
   status = 'active',
+  phone,
 }) => {
   const normalizedEmail = normalizeEmail(email);
   const existing = await User.findOne({ email: normalizedEmail });
@@ -183,6 +259,7 @@ const createUserByAdmin = async ({
     email: normalizedEmail,
     passwordHash,
     fullName,
+    phone: phone ? String(phone).trim() : undefined,
     role: normalizedRole,
     authProvider: 'local',
     status,
@@ -201,34 +278,105 @@ const createUserByAdmin = async ({
 };
 
 const loginEmail = async ({ email, password, role }) => {
-  const requestedRole = ensureAllowedRequestedRole(role);
-  const user = await User.findOne({ email: normalizeEmail(email), authProvider: 'local' }).select(
-    '+passwordHash'
+  const user = await authenticateLocalUser({ email, password, role });
+  return issueSession(user);
+};
+
+const startAdminLoginOtp = async ({ email, password, phone }) => {
+  const user = await authenticateLocalUser({
+    email,
+    password,
+    role: 'ADMIN',
+  });
+
+  const persistedPhone = tryNormalizeAdminPhone(user.phone);
+  const requestedPhone = normalizeAdminPhone(phone);
+  let targetPhone = persistedPhone;
+
+  if (!targetPhone) {
+    if (!requestedPhone) {
+      throw new ApiError(
+        400,
+        'Enter your mobile number to receive the admin verification code'
+      );
+    }
+    targetPhone = requestedPhone;
+    user.phone = targetPhone;
+    await user.save();
+  } else if (requestedPhone && requestedPhone !== targetPhone) {
+    throw new ApiError(
+      409,
+      'This admin account is already linked to a different mobile number'
+    );
+  }
+
+  const otpCode = generateOtpCode();
+  const expiresAt = new Date(Date.now() + ADMIN_OTP_EXPIRY_MS);
+
+  await AdminLoginChallenge.updateMany(
+    {
+      userId: user._id,
+      usedAt: null,
+      expiresAt: { $gt: new Date() },
+    },
+    { $set: { usedAt: new Date() } }
   );
-  if (!user) {
-    if (isRoleScopedRequest(requestedRole)) {
-      throwRoleScopedLoginFailure();
+
+  const challenge = await AdminLoginChallenge.create({
+    userId: user._id,
+    phone: targetPhone,
+    codeHash: tokenHash(otpCode),
+    expiresAt,
+    maxAttempts: ADMIN_OTP_MAX_ATTEMPTS,
+  });
+
+  await sendSms({
+    recipient: targetPhone,
+    message: `Your ParaGO admin verification code is ${otpCode}. It expires in 5 minutes.`,
+  });
+
+  return {
+    challengeId: challenge._id.toString(),
+    maskedPhone: maskPhone(targetPhone),
+    expiresAt: expiresAt.toISOString(),
+    expiresInSeconds: Math.floor(ADMIN_OTP_EXPIRY_MS / 1000),
+  };
+};
+
+const verifyAdminLoginOtp = async ({ challengeId, code }) => {
+  const normalizedCode = String(code || '').trim();
+  if (!challengeId || !normalizedCode) {
+    throw new ApiError(400, 'challengeId and code are required');
+  }
+
+  const challenge = await AdminLoginChallenge.findById(challengeId);
+  if (!challenge || challenge.usedAt || challenge.expiresAt <= new Date()) {
+    throw new ApiError(401, 'Invalid or expired verification code');
+  }
+
+  if (challenge.attempts >= challenge.maxAttempts) {
+    challenge.usedAt = new Date();
+    await challenge.save();
+    throw new ApiError(429, 'Too many incorrect verification attempts');
+  }
+
+  if (challenge.codeHash !== tokenHash(normalizedCode)) {
+    challenge.attempts += 1;
+    if (challenge.attempts >= challenge.maxAttempts) {
+      challenge.usedAt = new Date();
     }
-    throw new ApiError(404, GENERIC_LOGIN_FAILURE_MESSAGE);
+    await challenge.save();
+    throw new ApiError(401, 'Invalid or expired verification code');
   }
-  if (requestedRole && user.role !== requestedRole) {
-    throwRoleScopedLoginFailure();
-  }
-  if (isRoleScopedRequest(requestedRole) && user.status !== 'active') {
-    throwRoleScopedLoginFailure();
-  }
+
+  const user = await User.findById(challenge.userId).select('+passwordHash');
   ensureActiveUser(user);
-
-  const valid = await bcrypt.compare(password, user.passwordHash);
-  if (!valid) {
-    if (isRoleScopedRequest(requestedRole)) {
-      throwRoleScopedLoginFailure();
-    }
-    throw new ApiError(401, GENERIC_LOGIN_FAILURE_MESSAGE);
+  if (user.role !== 'ADMIN') {
+    throw new ApiError(403, 'You are not authorized for this resource');
   }
 
-  user.lastLoginAt = new Date();
-  await user.save();
+  challenge.usedAt = new Date();
+  await challenge.save();
 
   return issueSession(user);
 };
@@ -519,6 +667,8 @@ const resetPassword = async ({ token, newPassword }) => {
 module.exports = {
   registerEmail,
   loginEmail,
+  startAdminLoginOtp,
+  verifyAdminLoginOtp,
   socialLogin,
   firebaseGoogleLogin,
   refreshSession,

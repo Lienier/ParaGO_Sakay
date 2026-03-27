@@ -15,7 +15,14 @@ import '../../services/session_controller.dart';
 enum _PinPlacementMode { start, end }
 
 class AdminRouteBuilderScreen extends StatefulWidget {
-  const AdminRouteBuilderScreen({super.key});
+  const AdminRouteBuilderScreen({
+    super.key,
+    this.embedded = false,
+    this.onSaved,
+  });
+
+  final bool embedded;
+  final VoidCallback? onSaved;
 
   @override
   State<AdminRouteBuilderScreen> createState() =>
@@ -234,7 +241,16 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
         },
       );
       if (saved != null && mounted) {
-        Navigator.of(context).pop(true);
+        widget.onSaved?.call();
+        if (widget.embedded) {
+          await _loadRoutes();
+          setState(() {
+            _message =
+                'Route saved. You can keep editing here or switch to the route management workspace.';
+          });
+        } else {
+          Navigator.of(context).pop(true);
+        }
       }
     } finally {
       if (mounted) {
@@ -415,15 +431,22 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     final theme = Theme.of(context);
     final existing = _existingRouteByCode(_normalizedCode);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Build Route'),
-      ),
-      body: RefreshIndicator(
-        onRefresh: _loadRoutes,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
-          children: [
+    final body = RefreshIndicator(
+      onRefresh: _loadRoutes,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+        children: [
+            if (widget.embedded) ...[
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton.icon(
+                  onPressed: _loadingRoutes ? null : _loadRoutes,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Refresh routes'),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             Form(
               key: _formKey,
               child: Card(
@@ -587,9 +610,19 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
                 ),
               ),
             ],
-          ],
-        ),
+        ],
       ),
+    );
+
+    if (widget.embedded) {
+      return body;
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Build Route'),
+      ),
+      body: body,
     );
   }
 

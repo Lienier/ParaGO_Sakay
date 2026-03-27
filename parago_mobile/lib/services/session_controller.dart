@@ -31,7 +31,7 @@ class SessionController extends ChangeNotifier {
 
   bool _isStaffUser(UserProfile? user) {
     final role = user?.role;
-    return role == UserRole.driver || role == UserRole.admin;
+    return role == UserRole.driver;
   }
 
   Future<bool> _tryRefreshSession(String? refreshToken) async {

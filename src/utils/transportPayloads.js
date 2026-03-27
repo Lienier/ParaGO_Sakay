@@ -163,6 +163,9 @@ const buildRouteStop = (value, index) => {
       : (() => {
           throw new ApiError(400, `stops[${index}].order must be an integer`);
         })(),
+    fare: hasOwn(value, 'fare')
+      ? normalizeNonNegativeNumber(value.fare, `stops[${index}].fare`)
+      : 0,
     location: normalizeGeoPoint(value.location, `stops[${index}].location`),
   };
 };

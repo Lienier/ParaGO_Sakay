@@ -6,9 +6,7 @@ import 'core/config/app_config.dart';
 import 'core/network/api_client.dart';
 import 'core/storage/token_storage.dart';
 import 'firebase_options.dart';
-import 'models/user_role.dart';
 import 'screens/auth_screen.dart';
-import 'screens/admin/admin_home_screen.dart';
 import 'screens/driver/driver_home_screen.dart';
 import 'services/session_controller.dart';
 import 'theme/app_theme.dart';
@@ -61,15 +59,7 @@ class ParagoApp extends StatelessWidget {
           if (!session.isAuthenticated) {
             return const AuthScreen();
           }
-
-          switch (session.user?.role) {
-            case UserRole.driver:
-              return const DriverHomeScreen();
-            case UserRole.admin:
-              return const AdminHomeScreen();
-            default:
-              return const AuthScreen();
-          }
+          return const DriverHomeScreen();
         },
       ),
     );
@@ -113,7 +103,7 @@ class _BootScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'Preparing your operations dashboard',
+                  'Preparing your driver dashboard',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                         color: Colors.white.withValues(alpha: 0.92),

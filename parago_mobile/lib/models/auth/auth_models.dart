@@ -28,7 +28,6 @@ class UserProfile {
     required this.role,
     this.passengerId,
     this.driverId,
-    this.adminId,
   });
 
   final String? userId;
@@ -37,7 +36,6 @@ class UserProfile {
   final UserRole role;
   final String? passengerId;
   final String? driverId;
-  final String? adminId;
 
   factory UserProfile.fromJson(Map<String, dynamic> json) {
     return UserProfile(
@@ -47,7 +45,6 @@ class UserProfile {
       role: UserRole.fromString(json['role']?.toString()),
       passengerId: json['passengerId']?.toString(),
       driverId: json['driverId']?.toString(),
-      adminId: json['adminId']?.toString(),
     );
   }
 }

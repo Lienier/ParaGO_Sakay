@@ -15,6 +15,7 @@ const stopSchema = new Schema(
     name: { type: String, required: true, trim: true },
     code: { type: String, trim: true },
     order: { type: Number, required: true },
+    fare: { type: Number, min: 0, default: 0 },
     location: geoPointSchema,
   },
   { _id: false }

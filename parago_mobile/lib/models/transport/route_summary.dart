@@ -97,12 +97,14 @@ class RouteStopPoint {
     required this.order,
     required this.position,
     this.code,
+    this.fare = 0,
   });
 
   final String name;
   final int order;
   final LatLng position;
   final String? code;
+  final double fare;
 }
 
 class RouteMapBounds {
@@ -213,6 +215,7 @@ List<RouteStopPoint> _parseStopPoints(dynamic value) {
           name: entry['name']?.toString() ?? 'Route stop',
           code: entry['code']?.toString(),
           order: int.tryParse(entry['order']?.toString() ?? '') ?? 0,
+          fare: _toDouble(entry['fare']) ?? 0,
           position: position,
         );
       })

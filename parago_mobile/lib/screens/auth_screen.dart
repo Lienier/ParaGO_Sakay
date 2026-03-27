@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../models/user_role.dart';
 import '../core/utils/action_feedback.dart';
 import '../services/auth_service.dart';
 import '../services/session_controller.dart';
@@ -17,7 +16,6 @@ class _AuthScreenState extends State<AuthScreen> {
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
 
-  UserRole _selectedRole = UserRole.driver;
   bool _loading = false;
   bool _obscurePassword = true;
   String? _error;
@@ -31,10 +29,6 @@ class _AuthScreenState extends State<AuthScreen> {
 
   void _dismissKeyboard() {
     FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  bool _isStaffRole(UserRole role) {
-    return role == UserRole.driver || role == UserRole.admin;
   }
 
   Future<void> _submit() async {
@@ -56,9 +50,9 @@ class _AuthScreenState extends State<AuthScreen> {
           final result = await auth.loginEmail(
             email: _emailCtrl.text,
             password: _passwordCtrl.text,
-            role: _selectedRole.label,
+            role: 'DRIVER',
           );
-          if (!_isStaffRole(result.user.role)) {
+          if (result.user.role.label != 'DRIVER') {
             throw Exception('Invalid email/password');
           }
           return result;
@@ -140,7 +134,7 @@ class _AuthScreenState extends State<AuthScreen> {
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        'Staff access for live trip coordination, rider verification, and operations monitoring.',
+                        'Driver access for live trip coordination, rider verification, and in-route operations.',
                         style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                               color: Colors.white.withValues(alpha: 0.92),
                             ),
@@ -152,7 +146,7 @@ class _AuthScreenState extends State<AuthScreen> {
                         children: const [
                           _BenefitChip(label: 'Trip controls'),
                           _BenefitChip(label: 'Boarding oversight'),
-                          _BenefitChip(label: 'Operations tools'),
+                          _BenefitChip(label: 'Route alerts'),
                         ],
                       ),
                     ],
@@ -161,28 +155,6 @@ class _AuthScreenState extends State<AuthScreen> {
               ),
             ),
             const SizedBox(height: 18),
-            Row(
-              children: const [
-                Expanded(
-                  child: _FeatureCard(
-                    icon: Icons.badge_outlined,
-                    title: 'Driver tools',
-                    description:
-                        'Route visibility, ride handling, and in-trip controls.',
-                  ),
-                ),
-                SizedBox(width: 12),
-                Expanded(
-                  child: _FeatureCard(
-                    icon: Icons.admin_panel_settings_outlined,
-                    title: 'Admin tools',
-                    description:
-                        'User management, dispatch oversight, and system status.',
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(20),
@@ -190,36 +162,28 @@ class _AuthScreenState extends State<AuthScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Staff sign in',
+                      'Driver sign in',
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'Use the role-specific credentials assigned to you by ParaGO operations.',
+                      'Use the driver credentials assigned to you by ParaGO operations.',
                     ),
                     const SizedBox(height: 18),
-                    const Text(
-                      'Access type',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 10),
-                    SegmentedButton<UserRole>(
-                      segments: const [
-                        ButtonSegment(
-                          value: UserRole.driver,
-                          label: Text('Driver'),
-                          icon: Icon(Icons.badge_outlined),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: scheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Text(
+                        'This mobile application now supports driver accounts only.',
+                        style: TextStyle(
+                          color: scheme.onPrimaryContainer,
+                          fontWeight: FontWeight.w700,
                         ),
-                        ButtonSegment(
-                          value: UserRole.admin,
-                          label: Text('Admin'),
-                          icon: Icon(Icons.admin_panel_settings_outlined),
-                        ),
-                      ],
-                      selected: {_selectedRole},
-                      onSelectionChanged: (roles) {
-                        setState(() => _selectedRole = roles.first);
-                      },
+                      ),
                     ),
                     const SizedBox(height: 18),
                     if (_error != null) ...[
@@ -292,7 +256,7 @@ class _AuthScreenState extends State<AuthScreen> {
                         borderRadius: BorderRadius.circular(18),
                       ),
                       child: const Text(
-                        'If your access was just created or updated, use the role that matches the credentials you were given.',
+                        'If you need admin access, use the separate ParaGO admin web application instead.',
                       ),
                     ),
                     if (_loading) ...[
@@ -329,37 +293,6 @@ class _BenefitChip extends StatelessWidget {
         style: const TextStyle(
           color: Colors.white,
           fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
-}
-
-class _FeatureCard extends StatelessWidget {
-  const _FeatureCard({
-    required this.icon,
-    required this.title,
-    required this.description,
-  });
-
-  final IconData icon;
-  final String title;
-  final String description;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(height: 10),
-            Text(title, style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 6),
-            Text(description),
-          ],
         ),
       ),
     );

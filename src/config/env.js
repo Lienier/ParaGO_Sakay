@@ -50,6 +50,8 @@ module.exports = {
   firebaseProjectId: process.env.FIREBASE_PROJECT_ID || '',
   firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL || '',
   firebasePrivateKey: normalizeMultiline(process.env.FIREBASE_PRIVATE_KEY),
+  smsApiPhApiKey: process.env.SMSAPIPH_API_KEY || '',
+  smsApiPhBaseUrl: process.env.SMSAPIPH_BASE_URL || 'https://smsapiph.onrender.com/api/v1',
 };
 
 if (module.exports.nodeEnv === 'production') {

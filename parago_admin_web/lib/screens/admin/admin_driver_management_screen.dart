@@ -11,7 +11,14 @@ import '../../services/session_controller.dart';
 part 'admin_driver_management_forms.dart';
 
 class AdminDriverManagementScreen extends StatefulWidget {
-  const AdminDriverManagementScreen({super.key});
+  const AdminDriverManagementScreen({
+    super.key,
+    this.embedded = false,
+    this.onChanged,
+  });
+
+  final bool embedded;
+  final VoidCallback? onChanged;
 
   @override
   State<AdminDriverManagementScreen> createState() =>
@@ -22,6 +29,7 @@ class _AdminDriverManagementScreenState
     extends State<AdminDriverManagementScreen> {
   final _createFormKey = GlobalKey<FormState>();
   final _editFormKey = GlobalKey<FormState>();
+  final _searchCtrl = TextEditingController();
 
   final _createLicenseCtrl = TextEditingController();
   final _createEmployeeCtrl = TextEditingController();
@@ -48,6 +56,7 @@ class _AdminDriverManagementScreenState
   bool _saving = false;
   String? _schedulingDriverId;
   String? _error;
+  String _statusFilter = 'all';
 
   String? _createEmail;
   String? _createPassword;
@@ -69,6 +78,7 @@ class _AdminDriverManagementScreenState
 
   @override
   void dispose() {
+    _searchCtrl.dispose();
     _createLicenseCtrl.dispose();
     _createEmployeeCtrl.dispose();
     _createPhoneCtrl.dispose();
@@ -156,6 +166,41 @@ class _AdminDriverManagementScreenState
       return _textOf(user['email']);
     }
     return _textOf(driver['email']);
+  }
+
+  bool _matchesDriverSearch(Map<String, dynamic> driver, String query) {
+    if (query.isEmpty) {
+      return true;
+    }
+    final routeData = _driverRoute(driver);
+    final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
+    final haystack = [
+      _driverDisplayName(driver),
+      _driverEmail(driver),
+      _textOf(driver['licenseNumber']),
+      _textOf(driver['employeeNumber']),
+      _textOf(driver['phone']),
+      _textOf(routeData['code']),
+      _textOf(routeData['name']),
+      _textOf(jeepney?['plateNumber']),
+    ].join(' ').toLowerCase();
+    return haystack.contains(query);
+  }
+
+  bool _matchesStatusFilter(Map<String, dynamic> driver) {
+    final normalized = _textOf(driver['status']).toLowerCase();
+    switch (_statusFilter) {
+      case 'active':
+        return normalized == 'active';
+      case 'inactive':
+        return normalized == 'inactive';
+      case 'verified':
+        return driver['isVerified'] == true;
+      case 'unassigned':
+        return _nullableIdOf(driver['assignedRouteId']) == null;
+      default:
+        return true;
+    }
   }
 
   Future<void> _load() async {
@@ -310,6 +355,7 @@ class _AdminDriverManagementScreenState
         onSuccess: (_) async {
           if (!mounted) return;
           await _load();
+          widget.onChanged?.call();
         },
       );
     } finally {
@@ -369,6 +415,7 @@ class _AdminDriverManagementScreenState
           Navigator.of(sheetContext).pop();
           _resetCreateForm();
           await _load();
+          widget.onChanged?.call();
         },
       );
     } finally {
@@ -407,6 +454,7 @@ class _AdminDriverManagementScreenState
           if (!mounted) return;
           Navigator.of(context).pop();
           await _load();
+          widget.onChanged?.call();
         },
       );
     } finally {
@@ -418,28 +466,147 @@ class _AdminDriverManagementScreenState
 
   @override
   Widget build(BuildContext context) {
-    final drivers = _drivers;
+    final searchQuery = _searchCtrl.text.trim().toLowerCase();
+    final drivers = _drivers
+        .whereType<Map<String, dynamic>>()
+        .where(
+          (driver) =>
+              _matchesStatusFilter(driver) &&
+              _matchesDriverSearch(driver, searchQuery),
+        )
+        .toList(growable: false);
+    final allDrivers = _drivers.whereType<Map<String, dynamic>>().toList();
+    final activeCount = allDrivers
+        .where((driver) => _textOf(driver['status']).toLowerCase() == 'active')
+        .length;
+    final verifiedCount =
+        allDrivers.where((driver) => driver['isVerified'] == true).length;
+    final unassignedCount = allDrivers
+        .where((driver) => _nullableIdOf(driver['assignedRouteId']) == null)
+        .length;
+    final body = RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 22),
+        children: [
+          if (widget.embedded) ...[
+            Align(
+              alignment: Alignment.centerRight,
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _loading ? null : _load,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Refresh'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: _loading ? null : _openCreateSheet,
+                    icon: const Icon(Icons.person_add_alt_1),
+                    label: const Text('Create driver'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        _DriverMetricChip(
+                          label: 'Total',
+                          value: allDrivers.length.toString(),
+                        ),
+                        _DriverMetricChip(
+                          label: 'Active',
+                          value: activeCount.toString(),
+                        ),
+                        _DriverMetricChip(
+                          label: 'Verified',
+                          value: verifiedCount.toString(),
+                        ),
+                        _DriverMetricChip(
+                          label: 'Unassigned',
+                          value: unassignedCount.toString(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final stacked = constraints.maxWidth < 760;
+                        final searchField = TextField(
+                          controller: _searchCtrl,
+                          onChanged: (_) => setState(() {}),
+                          decoration: const InputDecoration(
+                            labelText: 'Search driver, email, route, or plate',
+                            prefixIcon: Icon(Icons.search),
+                          ),
+                        );
+                        final filterField = DropdownButtonFormField<String>(
+                          initialValue: _statusFilter,
+                          decoration: const InputDecoration(
+                            labelText: 'Filter',
+                          ),
+                          items: const [
+                            DropdownMenuItem(
+                              value: 'all',
+                              child: Text('All drivers'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'active',
+                              child: Text('Active only'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'inactive',
+                              child: Text('Inactive only'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'verified',
+                              child: Text('Verified only'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'unassigned',
+                              child: Text('No route assigned'),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            setState(() => _statusFilter = value ?? 'all');
+                          },
+                        );
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Driver Management'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loading ? null : _load,
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _loading ? null : _openCreateSheet,
-        icon: const Icon(Icons.person_add_alt_1),
-        label: const Text('Create driver'),
-      ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 22),
-          children: [
+                        if (stacked) {
+                          return Column(
+                            children: [
+                              searchField,
+                              const SizedBox(height: 12),
+                              filterField,
+                            ],
+                          );
+                        }
+
+                        return Row(
+                          children: [
+                            Expanded(child: searchField),
+                            const SizedBox(width: 12),
+                            SizedBox(width: 220, child: filterField),
+                          ],
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
@@ -534,16 +701,14 @@ class _AdminDriverManagementScreenState
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: Theme.of(context).dividerColor),
                 ),
-                child: const Text(
-                  'No drivers found yet. Use the "Create driver" button below to add the first driver account.',
+                child: Text(
+                  allDrivers.isEmpty
+                      ? 'No drivers found yet. Use the "Create driver" button below to add the first driver account.'
+                      : 'No drivers match the current search or filter.',
                 ),
               )
             else
               ...drivers.map((entry) {
-                if (entry is! Map<String, dynamic>) {
-                  return const SizedBox.shrink();
-                }
-
                 final driver = entry;
                 final userName = _driverDisplayName(driver);
                 final userEmail = _driverEmail(driver);
@@ -667,6 +832,60 @@ class _AdminDriverManagementScreenState
                   ),
                 );
               }),
+        ],
+      ),
+    );
+
+    if (widget.embedded) {
+      return body;
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Driver Management'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loading ? null : _load,
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _loading ? null : _openCreateSheet,
+        icon: const Icon(Icons.person_add_alt_1),
+        label: const Text('Create driver'),
+      ),
+      body: body,
+    );
+  }
+}
+
+class _DriverMetricChip extends StatelessWidget {
+  const _DriverMetricChip({
+    required this.label,
+    required this.value,
+  });
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: RichText(
+        text: TextSpan(
+          style: DefaultTextStyle.of(context).style,
+          children: [
+            TextSpan(
+              text: '$label: ',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            TextSpan(text: value),
           ],
         ),
       ),

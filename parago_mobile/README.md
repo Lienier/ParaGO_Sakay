@@ -1,17 +1,16 @@
-# ParaGO! Flutter Client Scaffold
+# ParaGO! Driver Mobile App
 
-This is the practical thesis-focused mobile client scaffold for:
+This is the driver-focused Flutter mobile app for:
 
-- Passenger onboarding + pickup request
+- Driver trip controls and request monitoring
 - Boarding verification flow
 - Digital stop alerts
-- Driver trip controls and request monitoring
-- Admin dashboard summary
-- Google/Facebook/email authentication entry points
+- Driver-only email authentication
 
 ## Folder
 
-- `parago_mobile/` is a standalone Flutter app.
+- `parago_mobile/` is the standalone driver mobile app.
+- Admin features now live in the separate `parago_admin_web/` web client.
 
 ## Run setup
 
@@ -28,10 +27,10 @@ If running on emulator with backend on local machine:
 - Android emulator: `http://10.0.2.2:5000/api/v1`
 - iOS simulator: `http://127.0.0.1:5000/api/v1`
 
-## Firebase Google login setup
+## Firebase setup
 
-Google sign-in now uses Firebase Authentication on the Flutter side, while the
-ParaGO backend still issues the real app session and stores users in MongoDB.
+Firebase can still be configured for shared backend auth flows, while the
+driver mobile app itself now signs in through driver credentials only.
 
 Configure Firebase for this app:
 
@@ -94,10 +93,6 @@ Backend note:
 - Notifications
   - `GET /notifications/mine`
   - `PATCH /notifications/{id}/read`
-- Admin
-  - `GET /admin/dashboard`
-  - `GET /admin/recent-activity`
-
 ## Note
 
 - This scaffold stores tokens in `SharedPreferences` via `TokenStorage`.
