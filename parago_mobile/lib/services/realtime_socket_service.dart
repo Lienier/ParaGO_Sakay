@@ -6,6 +6,7 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../core/config/app_config.dart';
 
 class RealtimeSocketService {
+  static bool _disabledNoticeShown = false;
   final StreamController<Map<String, dynamic>> _notificationController =
       StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<Map<String, dynamic>> _operationsController =
@@ -28,7 +29,10 @@ class RealtimeSocketService {
     required String token,
   }) {
     if (!AppConfig.enableRealtime) {
-      debugPrint('Realtime socket disabled by PARAGO_ENABLE_REALTIME.');
+      if (!_disabledNoticeShown) {
+        debugPrint('Realtime socket disabled by PARAGO_ENABLE_REALTIME.');
+        _disabledNoticeShown = true;
+      }
       disconnect();
       return;
     }

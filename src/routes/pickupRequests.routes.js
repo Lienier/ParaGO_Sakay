@@ -447,8 +447,8 @@ router.patch(
     await publishNotification({
       userId: passengerUser?.userId,
       type: 'pickup_request_completed',
-      title: 'Pickup request completed',
-      body: `You are now marked as onboard for request ${request.stopRef || 'selected pickup'}`,
+      title: 'Pickup confirmed',
+      body: `The driver confirmed your pickup at ${request.stopRef || 'the selected pickup point'}`,
       payload: {
         requestId: request._id,
         tripSessionId: trip._id.toString(),

@@ -4,7 +4,6 @@ const axios = require('axios');
 const dotenv = require('dotenv');
 
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
-dotenv.config({ path: path.resolve(__dirname, '..', 'parago_mobile', '.env') });
 
 const readArg = (name) => {
   const index = process.argv.indexOf(name);
@@ -67,7 +66,7 @@ const sampleCoordinates = (coordinates, targetCount = 24) => {
 const main = async () => {
   const orsKey = process.env.ORS_API_KEY;
   if (!orsKey) {
-    throw new Error('ORS_API_KEY is required in .env or parago_mobile/.env');
+    throw new Error('ORS_API_KEY is required in the root .env');
   }
 
   const name = requireArg('--name');

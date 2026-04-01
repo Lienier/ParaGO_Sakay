@@ -502,7 +502,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               secondaryLabel:
                   request.status == 'acknowledged' ? 'Complete pickup' : null,
               onSecondary: request.status == 'acknowledged'
-                  ? () => _completeRequest(request.id)
+                  ? () => _completeRequest(request)
                   : null,
               icon: Icons.person_pin_circle_outlined,
             ),

@@ -6,6 +6,28 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../exceptions/api_exception.dart';
 import '../../core/config/app_config.dart';
 
+class ApiRequestTelemetry {
+  const ApiRequestTelemetry({
+    required this.method,
+    required this.path,
+    required this.durationMs,
+    required this.occurredAt,
+    required this.success,
+    this.statusCode,
+    this.fromCache = false,
+    this.usedStaleCache = false,
+  });
+
+  final String method;
+  final String path;
+  final int durationMs;
+  final DateTime occurredAt;
+  final bool success;
+  final int? statusCode;
+  final bool fromCache;
+  final bool usedStaleCache;
+}
+
 class _ApiCachedResponse {
   _ApiCachedResponse({required this.payload, required this.expiresAt});
 
@@ -30,10 +52,13 @@ class ApiClient {
   final Dio _dio;
   final Map<String, _ApiCachedResponse> _memoryCache = {};
   final Map<String, Future<Map<String, dynamic>>> _pendingGetRequests = {};
+  final List<ApiRequestTelemetry> _recentTelemetry = <ApiRequestTelemetry>[];
   SharedPreferences? _cachePrefs;
   static const String _cachePrefix = 'parago_api_cache_v1:';
 
   String get baseUrl => _dio.options.baseUrl;
+  List<ApiRequestTelemetry> get recentTelemetry =>
+      List<ApiRequestTelemetry>.unmodifiable(_recentTelemetry);
 
   static String _normalizeBaseUrl(String rawBaseUrl) {
     final trimmed = rawBaseUrl.trim();
@@ -206,6 +231,64 @@ class ApiClient {
     await _clearAllCache();
   }
 
+  Future<Map<String, dynamic>?> readCachedSnapshot({
+    required String path,
+    Map<String, dynamic>? queryParameters,
+    bool allowExpired = true,
+  }) async {
+    final requestPath = _normalizePathForRequest(path);
+    final cacheKey = _cacheKey(requestPath, queryParameters);
+    return _getCachedResponse(
+      cacheKey: cacheKey,
+      allowExpired: allowExpired,
+    );
+  }
+
+  Future<List<dynamic>> readCachedListSnapshot({
+    required String path,
+    Map<String, dynamic>? queryParameters,
+    bool allowExpired = true,
+  }) async {
+    final cached = await readCachedSnapshot(
+      path: path,
+      queryParameters: queryParameters,
+      allowExpired: allowExpired,
+    );
+    final data = cached?['data'];
+    if (data is List<dynamic>) {
+      return data;
+    }
+    return const <dynamic>[];
+  }
+
+  void _recordTelemetry({
+    required String method,
+    required String path,
+    required int durationMs,
+    required DateTime occurredAt,
+    required bool success,
+    int? statusCode,
+    bool fromCache = false,
+    bool usedStaleCache = false,
+  }) {
+    _recentTelemetry.insert(
+      0,
+      ApiRequestTelemetry(
+        method: method,
+        path: path,
+        durationMs: durationMs,
+        occurredAt: occurredAt,
+        success: success,
+        statusCode: statusCode,
+        fromCache: fromCache,
+        usedStaleCache: usedStaleCache,
+      ),
+    );
+    if (_recentTelemetry.length > 60) {
+      _recentTelemetry.removeRange(60, _recentTelemetry.length);
+    }
+  }
+
   Future<Map<String, dynamic>> _performRequest({
     required String upperMethod,
     required String path,
@@ -217,6 +300,8 @@ class ApiClient {
     Duration? cacheTtl,
   }) async {
     final isGet = upperMethod == 'GET';
+    final startedAt = DateTime.now();
+    final stopwatch = Stopwatch()..start();
 
     try {
       final response = await _dio.request(
@@ -236,6 +321,14 @@ class ApiClient {
         final errors =
             (payload['errors'] as List?)?.map((e) => e.toString()).toList();
         final status = response.statusCode ?? 500;
+        _recordTelemetry(
+          method: upperMethod,
+          path: path,
+          durationMs: stopwatch.elapsedMilliseconds,
+          occurredAt: startedAt,
+          success: false,
+          statusCode: status,
+        );
         throw ApiException(status, message, errors: errors);
       }
 
@@ -250,8 +343,33 @@ class ApiClient {
         await _clearAllCache();
       }
 
+      _recordTelemetry(
+        method: upperMethod,
+        path: path,
+        durationMs: stopwatch.elapsedMilliseconds,
+        occurredAt: startedAt,
+        success: true,
+        statusCode: response.statusCode,
+      );
+
       return payload;
     } on DioException catch (error) {
+      final fallback = isGet && useCache
+          ? await _getCachedResponse(cacheKey: cacheKey, allowExpired: true)
+          : null;
+      if (fallback != null) {
+        _recordTelemetry(
+          method: upperMethod,
+          path: path,
+          durationMs: stopwatch.elapsedMilliseconds,
+          occurredAt: startedAt,
+          success: true,
+          statusCode: error.response?.statusCode,
+          fromCache: true,
+          usedStaleCache: true,
+        );
+        return fallback;
+      }
       final status = error.response?.statusCode ?? 500;
       final message = error.response?.data is Map
           ? ((error.response!.data as Map)['message'] ??
@@ -259,6 +377,14 @@ class ApiClient {
                   'Network error')
               .toString()
           : error.message ?? 'Network error';
+      _recordTelemetry(
+        method: upperMethod,
+        path: path,
+        durationMs: stopwatch.elapsedMilliseconds,
+        occurredAt: startedAt,
+        success: false,
+        statusCode: status,
+      );
       throw ApiException(status, message);
     }
   }
@@ -279,6 +405,15 @@ class ApiClient {
     if (isGet && useCache) {
       final cached = await _getCachedResponse(cacheKey: cacheKey);
       if (cached != null) {
+        _recordTelemetry(
+          method: upperMethod,
+          path: path,
+          durationMs: 0,
+          occurredAt: DateTime.now(),
+          success: true,
+          statusCode: 200,
+          fromCache: true,
+        );
         return cached;
       }
     }

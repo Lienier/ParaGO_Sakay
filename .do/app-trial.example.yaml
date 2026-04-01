@@ -1,0 +1,99 @@
+name: parago-backend-trial
+region: sgp
+features:
+  - buildpack-stack=ubuntu-22
+alerts:
+  - rule: DEPLOYMENT_FAILED
+services:
+  - name: api
+    environment_slug: node-js
+    git:
+      repo_clone_url: https://github.com/Lienier/ParaGO_Sakay.git
+      branch: main
+    source_dir: /
+    build_command: npm ci
+    run_command: npm start
+    http_port: 5000
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 15
+      period_seconds: 10
+      timeout_seconds: 5
+      failure_threshold: 6
+    envs:
+      - key: NODE_ENV
+        value: production
+        scope: RUN_TIME
+      - key: PORT
+        value: "5000"
+        scope: RUN_TIME
+      - key: MONGO_URI
+        value: __MONGO_URI__
+        scope: RUN_TIME
+        type: SECRET
+      - key: JWT_SECRET
+        value: __JWT_SECRET__
+        scope: RUN_TIME
+        type: SECRET
+      - key: JWT_EXPIRES_IN
+        value: 7d
+        scope: RUN_TIME
+      - key: JWT_REFRESH_SECRET
+        value: __JWT_REFRESH_SECRET__
+        scope: RUN_TIME
+        type: SECRET
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 30d
+        scope: RUN_TIME
+      - key: BOARDING_WINDOW_MINUTES
+        value: "10"
+        scope: RUN_TIME
+      - key: STOP_ALERT_COOLDOWN_MINUTES
+        value: "2"
+        scope: RUN_TIME
+      - key: STOP_ALERT_ROAD_PROXIMITY_METERS
+        value: "300"
+        scope: RUN_TIME
+      - key: UNLOAD_ROAD_PROXIMITY_METERS
+        value: "5"
+        scope: RUN_TIME
+      - key: PICKUP_REQUEST_TTL_MINUTES
+        value: "12"
+        scope: RUN_TIME
+      - key: MAX_REQUESTS_PER_PASSENGER_PER_TRIP
+        value: "2"
+        scope: RUN_TIME
+      - key: PICKUP_ROAD_PROXIMITY_METERS
+        value: "300"
+        scope: RUN_TIME
+      - key: PICKUP_CURRENT_LOCATION_MAX_DISTANCE_METERS
+        value: "50"
+        scope: RUN_TIME
+      - key: GOOGLE_CLIENT_IDS
+        value: __GOOGLE_CLIENT_IDS__
+        scope: RUN_TIME
+        type: SECRET
+      - key: FACEBOOK_APP_TOKEN
+        value: ""
+        scope: RUN_TIME
+      - key: FIREBASE_PROJECT_ID
+        value: __FIREBASE_PROJECT_ID__
+        scope: RUN_TIME
+        type: SECRET
+      - key: FIREBASE_CLIENT_EMAIL
+        value: __FIREBASE_CLIENT_EMAIL__
+        scope: RUN_TIME
+        type: SECRET
+      - key: FIREBASE_PRIVATE_KEY
+        value: __FIREBASE_PRIVATE_KEY__
+        scope: RUN_TIME
+        type: SECRET
+      - key: SMSAPIPH_API_KEY
+        value: __SMSAPIPH_API_KEY__
+        scope: RUN_TIME
+        type: SECRET
+      - key: SMSAPIPH_BASE_URL
+        value: https://smsapiph.onrender.com/api/v1
+        scope: RUN_TIME

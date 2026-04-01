@@ -3,3 +3,6 @@ node_modules/
 dist/
 coverage/
 *.log
+.do/*.local.yaml
+.do/*.local.sh
+.do/*trial-key*

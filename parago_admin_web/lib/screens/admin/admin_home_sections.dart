@@ -38,8 +38,15 @@ class _AdminOverviewPage extends StatelessWidget {
     required this.error,
     required this.dashboard,
     required this.requestReport,
+    required this.boardingReport,
+    required this.alertReport,
+    required this.tripActivityReport,
+    required this.routeDemandReport,
     required this.activity,
     required this.routes,
+    required this.telemetry,
+    required this.lastSyncedAt,
+    required this.showingCachedSnapshot,
     required this.onRefresh,
     required this.onSelectDrivers,
     required this.onSelectBuilder,
@@ -50,8 +57,15 @@ class _AdminOverviewPage extends StatelessWidget {
   final String? error;
   final Map<String, dynamic>? dashboard;
   final Map<String, dynamic>? requestReport;
+  final Map<String, dynamic>? boardingReport;
+  final Map<String, dynamic>? alertReport;
+  final Map<String, dynamic>? tripActivityReport;
+  final Map<String, dynamic>? routeDemandReport;
   final List<dynamic> activity;
   final List<RouteSummaryModel> routes;
+  final List<TelemetryRollup> telemetry;
+  final DateTime? lastSyncedAt;
+  final bool showingCachedSnapshot;
   final Future<void> Function({bool silent}) onRefresh;
   final VoidCallback onSelectDrivers;
   final VoidCallback onSelectBuilder;
@@ -60,18 +74,24 @@ class _AdminOverviewPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final metrics = dashboard ?? const <String, dynamic>{};
-    final requestRows = requestReport?['byStatus'] as List<dynamic>? ?? [];
-    final requestTotal = requestReport?['total']?.toString() ?? '0';
+    final requestRows = parseStatusReportRows(requestReport?['byStatus']);
+    final requestTotal = requestReport?['total']?.toString() ??
+        totalStatusCount(requestRows).toString();
+    final boardingRows = parseStatusReportRows(boardingReport?['byStatus']);
+    final alertRows = parseStatusReportRows(alertReport?['byStatus']);
+    final tripRows = parseStatusReportRows(tripActivityReport?['byStatus']);
+    final routeDemandRows =
+        routeDemandReport?['routes'] as List<dynamic>? ?? const <dynamic>[];
 
     return RefreshIndicator(
       onRefresh: () => onRefresh(silent: false),
       child: ListView(
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
         children: [
-          _AdminHero(
+          const _AdminHero(
             title: 'Operations overview',
             subtitle:
-                'Monitor active trips, pickup demand, landmark-ready routes, and admin activity from one browser workspace.',
+                'Monitor active trips, pickup demand, landmark-ready routes, and operations activity from one browser workspace.',
           ),
           if (loading) ...[
             const SizedBox(height: 16),
@@ -79,7 +99,15 @@ class _AdminOverviewPage extends StatelessWidget {
           ],
           if (error != null) ...[
             const SizedBox(height: 16),
-            _AdminInfoBanner(message: error!),
+            _AdminInfoBanner(message: error!, isWarning: true),
+          ],
+          if (lastSyncedAt != null) ...[
+            const SizedBox(height: 16),
+            _AdminInfoBanner(
+              message: showingCachedSnapshot
+                  ? 'Showing cached operational data from ${ParagoFormat.relative(lastSyncedAt!.toIso8601String())} while the connection stabilizes.'
+                  : 'Last synced ${ParagoFormat.relative(lastSyncedAt!.toIso8601String())}.',
+            ),
           ],
           const SizedBox(height: 18),
           Wrap(
@@ -137,7 +165,7 @@ class _AdminOverviewPage extends StatelessWidget {
                 icon: Icons.manage_accounts_outlined,
                 title: 'Manage drivers',
                 description:
-                    'Create drivers, assign routes, and schedule trips from one admin panel.',
+                    'Create drivers, assign routes, and schedule trips from one workspace.',
                 actionLabel: 'Open drivers',
                 onPressed: onSelectDrivers,
               ),
@@ -165,33 +193,138 @@ class _AdminOverviewPage extends StatelessWidget {
             subtitle: 'Total requests in the last 7 days: $requestTotal',
             child: requestRows.isEmpty
                 ? const Text('No request data available yet.')
-                : Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: requestRows.map((row) {
-                      final data = _readDynamicMap(row);
-                      final status = data['_id']?.toString() ?? 'unknown';
-                      final count = data['count']?.toString() ?? '0';
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .primary
-                              .withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        child: Text(
-                          '${ParagoFormat.statusLabel(status)} | $count',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
+                : _buildReportWrap(context, requestRows),
+          ),
+          const SizedBox(height: 18),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 900;
+              final cards = <Widget>[
+                _MiniReportCard(
+                  title: 'Boarding report',
+                  subtitle:
+                      'Ride-session states this week (${totalStatusCount(boardingRows)} total)',
+                  body: boardingRows.isEmpty
+                      ? const Text('No boarding activity yet.')
+                      : _buildReportWrap(context, boardingRows),
+                ),
+                _MiniReportCard(
+                  title: 'Alert report',
+                  subtitle:
+                      'Passenger stop-alert outcomes (${totalStatusCount(alertRows)} total)',
+                  body: alertRows.isEmpty
+                      ? const Text('No stop alerts recorded yet.')
+                      : _buildReportWrap(context, alertRows),
+                ),
+                _MiniReportCard(
+                  title: 'Trip activity',
+                  subtitle:
+                      'Trip lifecycle states (${totalStatusCount(tripRows)} total)',
+                  body: tripRows.isEmpty
+                      ? const Text('No trip activity recorded yet.')
+                      : _buildReportWrap(context, tripRows),
+                ),
+              ];
+
+              if (compact) {
+                return Column(
+                  children: [
+                    for (final card in cards) ...[
+                      card,
+                      const SizedBox(height: 18),
+                    ],
+                  ],
+                );
+              }
+
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var index = 0; index < cards.length; index += 1) ...[
+                    Expanded(child: cards[index]),
+                    if (index < cards.length - 1) const SizedBox(width: 12),
+                  ],
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 18),
+          _SectionCard(
+            title: 'Route demand analytics',
+            subtitle:
+                'Top-demand routes ranked by pickup requests to support dispatch and coverage decisions.',
+            child: routeDemandRows.isEmpty
+                ? const Text('No route-demand data available yet.')
+                : Column(
+                    children: routeDemandRows.take(5).map((entry) {
+                      final item = _readDynamicMap(entry);
+                      final routeId = item['_id']?.toString() ?? '';
+                      final totalRequests =
+                          item['totalRequests']?.toString() ?? '0';
+                      final route = _findRouteById(routes, routeId);
+                      final label = route?.label.isNotEmpty == true
+                          ? route!.label
+                          : 'Route $routeId';
+                      final subtitle = route == null
+                          ? 'Route metadata is unavailable in this snapshot.'
+                          : '${route.stopPoints.length} landmarks · ${ParagoFormat.statusLabel(route.status)}';
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF8F8F5),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: Row(
+                            children: [
+                              CircleAvatar(
+                                backgroundColor: Theme.of(context)
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: 0.10),
+                                foregroundColor:
+                                    Theme.of(context).colorScheme.primary,
+                                child: Text(
+                                  '${routeDemandRows.indexOf(entry) + 1}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      label,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(subtitle),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                '$totalRequests requests',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelLarge
+                                    ?.copyWith(fontWeight: FontWeight.w800),
+                              ),
+                            ],
                           ),
                         ),
                       );
-                    }).toList(),
+                    }).toList(growable: false),
                   ),
           ),
           const SizedBox(height: 18),
@@ -232,13 +365,77 @@ class _AdminOverviewPage extends StatelessWidget {
                           ),
                         ),
                       );
-                    }).toList(),
+                    }).toList(growable: false),
+                  ),
+          ),
+          const SizedBox(height: 18),
+          _SectionCard(
+            title: 'Client performance snapshot',
+            subtitle:
+                'Recent console request timings help document responsiveness during evaluation.',
+            child: telemetry.isEmpty
+                ? const Text(
+                    'Telemetry will appear after the first API requests complete.',
+                  )
+                : Column(
+                    children: telemetry.map((entry) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF8F8F5),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      entry.label,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '${entry.requestCount} requests · ${entry.failureCount} failures · ${entry.staleHits} cache fallbacks',
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Text(
+                                    'avg ${entry.averageDurationMs} ms',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelLarge
+                                        ?.copyWith(fontWeight: FontWeight.w800),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text('max ${entry.maxDurationMs} ms'),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }).toList(growable: false),
                   ),
           ),
           const SizedBox(height: 18),
           _SectionCard(
             title: 'Recent activity',
-            subtitle: 'Latest admin and system events',
+            subtitle: 'Latest operations and system events',
             child: activity.isEmpty
                 ? const Text('No activity logs recorded yet.')
                 : Column(
@@ -270,11 +467,35 @@ class _AdminOverviewPage extends StatelessWidget {
                           ),
                         ),
                       );
-                    }).toList(),
+                    }).toList(growable: false),
                   ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildReportWrap(
+    BuildContext context,
+    List<StatusReportMetric> rows,
+  ) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: rows.map((row) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color:
+                Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Text(
+            '${ParagoFormat.statusLabel(row.status)} | ${row.count}',
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        );
+      }).toList(growable: false),
     );
   }
 }
@@ -313,7 +534,7 @@ class _AdminHero extends StatelessWidget {
               borderRadius: BorderRadius.circular(999),
             ),
             child: const Text(
-              'Dedicated admin web console',
+              'Dedicated operations console',
               style: TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.w700,
@@ -343,22 +564,33 @@ class _AdminHero extends StatelessWidget {
 }
 
 class _AdminInfoBanner extends StatelessWidget {
-  const _AdminInfoBanner({required this.message});
+  const _AdminInfoBanner({
+    required this.message,
+    this.isWarning = false,
+  });
 
   final String message;
+  final bool isWarning;
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final backgroundColor =
+        isWarning ? colorScheme.errorContainer : colorScheme.secondaryContainer;
+    final foregroundColor = isWarning
+        ? colorScheme.onErrorContainer
+        : colorScheme.onSecondaryContainer;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.errorContainer,
+        color: backgroundColor,
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
         message,
         style: TextStyle(
-          color: Theme.of(context).colorScheme.onErrorContainer,
+          color: foregroundColor,
           fontWeight: FontWeight.w600,
         ),
       ),
@@ -446,6 +678,42 @@ class _QuickActionCard extends StatelessWidget {
   }
 }
 
+class _MiniReportCard extends StatelessWidget {
+  const _MiniReportCard({
+    required this.title,
+    required this.subtitle,
+    required this.body,
+  });
+
+  final String title;
+  final String subtitle;
+  final Widget body;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 6),
+            Text(subtitle),
+            const SizedBox(height: 14),
+            body,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 IconData _sectionIcon(_AdminWorkspaceSection section) {
   switch (section) {
     case _AdminWorkspaceSection.overview:
@@ -480,4 +748,16 @@ Map<String, dynamic> _readDynamicMap(dynamic value) {
     return value.map((key, item) => MapEntry(key.toString(), item));
   }
   return const <String, dynamic>{};
+}
+
+RouteSummaryModel? _findRouteById(
+  List<RouteSummaryModel> routes,
+  String routeId,
+) {
+  for (final route in routes) {
+    if (route.id == routeId) {
+      return route;
+    }
+  }
+  return null;
 }

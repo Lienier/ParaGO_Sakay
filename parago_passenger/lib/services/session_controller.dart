@@ -115,6 +115,16 @@ class SessionController extends ChangeNotifier {
     );
   }
 
+  Future<void> refreshCurrentUser() async {
+    final user = await AuthService(_apiClient).getCurrentUser();
+    if (!_isPassengerUser(user)) {
+      await clear();
+      return;
+    }
+    _user = user;
+    notifyListeners();
+  }
+
   Future<void> logout() async {
     final refreshToken = _refreshToken;
     if (refreshToken != null && refreshToken.isNotEmpty) {

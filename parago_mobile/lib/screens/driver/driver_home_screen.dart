@@ -146,20 +146,32 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   bool get _isAppForeground {
     switch (_appLifecycleState) {
+      case AppLifecycleState.inactive:
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
       case AppLifecycleState.detached:
         return false;
       case AppLifecycleState.resumed:
-      case AppLifecycleState.inactive:
       case null:
         return true;
     }
   }
 
+  bool get _isAppDetached => _appLifecycleState == AppLifecycleState.detached;
+
   bool _shouldBeOnline(SessionController session, {bool? hasInternet}) {
     return session.isAuthenticated &&
+        !_isAppDetached &&
+        (hasInternet ?? _hasInternet);
+  }
+
+  bool _shouldKeepRealtimeConnected(
+    SessionController session, {
+    bool? hasInternet,
+  }) {
+    return session.isAuthenticated &&
         _isAppForeground &&
+        !_isAppDetached &&
         (hasInternet ?? _hasInternet);
   }
 
@@ -171,8 +183,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (!session.isAuthenticated) {
       return 'Driver stays offline until the account is signed in.';
     }
+    if (_isAppDetached) {
+      return 'Driver is offline because the app session has ended.';
+    }
     if (!_isAppForeground) {
-      return 'Driver goes offline automatically while the app is in the background.';
+      return 'Driver stays online in the background, but live syncing can pause until the app returns to the foreground.';
     }
     if (!hasInternet) {
       return 'Driver is offline because the device cannot reach the ParaGO server.';
@@ -284,6 +299,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return;
     }
 
+    if (!_isAppForeground) {
+      _applyAutomaticAvailabilityState(session, hasInternet: _hasInternet);
+      _syncRealtimeSocket(session);
+      return;
+    }
+
     if (probeNetwork && _isAppForeground) {
       final hasInternet = await _probeServerReachability(session);
       if (!mounted) {
@@ -328,7 +349,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     bool forceReconnect = false,
   }) {
     final token = session.token?.trim() ?? '';
-    final shouldConnect = _shouldBeOnline(session);
+    final shouldConnect = _shouldKeepRealtimeConnected(session);
     if (!shouldConnect || token.isEmpty) {
       _realtimeSocketService.disconnect();
       return;
@@ -964,14 +985,44 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     );
   }
 
-  Future<void> _completeRequest(String requestId) async {
+  Future<void> _completeRequest(PickupRequestModel request) async {
+    final confirmed = await _showPickupCompletionConfirmation(request);
+    if (confirmed != true || !mounted) {
+      return;
+    }
     final session = context.read<SessionController>();
     final driverService = DriverService(session.apiClient);
     await _runDriverAction(
-      loadingMessage: 'Completing pickup request...',
-      successMessage: 'Pickup request marked completed.',
-      action: () => driverService.completeRequest(requestId),
+      loadingMessage: 'Confirming pickup...',
+      successMessage: 'Pickup confirmed. The passenger booking was updated.',
+      action: () => driverService.completeRequest(request.id),
     );
+  }
+
+  Future<bool> _showPickupCompletionConfirmation(
+    PickupRequestModel request,
+  ) async {
+    final stopLabel = request.stopRef ?? 'this pickup point';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Confirm pickup'),
+        content: Text(
+          'Confirm that the passenger has been picked up at $stopLabel. This will also update the passenger app.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Confirm pickup'),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
   }
 
   Future<void> _acknowledgeAlert(String alertId) async {
@@ -1019,6 +1070,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   Future<void> _publishVehicleLocation() async {
     if (!mounted) {
+      return;
+    }
+
+    if (!_isAppForeground) {
       return;
     }
 

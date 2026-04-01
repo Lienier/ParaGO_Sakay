@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/config/app_config.dart';
 import '../models/auth/auth_models.dart';
 import '../models/user_role.dart';
 import '../core/utils/action_feedback.dart';
@@ -17,28 +18,21 @@ class AuthScreen extends StatefulWidget {
 class _AuthScreenState extends State<AuthScreen> {
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
-  final _phoneCtrl = TextEditingController();
-  final _codeCtrl = TextEditingController();
 
   bool _loading = false;
   bool _obscurePassword = true;
   String? _error;
-  AdminLoginChallenge? _challenge;
 
   @override
   void dispose() {
     _emailCtrl.dispose();
     _passwordCtrl.dispose();
-    _phoneCtrl.dispose();
-    _codeCtrl.dispose();
     super.dispose();
   }
 
   void _dismissKeyboard() {
     FocusManager.instance.primaryFocus?.unfocus();
   }
-
-  bool get _awaitingCode => _challenge != null;
 
   Future<void> _submitCredentials() async {
     _dismissKeyboard();
@@ -51,63 +45,18 @@ class _AuthScreenState extends State<AuthScreen> {
     });
 
     try {
-      final challenge = await ActionFeedback.run<AdminLoginChallenge>(
-        context: context,
-        loadingMessage: 'Sending verification code...',
-        showSuccess: false,
-        action: () async {
-          return auth.startAdminLogin(
-            email: _emailCtrl.text,
-            password: _passwordCtrl.text,
-            phone: _phoneCtrl.text,
-          );
-        },
-        onError: (error) async {
-          if (!mounted) return;
-          setState(() => _error = ActionFeedback.messageOf(error));
-        },
-      );
-      if (challenge == null || !mounted) {
-        return;
-      }
-      setState(() {
-        _challenge = challenge;
-        _codeCtrl.clear();
-      });
-    } finally {
-      if (mounted) {
-        setState(() => _loading = false);
-      }
-    }
-  }
-
-  Future<void> _verifyCode() async {
-    _dismissKeyboard();
-    final challenge = _challenge;
-    if (challenge == null) {
-      return;
-    }
-
-    final session = context.read<SessionController>();
-    final auth = AuthService(session.apiClient);
-
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
-    try {
       final response = await ActionFeedback.run<AuthSession>(
         context: context,
-        loadingMessage: 'Verifying code...',
+        loadingMessage: 'Signing in...',
         showSuccess: false,
         action: () async {
-          final result = await auth.verifyAdminLogin(
-            challengeId: challenge.challengeId,
-            code: _codeCtrl.text,
+          final result = await auth.loginEmail(
+            email: _emailCtrl.text,
+            password: _passwordCtrl.text,
+            role: 'ADMIN',
           );
           if (result.user.role != UserRole.admin) {
-            throw Exception('Invalid verification result');
+            throw Exception('This account is not authorized for admin access.');
           }
           return result;
         },
@@ -127,16 +76,13 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
-  Future<void> _submit() {
-    return _awaitingCode ? _verifyCode() : _submitCredentials();
-  }
+  Future<void> _submit() => _submitCredentials();
 
-  void _returnToCredentials() {
-    setState(() {
-      _challenge = null;
-      _error = null;
-      _codeCtrl.clear();
-    });
+  bool get _showNetworkTroubleshooting {
+    final message = (_error ?? '').toLowerCase();
+    return message.contains('browser') ||
+        message.contains('network') ||
+        message.contains('timed out');
   }
 
   @override
@@ -192,136 +138,68 @@ class _AuthScreenState extends State<AuthScreen> {
                 ),
               ),
               const SizedBox(height: 14),
-            ],
-            if (!_awaitingCode) ...[
-              TextField(
-                controller: _emailCtrl,
-                keyboardType: TextInputType.emailAddress,
-                textInputAction: TextInputAction.next,
-                onTapOutside: (_) => _dismissKeyboard(),
-                onSubmitted: (_) => FocusScope.of(context).nextFocus(),
-                decoration: const InputDecoration(
-                  labelText: 'Email address',
-                  prefixIcon: Icon(Icons.alternate_email),
+              if (_showNetworkTroubleshooting) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Text(
+                    'Troubleshooting:\n'
+                    '1. Current API target: ${AppConfig.apiBaseUrl}\n'
+                    '2. If you are developing locally, start the backend on port 5000 or point PARAGO_API_BASE_URL to your local API.\n'
+                    '3. If you are using the deployed backend, verify that the API server is reachable and the admin account is active.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
                 ),
+                const SizedBox(height: 14),
+              ],
+            ],
+            TextField(
+              controller: _emailCtrl,
+              keyboardType: TextInputType.emailAddress,
+              textInputAction: TextInputAction.next,
+              onTapOutside: (_) => _dismissKeyboard(),
+              onSubmitted: (_) => FocusScope.of(context).nextFocus(),
+              decoration: const InputDecoration(
+                labelText: 'Email address',
+                prefixIcon: Icon(Icons.alternate_email),
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _passwordCtrl,
-                obscureText: _obscurePassword,
-                textInputAction: TextInputAction.next,
-                onTapOutside: (_) => _dismissKeyboard(),
-                onSubmitted: (_) => FocusScope.of(context).nextFocus(),
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
-                    onPressed: () {
-                      setState(
-                        () => _obscurePassword = !_obscurePassword,
-                      );
-                    },
-                    icon: Icon(
-                      _obscurePassword
-                          ? Icons.visibility_off
-                          : Icons.visibility,
-                    ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _passwordCtrl,
+              obscureText: _obscurePassword,
+              textInputAction: TextInputAction.done,
+              onTapOutside: (_) => _dismissKeyboard(),
+              onSubmitted: (_) {
+                if (!_loading) {
+                  _submit();
+                }
+              },
+              decoration: InputDecoration(
+                labelText: 'Password',
+                prefixIcon: const Icon(Icons.lock_outline),
+                suffixIcon: IconButton(
+                  onPressed: () {
+                    setState(
+                      () => _obscurePassword = !_obscurePassword,
+                    );
+                  },
+                  icon: Icon(
+                    _obscurePassword ? Icons.visibility_off : Icons.visibility,
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _phoneCtrl,
-                keyboardType: TextInputType.phone,
-                textInputAction: TextInputAction.done,
-                onTapOutside: (_) => _dismissKeyboard(),
-                onSubmitted: (_) {
-                  if (!_loading) {
-                    _submit();
-                  }
-                },
-                decoration: const InputDecoration(
-                  labelText: 'Mobile number',
-                  hintText: '09XXXXXXXXX or +639XXXXXXXXX',
-                  prefixIcon: Icon(Icons.phone_android_outlined),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.03),
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: const Text(
-                  'Enter the mobile number only if this admin account is not linked to one yet. After the password is verified, we will text the one-time code there.',
-                ),
-              ),
-            ] else ...[
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: scheme.secondaryContainer,
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: Text(
-                  'We sent a one-time verification code to ${_challenge?.maskedPhone ?? 'your mobile number'}.',
-                  style: TextStyle(
-                    color: scheme.onSecondaryContainer,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: _codeCtrl,
-                keyboardType: TextInputType.number,
-                textInputAction: TextInputAction.done,
-                onTapOutside: (_) => _dismissKeyboard(),
-                onSubmitted: (_) {
-                  if (!_loading) {
-                    _submit();
-                  }
-                },
-                decoration: const InputDecoration(
-                  labelText: 'Verification code',
-                  prefixIcon: Icon(Icons.password_outlined),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Codes expire in about 5 minutes. If you need to use a different number, go back and restart the admin login.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
+            ),
             const SizedBox(height: 16),
-            if (_awaitingCode) ...[
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _loading ? null : _returnToCredentials,
-                      icon: const Icon(Icons.arrow_back),
-                      label: const Text('Back'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: _loading ? null : _submit,
-                      icon: const Icon(Icons.verified_user_outlined),
-                      label: const Text('Verify code'),
-                    ),
-                  ),
-                ],
-              ),
-            ] else
-              FilledButton.icon(
-                onPressed: _loading ? null : _submit,
-                icon: const Icon(Icons.sms_outlined),
-                label: const Text('Send verification code'),
-              ),
+            FilledButton.icon(
+              onPressed: _loading ? null : _submit,
+              icon: const Icon(Icons.login_rounded),
+              label: const Text('Sign in'),
+            ),
             const SizedBox(height: 10),
             Container(
               padding: const EdgeInsets.all(14),
@@ -329,10 +207,8 @@ class _AuthScreenState extends State<AuthScreen> {
                 color: Colors.black.withValues(alpha: 0.03),
                 borderRadius: BorderRadius.circular(18),
               ),
-              child: Text(
-                _awaitingCode
-                    ? 'Password verification is already complete for this sign-in attempt. Enter the SMS code to finish the admin login.'
-                    : 'If your access was just created or updated, sign in again here with your admin account so the latest permissions are loaded.',
+              child: const Text(
+                'Sign in directly with your admin email and password. If your access was just created or updated, sign in again here so the latest permissions are loaded.',
               ),
             ),
             if (_loading) ...[

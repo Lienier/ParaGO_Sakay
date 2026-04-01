@@ -44,14 +44,13 @@ Register the web app in your Google/Firebase project as needed for your setup.
 Run the app with the backend URL:
 
 ```bash
-flutter run -d chrome --dart-define=PARAGO_API_BASE_URL=https://sheltered-spire-66522-ba45eb6a735e.herokuapp.com/api/v1
+flutter run -d chrome \
+  --dart-define=PARAGO_API_BASE_URL=https://sheltered-spire-66522-ba45eb6a735e.herokuapp.com/api/v1 \
+  --dart-define=ORS_API_KEY=<your-openrouteservice-key> \
+  --dart-define=PARAGO_ENABLE_REALTIME=false
 ```
 
-If you prefer using the bundled app `.env`, set:
-
-```env
-PARAGO_API_BASE_URL=https://sheltered-spire-66522-ba45eb6a735e.herokuapp.com/api/v1
-```
+The app no longer uses a bundled `.env`. Pass app config through `--dart-define`.
 
 Backend note:
 

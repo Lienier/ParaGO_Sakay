@@ -166,7 +166,7 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
       setState(() {
         _loadingRoute = false;
         _statusMessage =
-            'OpenRouteService key missing. Add ORS_API_KEY to parago_mobile/.env.';
+            'OpenRouteService key missing. Pass ORS_API_KEY with --dart-define.';
       });
       return;
     }

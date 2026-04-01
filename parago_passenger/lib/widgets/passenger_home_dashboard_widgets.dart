@@ -29,7 +29,7 @@ class PassengerDashboardTopBar extends StatelessWidget {
           ),
         ],
       ),
-          child: Row(
+      child: Row(
         children: [
           _IconBubble(
             icon: Icons.menu_rounded,
@@ -79,8 +79,16 @@ class PassengerDashboardTopBar extends StatelessWidget {
             onSelected: onAccountSelected,
             itemBuilder: (context) => const [
               PopupMenuItem<String>(
+                value: 'profile',
+                child: Text('Profile & settings'),
+              ),
+              PopupMenuItem<String>(
                 value: 'refresh',
                 child: Text('Refresh data'),
+              ),
+              PopupMenuItem<String>(
+                value: 'mark_all_read',
+                child: Text('Mark alerts read'),
               ),
               PopupMenuItem<String>(
                 value: 'logout',
@@ -228,10 +236,14 @@ class PassengerQuickRouteCard extends StatelessWidget {
       child: Ink(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: selected ? color.withValues(alpha: 0.14) : const Color(0xFFF7F7F4),
+          color: selected
+              ? color.withValues(alpha: 0.14)
+              : const Color(0xFFF7F7F4),
           borderRadius: BorderRadius.circular(24),
           border: Border.all(
-            color: selected ? color.withValues(alpha: 0.38) : const Color(0xFFE6E6E0),
+            color: selected
+                ? color.withValues(alpha: 0.38)
+                : const Color(0xFFE6E6E0),
           ),
         ),
         child: Column(
@@ -301,9 +313,8 @@ class PassengerSecondaryActionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final background = enabled
-        ? color.withValues(alpha: 0.10)
-        : const Color(0xFFF3F4F1);
+    final background =
+        enabled ? color.withValues(alpha: 0.10) : const Color(0xFFF3F4F1);
     final foreground = enabled ? color : const Color(0xFFA0A7A4);
 
     return InkWell(
@@ -496,7 +507,9 @@ class PassengerMapControlChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: selected ? const Color(0xFF0F6A5F) : Colors.white.withValues(alpha: 0.94),
+      color: selected
+          ? const Color(0xFF0F6A5F)
+          : Colors.white.withValues(alpha: 0.94),
       borderRadius: BorderRadius.circular(999),
       child: InkWell(
         onTap: onTap,

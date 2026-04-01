@@ -10,7 +10,7 @@ class AdminService {
     final response = await _client.request(
       method: 'GET',
       path: '/admin/dashboard',
-      useCache: false,
+      useCache: true,
     );
     return response['data'] as Map<String, dynamic>;
   }
@@ -20,7 +20,7 @@ class AdminService {
       method: 'GET',
       path: '/admin/recent-activity',
       queryParameters: {'limit': limit},
-      useCache: false,
+      useCache: true,
     );
     final data = response['data'];
     return data is List<dynamic> ? data : <dynamic>[];
@@ -36,7 +36,7 @@ class AdminService {
   }
 
   Future<List<TripSession>> getTrips() async {
-    final data = await _client.getList(path: '/trips', useCache: false);
+    final data = await _client.getList(path: '/trips', useCache: true);
     return data
         .map((entry) => TripSession.fromJson(entry as Map<String, dynamic>))
         .toList();
@@ -153,6 +153,76 @@ class AdminService {
         if (routeId != null) 'routeId': routeId,
       },
       useCache: false,
+    );
+    return response['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> reportBoarding({
+    required String fromIso,
+    required String toIso,
+    String? routeId,
+  }) async {
+    final response = await _client.request(
+      method: 'GET',
+      path: '/reports/boarding',
+      queryParameters: {
+        'from': fromIso,
+        'to': toIso,
+        if (routeId != null) 'routeId': routeId,
+      },
+      useCache: true,
+    );
+    return response['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> reportAlerts({
+    required String fromIso,
+    required String toIso,
+    String? routeId,
+  }) async {
+    final response = await _client.request(
+      method: 'GET',
+      path: '/reports/alerts',
+      queryParameters: {
+        'from': fromIso,
+        'to': toIso,
+        if (routeId != null) 'routeId': routeId,
+      },
+      useCache: true,
+    );
+    return response['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> reportTripActivity({
+    required String fromIso,
+    required String toIso,
+    String? routeId,
+  }) async {
+    final response = await _client.request(
+      method: 'GET',
+      path: '/reports/trip-activity',
+      queryParameters: {
+        'from': fromIso,
+        'to': toIso,
+        if (routeId != null) 'routeId': routeId,
+      },
+      useCache: true,
+    );
+    return response['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> reportRouteDemand({
+    required String fromIso,
+    required String toIso,
+  }) async {
+    final response = await _client.request(
+      method: 'GET',
+      path: '/reports/route-demand',
+      queryParameters: {
+        'from': fromIso,
+        'to': toIso,
+      },
+      useCache: true,
     );
     return response['data'] as Map<String, dynamic>;
   }

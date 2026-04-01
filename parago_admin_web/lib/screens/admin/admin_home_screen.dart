@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/config/app_config.dart';
+import '../../core/utils/admin_report_summary.dart';
 import '../../core/utils/parago_format.dart';
 import '../../models/transport/route_summary.dart';
 import '../../services/admin_service.dart';
@@ -34,10 +35,16 @@ class AdminHomeScreen extends StatefulWidget {
 class _AdminHomeScreenState extends State<AdminHomeScreen> {
   Map<String, dynamic>? _dashboard;
   Map<String, dynamic>? _requestReport;
+  Map<String, dynamic>? _boardingReport;
+  Map<String, dynamic>? _alertReport;
+  Map<String, dynamic>? _tripActivityReport;
+  Map<String, dynamic>? _routeDemandReport;
   List<dynamic> _activity = [];
   List<RouteSummaryModel> _routes = [];
   bool _loading = false;
   String? _error;
+  DateTime? _lastSyncedAt;
+  bool _showingCachedSnapshot = false;
   Timer? _pollingTimer;
   StreamSubscription<Map<String, dynamic>>? _operationsSubscription;
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
@@ -47,6 +54,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     final session = context.read<SessionController>();
     final admin = AdminService(session.apiClient);
     final routeService = RouteService(session.apiClient);
+    final requestStartedAt = DateTime.now();
 
     if (!silent) {
       setState(() => _loading = true);
@@ -62,20 +70,52 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           fromIso: from.toIso8601String(),
           toIso: now.toIso8601String(),
         ),
-        routeService.getRoutes(useCache: false),
+        admin.reportBoarding(
+          fromIso: from.toIso8601String(),
+          toIso: now.toIso8601String(),
+        ),
+        admin.reportAlerts(
+          fromIso: from.toIso8601String(),
+          toIso: now.toIso8601String(),
+        ),
+        admin.reportTripActivity(
+          fromIso: from.toIso8601String(),
+          toIso: now.toIso8601String(),
+        ),
+        admin.reportRouteDemand(
+          fromIso: from.toIso8601String(),
+          toIso: now.toIso8601String(),
+        ),
+        routeService.getRoutes(useCache: true),
       ]);
+
+      final usedStaleCache = session.apiClient.recentTelemetry.any(
+        (entry) =>
+            entry.occurredAt.isAfter(requestStartedAt) && entry.usedStaleCache,
+      );
 
       if (!mounted) return;
       setState(() {
         _dashboard = results[0] as Map<String, dynamic>;
         _activity = results[1] as List<dynamic>;
         _requestReport = results[2] as Map<String, dynamic>;
-        _routes = results[3] as List<RouteSummaryModel>;
+        _boardingReport = results[3] as Map<String, dynamic>;
+        _alertReport = results[4] as Map<String, dynamic>;
+        _tripActivityReport = results[5] as Map<String, dynamic>;
+        _routeDemandReport = results[6] as Map<String, dynamic>;
+        _routes = results[7] as List<RouteSummaryModel>;
         _error = null;
+        _lastSyncedAt = DateTime.now();
+        _showingCachedSnapshot = usedStaleCache;
       });
     } catch (error) {
       if (!mounted) return;
-      setState(() => _error = error.toString());
+      setState(() {
+        _error = _dashboard == null ? error.toString() : null;
+        if (_dashboard != null) {
+          _showingCachedSnapshot = true;
+        }
+      });
     } finally {
       if (mounted && !silent) {
         setState(() => _loading = false);
@@ -338,7 +378,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   String _sectionSubtitle(_AdminWorkspaceSection section) {
     switch (section) {
       case _AdminWorkspaceSection.overview:
-        return 'Live admin metrics, recent activity, route health, and pickup behavior.';
+        return 'Live operations metrics, recent activity, route health, and pickup behavior.';
       case _AdminWorkspaceSection.drivers:
         return 'Create driver accounts, assign jeepneys, and schedule trips from one workspace.';
       case _AdminWorkspaceSection.routeBuilder:
@@ -349,6 +389,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   }
 
   Widget _buildWorkspaceContent() {
+    final session = context.read<SessionController>();
     switch (_selectedSection) {
       case _AdminWorkspaceSection.overview:
         return _AdminOverviewPage(
@@ -356,8 +397,15 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           error: _error,
           dashboard: _dashboard,
           requestReport: _requestReport,
+          boardingReport: _boardingReport,
+          alertReport: _alertReport,
+          tripActivityReport: _tripActivityReport,
+          routeDemandReport: _routeDemandReport,
           activity: _activity,
           routes: _routes,
+          telemetry: summarizeTelemetry(session.apiClient.recentTelemetry),
+          lastSyncedAt: _lastSyncedAt,
+          showingCachedSnapshot: _showingCachedSnapshot,
           onRefresh: _load,
           onSelectDrivers: () =>
               setState(() => _selectedSection = _AdminWorkspaceSection.drivers),
@@ -389,50 +437,63 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   Widget build(BuildContext context) {
     final session = context.read<SessionController>();
     final userName = session.user?.fullName ?? 'Administrator';
+    final compactHeader = MediaQuery.sizeOf(context).width < 900;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF4F1E8),
       appBar: AppBar(
-        title: const Text('ParaGO! Admin'),
+        toolbarHeight: 76,
+        titleSpacing: 18,
+        title: _AdminHeaderBrand(userName: userName),
         actions: [
-          TextButton.icon(
-            onPressed: _loading ? null : () => _load(),
-            icon: const Icon(Icons.refresh),
-            label: const Text('Refresh'),
-          ),
-          const SizedBox(width: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: Theme.of(context)
-                    .colorScheme
-                    .primary
-                    .withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.admin_panel_settings_outlined, size: 18),
-                  const SizedBox(width: 8),
-                  Text(
-                    userName,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
+          if (!compactHeader) ...[
+            TextButton.icon(
+              onPressed: _loading
+                  ? null
+                  : () async {
+                      await session.apiClient.clearCache();
+                      await _load();
+                    },
+              icon: const Icon(Icons.refresh),
+              label: const Text('Refresh'),
             ),
-          ),
-          const SizedBox(width: 8),
+            const SizedBox(width: 8),
+          ],
           Padding(
             padding: const EdgeInsets.only(right: 16),
-            child: FilledButton.tonalIcon(
-              onPressed: session.logout,
-              icon: const Icon(Icons.logout),
-              label: const Text('Log out'),
-            ),
+            child: compactHeader
+                ? IconButton.filledTonal(
+                    onPressed: session.logout,
+                    tooltip: 'Log out',
+                    icon: const Icon(Icons.logout),
+                  )
+                : TextButton.icon(
+                    onPressed: session.logout,
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      foregroundColor: Theme.of(context).colorScheme.primary,
+                    ),
+                    icon: const Icon(Icons.logout),
+                    label: const Text('Log out'),
+                  ),
           ),
+          if (compactHeader)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: IconButton(
+                onPressed: _loading
+                    ? null
+                    : () async {
+                        await session.apiClient.clearCache();
+                        await _load();
+                      },
+                tooltip: 'Refresh',
+                icon: const Icon(Icons.refresh),
+              ),
+            ),
         ],
       ),
       body: SafeArea(
@@ -466,7 +527,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                           ),
                           const SizedBox(height: 10),
                           Text(
-                            'Admin',
+                            'Console',
                             style: Theme.of(context).textTheme.labelLarge,
                           ),
                         ],
@@ -558,9 +619,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                       children: [
                         Text(
                           _sectionTitle(_selectedSection),
-                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                fontWeight: FontWeight.w800,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.titleLarge?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                  ),
                         ),
                         const SizedBox(height: 6),
                         Text(_sectionSubtitle(_selectedSection)),
@@ -583,6 +645,56 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           },
         ),
       ),
+    );
+  }
+}
+
+class _AdminHeaderBrand extends StatelessWidget {
+  const _AdminHeaderBrand({required this.userName});
+
+  final String userName;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: const Color(0xFFE6F2EF),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: const Icon(
+            Icons.admin_panel_settings_outlined,
+            color: Color(0xFF0F6A5F),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'ParaGO! Admin',
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Signed in as $userName',
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
