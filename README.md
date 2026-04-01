@@ -5,7 +5,7 @@ This scaffold is built for a thesis-oriented transportation support system using
 - Node.js + Express
 - MongoDB Atlas (Mongoose)
 - JWT authentication
-- Heroku-ready server entrypoint
+- DigitalOcean App Platform-ready server entrypoint
 
 It implements a modular backend for passenger/driver/admin roles with:
 

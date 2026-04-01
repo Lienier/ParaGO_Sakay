@@ -52,7 +52,7 @@ Run the app with the backend URL:
 
 ```bash
 flutter run -d <device> \
-  --dart-define=PARAGO_API_BASE_URL=https://sheltered-spire-66522-ba45eb6a735e.herokuapp.com/api/v1 \
+  --dart-define=PARAGO_API_BASE_URL=https://paragosakay-app-qulmw.ondigitalocean.app/api/v1 \
   --dart-define=ORS_API_KEY=<your-openrouteservice-key> \
   --dart-define=PARAGO_ENABLE_REALTIME=false
 ```

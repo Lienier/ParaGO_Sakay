@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 class AppConfig {
   static const String _apiBaseUrlFallback = String.fromEnvironment(
     'PARAGO_API_BASE_URL',
-    defaultValue: 'http://localhost:5000/api/v1',
+    defaultValue: 'https://paragosakay-app-qulmw.ondigitalocean.app/api/v1',
   );
   static const String _apiBaseUrlsFallback = String.fromEnvironment(
     'PARAGO_API_BASE_URLS',
