@@ -68,6 +68,29 @@ class PassengerService {
         response['data'] as Map<String, dynamic>);
   }
 
+  Future<String?> reverseGeocodeLabel({
+    required double lat,
+    required double lng,
+  }) async {
+    final response = await _client.request(
+      method: 'GET',
+      path: '/pickup-requests/reverse-geocode',
+      queryParameters: {
+        'lat': lat,
+        'lng': lng,
+      },
+    );
+    final data = response['data'];
+    if (data is! Map<String, dynamic>) {
+      return null;
+    }
+    final rawLabel = data['label']?.toString().trim();
+    if (rawLabel == null || rawLabel.isEmpty) {
+      return null;
+    }
+    return rawLabel;
+  }
+
   Future<List<RideSessionModel>> getMyRides({bool useCache = true}) async {
     final data = await _client.getList(
       path: '/ride-sessions/mine',

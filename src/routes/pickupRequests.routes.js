@@ -1,4 +1,5 @@
 const express = require('express');
+const axios = require('axios');
 const PickupRequest = require('../models/pickupRequest');
 const RideSession = require('../models/rideSession');
 const TripSession = require('../models/tripSession');
@@ -25,6 +26,7 @@ const {
   pickupRoadProximityMeters,
   pickupCurrentLocationMaxDistanceMeters,
   unloadRoadProximityMeters,
+  tomtomApiKey,
 } = require('../config/env');
 const { ensureObjectId, ensureLatLng } = require('../utils/validators');
 const {
@@ -49,6 +51,39 @@ const pointCoordinates = (value) =>
   Array.isArray(value?.coordinates) && value.coordinates.length >= 2
     ? [Number(value.coordinates[0]), Number(value.coordinates[1])]
     : null;
+
+const reverseGeocodeLabel = async ({ latitude, longitude }) => {
+  if (!tomtomApiKey) {
+    return null;
+  }
+
+  const response = await axios.get(
+    `https://api.tomtom.com/search/2/reverseGeocode/${latitude},${longitude}.json`,
+    {
+      params: {
+        key: tomtomApiKey,
+        language: 'en-US',
+      },
+      timeout: 15000,
+      headers: {
+        Accept: 'application/json',
+      },
+    }
+  );
+
+  const addresses = Array.isArray(response.data?.addresses)
+    ? response.data.addresses
+    : [];
+  const first = addresses[0];
+  const address = first?.address || {};
+  return (
+    address.freeformAddress ||
+    address.streetNameAndNumber ||
+    address.streetName ||
+    address.municipality ||
+    null
+  );
+};
 
 const resolveEligibleTripForRoute = async ({
   routeId,
@@ -313,6 +348,26 @@ router.post(
     });
 
     return ok(res, request, 'Pickup request created', 201);
+  })
+);
+
+router.get(
+  '/reverse-geocode',
+  authenticate,
+  authorize(PASSENGER, ADMIN),
+  asyncHandler(async (req, res) => {
+    const latitude = Number(req.query.lat);
+    const longitude = Number(req.query.lng);
+    ensureLatLng(latitude, longitude, 'location');
+
+    const label = await reverseGeocodeLabel({ latitude, longitude });
+    return ok(
+      res,
+      {
+        label,
+      },
+      'Reverse geocode lookup'
+    );
   })
 );
 

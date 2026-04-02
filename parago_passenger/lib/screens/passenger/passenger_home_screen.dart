@@ -78,6 +78,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   int _outsideAutoUnloadWindowCount = 0;
   DateTime? _outsideAutoUnloadSince;
   DateTime? _autoUnloadPromptedAt;
+  int _pickupLabelLookupSerial = 0;
+  int _unloadLabelLookupSerial = 0;
   String? _autoUnloadWindowRideId;
   String? _lastAutoUnloadRideId;
   DateTime? _lastAutoUnloadAt;
@@ -1014,7 +1016,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       text: _draftPickupLabel ?? 'Nearest loading point',
     );
     final unloadStopCtrl = TextEditingController(
-      text: _draftUnloadLabel ?? 'Pinned unload point',
+      text: _draftUnloadLabel ?? 'Selected unload location',
     );
     final noteCtrl = TextEditingController();
     final result = await showDialog<_PassengerBookingDetails>(
@@ -1028,7 +1030,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                   ? 'Nearest loading point'
                   : pickupStopCtrl.text.trim(),
               destinationStopRef: unloadStopCtrl.text.trim().isEmpty
-                  ? 'Pinned unload point'
+                  ? 'Selected unload location'
                   : unloadStopCtrl.text.trim(),
               note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
             ),
@@ -1592,6 +1594,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   Future<void> _onPassengerMapTap(LatLng point) async {
     final route = _selectedRoute;
     final currentLocation = await _ensureCurrentPassengerLocation();
+    LatLng? labelLookupPoint;
+    var lookupPickupLabel = false;
     if (!mounted) {
       return;
     }
@@ -1631,8 +1635,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _draftPickupLabel = _nearestRoutePlaceName(
           route,
           snappedPoint,
-          fallback: 'Pinned pickup point',
+          fallback: 'Selected pickup location',
         );
+        labelLookupPoint = snappedPoint;
+        lookupPickupLabel = true;
         _selectedTripId = _preferredTripIdForRoute(
           _trips,
           _selectedRouteId,
@@ -1667,10 +1673,63 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _draftUnloadLabel = _nearestRoutePlaceName(
           route,
           snappedPoint,
-          fallback: 'Pinned unload point',
+          fallback: 'Selected unload location',
         );
+        labelLookupPoint = snappedPoint;
       }
     });
+    if (labelLookupPoint != null) {
+      unawaited(
+        _refreshPinnedLocationLabel(
+          point: labelLookupPoint!,
+          forPickup: lookupPickupLabel,
+        ),
+      );
+    }
+  }
+
+  Future<void> _refreshPinnedLocationLabel({
+    required LatLng point,
+    required bool forPickup,
+  }) async {
+    final session = context.read<SessionController>();
+    final passengerService = PassengerService(session.apiClient);
+    final lookupSerial = forPickup
+        ? ++_pickupLabelLookupSerial
+        : ++_unloadLabelLookupSerial;
+    try {
+      final label = await passengerService.reverseGeocodeLabel(
+        lat: point.latitude,
+        lng: point.longitude,
+      );
+      if (!mounted || label == null || label.isEmpty) {
+        return;
+      }
+      final latestSerial = forPickup
+          ? _pickupLabelLookupSerial
+          : _unloadLabelLookupSerial;
+      final activePoint = forPickup ? _draftPickupPoint : _draftUnloadPoint;
+      if (lookupSerial != latestSerial || !_sameMapPoint(activePoint, point)) {
+        return;
+      }
+      setState(() {
+        if (forPickup) {
+          _draftPickupLabel = label;
+        } else {
+          _draftUnloadLabel = label;
+        }
+      });
+    } catch (_) {
+      // Keep the route-based fallback label if reverse geocoding fails.
+    }
+  }
+
+  bool _sameMapPoint(LatLng? a, LatLng? b) {
+    if (a == null || b == null) {
+      return false;
+    }
+    return (a.latitude - b.latitude).abs() < 0.000001 &&
+        (a.longitude - b.longitude).abs() < 0.000001;
   }
 
   String _nearestRoutePlaceName(
@@ -1734,7 +1793,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           progress: pickupProjection.progress,
         ) ??
         _PassengerFareStop(
-          name: _draftPickupLabel ?? 'Pinned pickup point',
+          name: _draftPickupLabel ?? 'Selected pickup location',
           progress: pickupProjection.progress,
           position: pickupProjection.point,
         );
@@ -1745,7 +1804,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           minProgress: boardingStop.progress,
         ) ??
         _PassengerFareStop(
-          name: _draftUnloadLabel ?? 'Pinned unload point',
+          name: _draftUnloadLabel ?? 'Selected unload location',
           progress: unloadProjection.progress,
           position: unloadProjection.point,
         );
@@ -1971,7 +2030,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           height: 78,
           alignment: Alignment.topCenter,
           child: _PassengerMapPin(
-            label: _draftPickupLabel ?? 'Pinned pickup point',
+            label: _draftPickupLabel ?? 'Selected pickup location',
             icon: Icons.person_pin_circle,
             color: const Color(0xFFE29B2D),
           ),
@@ -1986,7 +2045,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           height: 78,
           alignment: Alignment.topCenter,
           child: _PassengerMapPin(
-            label: _draftUnloadLabel ?? 'Pinned unload point',
+            label: _draftUnloadLabel ?? 'Selected unload location',
             icon: Icons.flag_circle,
             color: const Color(0xFFD84315),
           ),
@@ -2111,7 +2170,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           height: 78,
           alignment: Alignment.topCenter,
           child: _PassengerMapPin(
-            label: _draftPickupLabel ?? 'Pinned pickup point',
+            label: _draftPickupLabel ?? 'Selected pickup location',
             icon: Icons.person_pin_circle,
             color: const Color(0xFFE29B2D),
           ),
@@ -2126,7 +2185,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           height: 78,
           alignment: Alignment.topCenter,
           child: _PassengerMapPin(
-            label: _draftUnloadLabel ?? 'Pinned unload point',
+            label: _draftUnloadLabel ?? 'Selected unload location',
             icon: Icons.flag_circle,
             color: const Color(0xFFD84315),
           ),
