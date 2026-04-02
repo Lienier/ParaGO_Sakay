@@ -29,6 +29,11 @@ class RoutePreviewCache {
     RouteMapBounds? bounds,
     double? distanceMeters,
     double? durationSeconds,
+    double? rawDurationSeconds,
+    double? trafficDelayInSeconds,
+    double? averageJeepSpeedKph,
+    double? trafficMultiplier,
+    String? trafficProfile,
   }) async {
     if (points.length < 2) return;
 
@@ -47,6 +52,14 @@ class RoutePreviewCache {
       if (bounds != null) 'bounds': bounds.toJson(),
       if (distanceMeters != null) 'distanceMeters': distanceMeters,
       if (durationSeconds != null) 'durationSeconds': durationSeconds,
+      if (rawDurationSeconds != null) 'rawDurationSeconds': rawDurationSeconds,
+      if (trafficDelayInSeconds != null)
+        'trafficDelayInSeconds': trafficDelayInSeconds,
+      if (averageJeepSpeedKph != null)
+        'averageJeepSpeedKph': averageJeepSpeedKph,
+      if (trafficMultiplier != null) 'trafficMultiplier': trafficMultiplier,
+      if (trafficProfile != null && trafficProfile.trim().isNotEmpty)
+        'trafficProfile': trafficProfile,
     });
 
     final prefs = await SharedPreferences.getInstance();
@@ -125,6 +138,11 @@ class RoutePreviewCache {
           RouteMapBounds.fromPoints(points),
       distanceMeters: _toDouble(decoded['distanceMeters']),
       durationSeconds: _toDouble(decoded['durationSeconds']),
+      rawDurationSeconds: _toDouble(decoded['rawDurationSeconds']),
+      trafficDelayInSeconds: _toDouble(decoded['trafficDelayInSeconds']),
+      averageJeepSpeedKph: _toDouble(decoded['averageJeepSpeedKph']),
+      trafficMultiplier: _toDouble(decoded['trafficMultiplier']),
+      trafficProfile: decoded['trafficProfile']?.toString(),
     );
   }
 
@@ -163,6 +181,11 @@ class CachedRouteSnapshot {
     this.bounds,
     this.distanceMeters,
     this.durationSeconds,
+    this.rawDurationSeconds,
+    this.trafficDelayInSeconds,
+    this.averageJeepSpeedKph,
+    this.trafficMultiplier,
+    this.trafficProfile,
   });
 
   final String? routeId;
@@ -173,4 +196,9 @@ class CachedRouteSnapshot {
   final RouteMapBounds? bounds;
   final double? distanceMeters;
   final double? durationSeconds;
+  final double? rawDurationSeconds;
+  final double? trafficDelayInSeconds;
+  final double? averageJeepSpeedKph;
+  final double? trafficMultiplier;
+  final String? trafficProfile;
 }

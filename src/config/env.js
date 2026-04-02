@@ -57,6 +57,7 @@ module.exports = {
   firebasePrivateKey: normalizeMultiline(process.env.FIREBASE_PRIVATE_KEY),
   smsApiPhApiKey: process.env.SMSAPIPH_API_KEY || '',
   smsApiPhBaseUrl: process.env.SMSAPIPH_BASE_URL || 'https://smsapiph.onrender.com/api/v1',
+  tomtomApiKey: process.env.TOMTOM_API_KEY || '',
 };
 
 if (module.exports.nodeEnv === 'production') {

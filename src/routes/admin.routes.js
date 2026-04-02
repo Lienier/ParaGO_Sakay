@@ -1,4 +1,5 @@
 const express = require('express');
+const axios = require('axios');
 const { ADMIN } = require('../constants/roles');
 const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
@@ -16,6 +17,7 @@ const Jeepney = require('../models/jeepney');
 const RouteModel = require('../models/route');
 const ApiError = require('../utils/apiError');
 const { ensureObjectId } = require('../utils/validators');
+const { tomtomApiKey } = require('../config/env');
 const { createUserByAdmin } = require('../services/auth.service');
 const { hasOwn, isPlainObject, pickDefined } = require('../utils/object');
 const {
@@ -92,6 +94,44 @@ const syncJeepneyAssignment = async (driver, newJeepneyId) => {
   return buildDriverProfile(driver);
 };
 
+const normalizeLatLngPoint = (value, fieldName) => {
+  if (!isPlainObject(value)) {
+    throw new ApiError(400, `${fieldName} must be an object`);
+  }
+  const latitude = Number(value.latitude);
+  const longitude = Number(value.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    throw new ApiError(400, `${fieldName} must include valid latitude and longitude`);
+  }
+  if (latitude < -90 || latitude > 90) {
+    throw new ApiError(400, `${fieldName}.latitude is out of range`);
+  }
+  if (longitude < -180 || longitude > 180) {
+    throw new ApiError(400, `${fieldName}.longitude is out of range`);
+  }
+  return { latitude, longitude };
+};
+
+const decodeTomTomLegPoints = (legs = []) => {
+  const points = [];
+  for (const leg of legs) {
+    const legPoints = Array.isArray(leg?.points) ? leg.points : [];
+    for (const point of legPoints) {
+      const latitude = Number(point?.latitude);
+      const longitude = Number(point?.longitude);
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        continue;
+      }
+      const last = points[points.length - 1];
+      if (last && last[0] === longitude && last[1] === latitude) {
+        continue;
+      }
+      points.push([longitude, latitude]);
+    }
+  }
+  return points;
+};
+
 router.use(authenticate, authorize(ADMIN));
 
 router.get(
@@ -125,6 +165,78 @@ router.get(
       .populate('assignedRouteId', 'name code status')
       .sort({ createdAt: -1 });
     return ok(res, drivers, 'Drivers list');
+  })
+);
+
+router.post(
+  '/route-preview',
+  asyncHandler(async (req, res) => {
+    if (!tomtomApiKey) {
+      throw new ApiError(500, 'TomTom routing is not configured on the server');
+    }
+
+    const body = req.body || {};
+    const startPoint = normalizeLatLngPoint(body.startPoint, 'startPoint');
+    const endPoint = normalizeLatLngPoint(body.endPoint, 'endPoint');
+    const guidePoints = Array.isArray(body.guidePoints)
+      ? body.guidePoints.map((point, index) =>
+          normalizeLatLngPoint(point, `guidePoints[${index}]`)
+        )
+      : [];
+
+    const routePlanningLocations = [
+      startPoint,
+      ...guidePoints,
+      endPoint,
+    ]
+      .map((point) => `${point.latitude},${point.longitude}`)
+      .join(':');
+
+    const response = await axios.get(
+      `https://api.tomtom.com/routing/1/calculateRoute/${routePlanningLocations}/json`,
+      {
+        params: {
+          key: tomtomApiKey,
+          traffic: 'true',
+          travelMode: 'car',
+          routeRepresentation: 'polyline',
+          computeTravelTimeFor: 'all',
+          sectionType: 'traffic',
+        },
+        timeout: 20000,
+        headers: {
+          Accept: 'application/json',
+        },
+      }
+    );
+
+    const payload = response.data || {};
+    const routes = Array.isArray(payload.routes) ? payload.routes : [];
+    const route = routes[0];
+    const summary = isPlainObject(route?.summary) ? route.summary : {};
+    const coordinates = decodeTomTomLegPoints(route?.legs);
+
+    if (coordinates.length < 2) {
+      throw new ApiError(502, 'TomTom did not return valid route geometry');
+    }
+
+    return ok(
+      res,
+      {
+        path: {
+          type: 'LineString',
+          coordinates,
+        },
+        distanceMeters: Number(summary.lengthInMeters || 0),
+        durationSeconds: Number(summary.travelTimeInSeconds || 0),
+        rawDurationSeconds: Number(
+          summary.noTrafficTravelTimeInSeconds || summary.travelTimeInSeconds || 0
+        ),
+        trafficDelayInSeconds: Number(summary.trafficDelayInSeconds || 0),
+        source: 'tomtom',
+      },
+      'TomTom route preview'
+    );
   })
 );
 

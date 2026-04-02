@@ -17,6 +17,11 @@ class RouteSummaryModel {
     this.mapBounds,
     this.distanceMeters,
     this.durationSeconds,
+    this.rawDurationSeconds,
+    this.trafficDelayInSeconds,
+    this.averageJeepSpeedKph,
+    this.trafficMultiplier,
+    this.trafficProfile,
     this.navigationSource,
     this.fareConfig = const RouteFareConfig(),
   });
@@ -36,6 +41,11 @@ class RouteSummaryModel {
   final RouteMapBounds? mapBounds;
   final double? distanceMeters;
   final double? durationSeconds;
+  final double? rawDurationSeconds;
+  final double? trafficDelayInSeconds;
+  final double? averageJeepSpeedKph;
+  final double? trafficMultiplier;
+  final String? trafficProfile;
   final String? navigationSource;
   final RouteFareConfig fareConfig;
 
@@ -66,6 +76,11 @@ class RouteSummaryModel {
       mapBounds: RouteMapBounds.fromJson(navigation?['bounds']),
       distanceMeters: _toDouble(navigation?['distanceMeters']),
       durationSeconds: _toDouble(navigation?['durationSeconds']),
+      rawDurationSeconds: _toDouble(navigation?['rawDurationSeconds']),
+      trafficDelayInSeconds: _toDouble(navigation?['trafficDelayInSeconds']),
+      averageJeepSpeedKph: _toDouble(navigation?['averageJeepSpeedKph']),
+      trafficMultiplier: _toDouble(navigation?['trafficMultiplier']),
+      trafficProfile: navigation?['trafficProfile']?.toString(),
       navigationSource: navigation?['source']?.toString(),
       fareConfig: RouteFareConfig.fromJson(json['fareConfig']),
     );

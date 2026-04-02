@@ -46,7 +46,6 @@ Run the app with the backend URL:
 ```bash
 flutter run -d chrome \
   --dart-define=PARAGO_API_BASE_URL=https://paragosakay-app-qulmw.ondigitalocean.app/api/v1 \
-  --dart-define=ORS_API_KEY=<your-openrouteservice-key> \
   --dart-define=PARAGO_ENABLE_REALTIME=false
 ```
 
@@ -55,6 +54,7 @@ The app no longer uses a bundled `.env`. Pass app config through `--dart-define`
 Backend note:
 
 - Add Firebase Admin service-account values to the root `.env`.
+- Add `TOMTOM_API_KEY` to the root `.env` for traffic-aware route previews.
 - The backend verifies Firebase ID tokens, then creates or restores the MongoDB user.
 - If Google sign-in fails on Android, add your Android SHA-1 in Firebase, enable
   Google in Firebase Authentication, then download a fresh

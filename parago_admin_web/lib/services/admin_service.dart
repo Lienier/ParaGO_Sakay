@@ -1,4 +1,6 @@
 import '../core/network/api_client.dart';
+import 'package:latlong2/latlong.dart';
+import '../models/transport/route_summary.dart';
 import '../models/trip/trip_session.dart';
 
 class AdminService {
@@ -247,4 +249,96 @@ class AdminService {
     );
     return TripSession.fromJson(response['data'] as Map<String, dynamic>);
   }
+
+  Future<RoutePreviewResult> previewRoute({
+    required ({double latitude, double longitude}) startPoint,
+    required ({double latitude, double longitude}) endPoint,
+    List<({double latitude, double longitude})> guidePoints = const [],
+  }) async {
+    final response = await _client.request(
+      method: 'POST',
+      path: '/admin/route-preview',
+      body: {
+        'startPoint': {
+          'latitude': startPoint.latitude,
+          'longitude': startPoint.longitude,
+        },
+        'endPoint': {
+          'latitude': endPoint.latitude,
+          'longitude': endPoint.longitude,
+        },
+        'guidePoints': [
+          for (final point in guidePoints)
+            {
+              'latitude': point.latitude,
+              'longitude': point.longitude,
+            },
+        ],
+      },
+      useCache: false,
+    );
+
+    return RoutePreviewResult.fromJson(
+        response['data'] as Map<String, dynamic>);
+  }
+}
+
+class RoutePreviewResult {
+  const RoutePreviewResult({
+    required this.points,
+    this.distanceMeters,
+    this.durationSeconds,
+    this.rawDurationSeconds,
+    this.trafficDelayInSeconds,
+    this.source,
+  });
+
+  final List<LatLng> points;
+  final double? distanceMeters;
+  final double? durationSeconds;
+  final double? rawDurationSeconds;
+  final double? trafficDelayInSeconds;
+  final String? source;
+
+  RouteMapBounds? get bounds => RouteMapBounds.fromPoints(points);
+
+  factory RoutePreviewResult.fromJson(Map<String, dynamic> json) {
+    final path = json['path'];
+    final coordinates = path is Map<String, dynamic>
+        ? path['coordinates']
+        : (path is Map ? path['coordinates'] : null);
+
+    return RoutePreviewResult(
+      points: _parsePreviewPoints(coordinates),
+      distanceMeters: _toDouble(json['distanceMeters']),
+      durationSeconds: _toDouble(json['durationSeconds']),
+      rawDurationSeconds: _toDouble(json['rawDurationSeconds']),
+      trafficDelayInSeconds: _toDouble(json['trafficDelayInSeconds']),
+      source: json['source']?.toString(),
+    );
+  }
+}
+
+List<LatLng> _parsePreviewPoints(dynamic raw) {
+  if (raw is! List) return const <LatLng>[];
+  return raw
+      .map((entry) {
+        if (entry is! List || entry.length < 2) {
+          return null;
+        }
+        final lng = _toDouble(entry[0]);
+        final lat = _toDouble(entry[1]);
+        if (lat == null || lng == null) {
+          return null;
+        }
+        return LatLng(lat, lng);
+      })
+      .whereType<LatLng>()
+      .toList(growable: false);
+}
+
+double? _toDouble(dynamic value) {
+  if (value is num) return value.toDouble();
+  if (value is String) return double.tryParse(value);
+  return null;
 }

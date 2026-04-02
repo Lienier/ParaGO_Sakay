@@ -67,14 +67,22 @@ const routeSchema = new Schema(
     navigation: {
       source: {
         type: String,
-        enum: ['openstreetmap', 'cached'],
+        enum: ['openstreetmap', 'tomtom', 'cached'],
         default: 'openstreetmap',
+      },
+      trafficProfile: {
+        type: String,
+        enum: ['light', 'moderate', 'heavy', 'severe'],
       },
       origin: geoPointSchema,
       destination: geoPointSchema,
       bounds: routeBoundsSchema,
       distanceMeters: { type: Number, min: 0 },
       durationSeconds: { type: Number, min: 0 },
+      rawDurationSeconds: { type: Number, min: 0 },
+      trafficDelayInSeconds: { type: Number, min: 0 },
+      averageJeepSpeedKph: { type: Number, min: 1 },
+      trafficMultiplier: { type: Number, min: 1 },
     },
     fareConfig: {
       type: fareConfigSchema,

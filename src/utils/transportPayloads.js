@@ -199,7 +199,7 @@ const buildRouteNavigationPayload = (value, fieldName = 'navigation') => {
 
   const payload = {
     source: value.source
-      ? normalizeEnum(value.source, `${fieldName}.source`, ['openstreetmap', 'cached'])
+      ? normalizeEnum(value.source, `${fieldName}.source`, ['openstreetmap', 'tomtom', 'cached'])
       : 'openstreetmap',
     origin: normalizeGeoPoint(value.origin, `${fieldName}.origin`),
     destination: normalizeGeoPoint(value.destination, `${fieldName}.destination`),
@@ -218,6 +218,43 @@ const buildRouteNavigationPayload = (value, fieldName = 'navigation') => {
     payload.durationSeconds = normalizeNonNegativeNumber(
       value.durationSeconds,
       `${fieldName}.durationSeconds`
+    );
+  }
+  if (hasOwn(value, 'rawDurationSeconds')) {
+    payload.rawDurationSeconds = normalizeNonNegativeNumber(
+      value.rawDurationSeconds,
+      `${fieldName}.rawDurationSeconds`
+    );
+  }
+  if (hasOwn(value, 'trafficDelayInSeconds')) {
+    payload.trafficDelayInSeconds = normalizeNonNegativeNumber(
+      value.trafficDelayInSeconds,
+      `${fieldName}.trafficDelayInSeconds`
+    );
+  }
+  if (hasOwn(value, 'averageJeepSpeedKph')) {
+    payload.averageJeepSpeedKph = normalizeNonNegativeNumber(
+      value.averageJeepSpeedKph,
+      `${fieldName}.averageJeepSpeedKph`
+    );
+    if (payload.averageJeepSpeedKph < 1) {
+      throw new ApiError(400, `${fieldName}.averageJeepSpeedKph must be at least 1`);
+    }
+  }
+  if (hasOwn(value, 'trafficMultiplier')) {
+    payload.trafficMultiplier = normalizeNonNegativeNumber(
+      value.trafficMultiplier,
+      `${fieldName}.trafficMultiplier`
+    );
+    if (payload.trafficMultiplier < 1) {
+      throw new ApiError(400, `${fieldName}.trafficMultiplier must be at least 1`);
+    }
+  }
+  if (hasOwn(value, 'trafficProfile')) {
+    payload.trafficProfile = normalizeEnum(
+      value.trafficProfile,
+      `${fieldName}.trafficProfile`,
+      ['light', 'moderate', 'heavy', 'severe']
     );
   }
 

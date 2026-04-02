@@ -21,11 +21,19 @@ class OpenStreetMapRoutingService {
   Future<OpenStreetMapRouteResult> buildDrivingRoute({
     required LatLng startPoint,
     required LatLng endPoint,
+    List<LatLng> guidePoints = const <LatLng>[],
   }) async {
+    final coordinates = <LatLng>[
+      startPoint,
+      ...guidePoints,
+      endPoint,
+    ];
+    final coordinatePath = coordinates
+        .map((point) => '${point.longitude},${point.latitude}')
+        .join(';');
+
     final response = await _dio.get<Map<String, dynamic>>(
-      '/route/v1/driving/'
-      '${startPoint.longitude},${startPoint.latitude};'
-      '${endPoint.longitude},${endPoint.latitude}',
+      '/route/v1/driving/$coordinatePath',
       queryParameters: const {
         'overview': 'full',
         'geometries': 'geojson',

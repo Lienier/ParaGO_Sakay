@@ -347,8 +347,7 @@ class _AdminRouteLandmarkEditorScreenState
     if (distanceMeters <= baseDistanceMeters) {
       return _roundFare(fareConfig.baseAmount);
     }
-    final additionalKm =
-        ((distanceMeters - baseDistanceMeters) / 1000).ceil();
+    final additionalKm = ((distanceMeters - baseDistanceMeters) / 1000).ceil();
     return _roundFare(
       fareConfig.baseAmount + additionalKm * fareConfig.additionalAmountPerKm,
     );
@@ -684,8 +683,8 @@ class _AdminRouteLandmarkEditorScreenState
                                     child: _LandmarkMarker(
                                       order: index + 1,
                                       name: _landmarks[index].name,
-                                      fareLabel:
-                                          _formatFare(_landmarkFare(_landmarks[index])),
+                                      fareLabel: _formatFare(
+                                          _landmarkFare(_landmarks[index])),
                                       selected: _landmarks[index].id ==
                                           _selectedLandmarkId,
                                     ),

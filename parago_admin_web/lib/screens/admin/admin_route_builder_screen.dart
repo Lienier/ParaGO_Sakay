@@ -7,12 +7,12 @@ import 'package:provider/provider.dart';
 
 import '../../core/utils/action_feedback.dart';
 import '../../models/transport/route_summary.dart';
-import '../../services/open_street_map_routing_service.dart';
+import '../../services/admin_service.dart';
 import '../../services/route_preview_cache.dart';
 import '../../services/route_service.dart';
 import '../../services/session_controller.dart';
 
-enum _PinPlacementMode { start, end }
+enum _PinPlacementMode { start, end, guide }
 
 class AdminRouteBuilderScreen extends StatefulWidget {
   const AdminRouteBuilderScreen({
@@ -33,6 +33,12 @@ class AdminRouteBuilderScreen extends StatefulWidget {
 
 class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
   static const _defaultCenter = LatLng(14.6091, 121.0223);
+  static const Map<String, double> _trafficProfileMultipliers = {
+    'light': 1.0,
+    'moderate': 1.2,
+    'heavy': 1.5,
+    'severe': 1.9,
+  };
 
   final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
@@ -41,15 +47,16 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
   final _fareBaseAmountCtrl = TextEditingController(text: '17');
   final _fareBaseDistanceCtrl = TextEditingController(text: '4');
   final _fareAdditionalPerKmCtrl = TextEditingController(text: '2');
-  final OpenStreetMapRoutingService _routingService =
-      OpenStreetMapRoutingService();
+  final _avgJeepSpeedCtrl = TextEditingController(text: '18');
   final RoutePreviewCache _routePreviewCache = RoutePreviewCache();
 
   List<RouteSummaryModel> _routes = [];
   LatLng? _startPoint;
   LatLng? _endPoint;
+  List<LatLng> _guidePoints = [];
   CachedRouteSnapshot? _previewSnapshot;
   _PinPlacementMode _placementMode = _PinPlacementMode.start;
+  String _trafficProfile = 'moderate';
   bool _offlinePreview = false;
   bool _loadingRoutes = false;
   bool _buildingRoute = false;
@@ -73,7 +80,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     _fareBaseAmountCtrl.dispose();
     _fareBaseDistanceCtrl.dispose();
     _fareAdditionalPerKmCtrl.dispose();
-    _routingService.dispose();
+    _avgJeepSpeedCtrl.dispose();
     super.dispose();
   }
 
@@ -89,10 +96,17 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
         _formatNumericInput(route.fareConfig.baseDistanceKm);
     _fareAdditionalPerKmCtrl.text =
         _formatNumericInput(route.fareConfig.additionalAmountPerKm);
+    _avgJeepSpeedCtrl.text = _formatNumericInput(
+      route.averageJeepSpeedKph ?? 18,
+    );
+    _trafficProfile = route.trafficProfile ?? 'moderate';
 
     final previewPoints =
         route.pathPoints.length >= 2 ? route.pathPoints : route.mapPath;
     if (previewPoints.length >= 2) {
+      final waypointPoints = route.waypointPoints;
+      final hasDedicatedGuidePoints = waypointPoints.isNotEmpty &&
+          !_pointsMatch(waypointPoints, previewPoints);
       _previewSnapshot = CachedRouteSnapshot(
         routeId: route.id,
         routeCode: route.code,
@@ -102,9 +116,18 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
         bounds: route.mapBounds ?? RouteMapBounds.fromPoints(previewPoints),
         distanceMeters: route.distanceMeters,
         durationSeconds: route.durationSeconds,
+        rawDurationSeconds: route.rawDurationSeconds ?? route.durationSeconds,
+        trafficDelayInSeconds: route.trafficDelayInSeconds,
+        averageJeepSpeedKph: route.averageJeepSpeedKph ?? 18,
+        trafficMultiplier: route.trafficMultiplier ??
+            _trafficProfileMultipliers[_trafficProfile],
+        trafficProfile: route.trafficProfile ?? _trafficProfile,
       );
       _startPoint = _previewSnapshot!.startPoint;
       _endPoint = _previewSnapshot!.endPoint;
+      _guidePoints = hasDedicatedGuidePoints
+          ? List<LatLng>.from(waypointPoints)
+          : <LatLng>[];
     }
   }
 
@@ -138,10 +161,14 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
         _startPoint = point;
         _message =
             'Start pin placed. Tap again to move it or switch to End pin.';
-      } else {
+      } else if (_placementMode == _PinPlacementMode.end) {
         _endPoint = point;
         _message =
             'End pin placed. Tap again to move it or build the live route.';
+      } else {
+        _guidePoints = [..._guidePoints, point];
+        _message =
+            'Branch guide point ${_guidePoints.length} added. The route will follow these points in order.';
       }
       _previewSnapshot = null;
       _offlinePreview = false;
@@ -174,19 +201,35 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     setState(() {
       _buildingRoute = true;
       if (!autoTriggered) {
-        _message = 'Building a live OpenStreetMap route...';
+        _message = 'Building a live TomTom route preview...';
       }
     });
 
     try {
-      final route = await _routingService.buildDrivingRoute(
-        startPoint: startPoint,
-        endPoint: endPoint,
+      final session = context.read<SessionController>();
+      final admin = AdminService(session.apiClient);
+      final route = await admin.previewRoute(
+        startPoint: (
+          latitude: startPoint.latitude,
+          longitude: startPoint.longitude,
+        ),
+        endPoint: (
+          latitude: endPoint.latitude,
+          longitude: endPoint.longitude,
+        ),
+        guidePoints: [
+          for (final point in _guidePoints)
+            (latitude: point.latitude, longitude: point.longitude),
+        ],
       );
 
       if (!mounted || requestId != _buildRequestSerial) return;
 
       setState(() {
+        final adjustedDuration = _computeAdjustedEtaSeconds(
+          distanceMeters: route.distanceMeters,
+          rawDurationSeconds: route.durationSeconds,
+        );
         _previewSnapshot = CachedRouteSnapshot(
           routeCode: _normalizedCode,
           points: route.points,
@@ -194,10 +237,15 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
           endPoint: endPoint,
           bounds: route.bounds ?? RouteMapBounds.fromPoints(route.points),
           distanceMeters: route.distanceMeters,
-          durationSeconds: route.durationSeconds,
+          durationSeconds: adjustedDuration,
+          rawDurationSeconds: route.rawDurationSeconds ?? route.durationSeconds,
+          trafficDelayInSeconds: route.trafficDelayInSeconds,
+          averageJeepSpeedKph: _averageJeepSpeedKph,
+          trafficMultiplier: _trafficMultiplier,
+          trafficProfile: _trafficProfile,
         );
         _message = autoTriggered
-            ? 'Route refreshed from the new pins.'
+            ? 'Route refreshed from the selected pins and guide points.'
             : 'Live route ready. Save it to keep the same geometry online and offline.';
         _mapVersion += 1;
       });
@@ -272,6 +320,11 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
             bounds: _previewBounds,
             distanceMeters: _previewSnapshot?.distanceMeters,
             durationSeconds: _previewSnapshot?.durationSeconds,
+            rawDurationSeconds: _previewSnapshot?.rawDurationSeconds,
+            trafficDelayInSeconds: _previewSnapshot?.trafficDelayInSeconds,
+            averageJeepSpeedKph: _previewSnapshot?.averageJeepSpeedKph,
+            trafficMultiplier: _previewSnapshot?.trafficMultiplier,
+            trafficProfile: _previewSnapshot?.trafficProfile,
           );
           return saved;
         },
@@ -303,6 +356,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     setState(() {
       _startPoint = null;
       _endPoint = null;
+      _guidePoints = [];
       _previewSnapshot = null;
       _offlinePreview = false;
       _placementMode = _PinPlacementMode.start;
@@ -318,6 +372,41 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
       _message = 'Route preview cleared. Move a pin or build again.';
       _mapVersion += 1;
     });
+  }
+
+  Future<void> _clearGuidePoints() async {
+    if (_guidePoints.isEmpty) {
+      return;
+    }
+    setState(() {
+      _guidePoints = [];
+      _previewSnapshot = null;
+      _offlinePreview = false;
+      _message =
+          'Branch guide points cleared. The live route will return to the direct road match.';
+      _mapVersion += 1;
+    });
+    if (_startPoint != null && _endPoint != null) {
+      await _buildLiveRoute(autoTriggered: true);
+    }
+  }
+
+  Future<void> _removeGuidePoint(int index) async {
+    if (index < 0 || index >= _guidePoints.length) {
+      return;
+    }
+    setState(() {
+      final updated = [..._guidePoints]..removeAt(index);
+      _guidePoints = updated;
+      _previewSnapshot = null;
+      _offlinePreview = false;
+      _message =
+          'Branch guide point ${index + 1} removed. The live route is being refreshed.';
+      _mapVersion += 1;
+    });
+    if (_startPoint != null && _endPoint != null) {
+      await _buildLiveRoute(autoTriggered: true);
+    }
   }
 
   void _dismissKeyboard() {
@@ -359,10 +448,61 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     return double.tryParse(controller.text.trim()) ?? fallback;
   }
 
+  double get _averageJeepSpeedKph {
+    final parsed = double.tryParse(_avgJeepSpeedCtrl.text.trim());
+    if (parsed == null || parsed < 1) {
+      return 18;
+    }
+    return parsed;
+  }
+
+  double get _trafficMultiplier =>
+      _trafficProfileMultipliers[_trafficProfile] ?? 1.2;
+
   String _formatNumericInput(double value) {
     return value == value.truncateToDouble()
         ? value.toStringAsFixed(0)
         : value.toStringAsFixed(2);
+  }
+
+  double? _computeAdjustedEtaSeconds({
+    double? distanceMeters,
+    double? rawDurationSeconds,
+  }) {
+    final speedKph = _averageJeepSpeedKph;
+    final distanceBasedSeconds = distanceMeters == null
+        ? null
+        : (distanceMeters / 1000) / speedKph * 3600;
+    final baselineSeconds =
+        switch ((rawDurationSeconds, distanceBasedSeconds)) {
+      (final raw?, final speedBased?) => math.max(raw, speedBased),
+      (final raw?, null) => raw,
+      (null, final speedBased?) => speedBased,
+      _ => null,
+    };
+    if (baselineSeconds == null) {
+      return null;
+    }
+    return baselineSeconds * _trafficMultiplier;
+  }
+
+  String _trafficProfileLabel(String value) {
+    switch (value) {
+      case 'light':
+        return 'Light traffic';
+      case 'moderate':
+        return 'Moderate traffic';
+      case 'heavy':
+        return 'Heavy traffic';
+      case 'severe':
+        return 'Severe traffic';
+      default:
+        return value;
+    }
+  }
+
+  String _etaModelSummary() {
+    return 'Base ETA comes from TomTom traffic-aware routing. The saved ETA then respects avg jeep speed ${_formatNumericInput(_averageJeepSpeedKph)} kph and applies the ${_trafficProfileLabel(_trafficProfile).toLowerCase()} profile (${_trafficMultiplier.toStringAsFixed(2)}x) so your operational assumption is recorded with the route.';
   }
 
   String _fareRuleSummary() {
@@ -377,11 +517,14 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     if (bounds != null) {
       return bounds.center;
     }
-    if (_startPoint != null && _endPoint != null) {
-      return LatLng(
-        (_startPoint!.latitude + _endPoint!.latitude) / 2,
-        (_startPoint!.longitude + _endPoint!.longitude) / 2,
-      );
+    final points = <LatLng>[
+      if (_startPoint != null) _startPoint!,
+      ..._guidePoints,
+      if (_endPoint != null) _endPoint!,
+    ];
+    final draftBounds = RouteMapBounds.fromPoints(points);
+    if (draftBounds != null) {
+      return draftBounds.center;
     }
     return _startPoint ?? _endPoint ?? _defaultCenter;
   }
@@ -391,6 +534,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
         ? _previewPoints
         : <LatLng>[
             if (_startPoint != null) _startPoint!,
+            ..._guidePoints,
             if (_endPoint != null) _endPoint!,
           ];
     if (points.isEmpty) return 13.2;
@@ -429,18 +573,14 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
         'coordinates': pathCoordinates,
       },
       'waypoints': [
-        for (var index = 0; index < _previewPoints.length; index += 1)
+        for (var index = 0; index < _guidePoints.length; index += 1)
           {
-            'name': index == 0
-                ? 'Start pin'
-                : index == _previewPoints.length - 1
-                    ? 'End pin'
-                    : 'Geometry point ${index + 1}',
+            'name': 'Guide point ${index + 1}',
             'location': {
               'type': 'Point',
               'coordinates': <double>[
-                _previewPoints[index].longitude,
-                _previewPoints[index].latitude,
+                _guidePoints[index].longitude,
+                _guidePoints[index].latitude,
               ],
             },
           },
@@ -468,7 +608,8 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
         'additionalAmountPerKm': _parseFareInput(_fareAdditionalPerKmCtrl, 2),
       },
       'navigation': {
-        'source': 'openstreetmap',
+        'source': 'tomtom',
+        'trafficProfile': _trafficProfile,
         'origin': {
           'type': 'Point',
           'coordinates': <double>[
@@ -488,6 +629,12 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
           'distanceMeters': _previewSnapshot!.distanceMeters,
         if (_previewSnapshot?.durationSeconds != null)
           'durationSeconds': _previewSnapshot!.durationSeconds,
+        if (_previewSnapshot?.rawDurationSeconds != null)
+          'rawDurationSeconds': _previewSnapshot!.rawDurationSeconds,
+        if (_previewSnapshot?.trafficDelayInSeconds != null)
+          'trafficDelayInSeconds': _previewSnapshot!.trafficDelayInSeconds,
+        'averageJeepSpeedKph': _averageJeepSpeedKph,
+        'trafficMultiplier': _trafficMultiplier,
       },
     };
   }
@@ -495,6 +642,23 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
   String _formatCoordinate(LatLng? point) {
     if (point == null) return 'Not pinned yet';
     return '${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}';
+  }
+
+  bool _pointsMatch(List<LatLng> left, List<LatLng> right) {
+    if (left.length != right.length) {
+      return false;
+    }
+    for (var index = 0; index < left.length; index += 1) {
+      if (!_samePoint(left[index], right[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool _samePoint(LatLng left, LatLng right) {
+    return (left.latitude - right.latitude).abs() < 0.000001 &&
+        (left.longitude - right.longitude).abs() < 0.000001;
   }
 
   String _formatDistance(double? meters) {
@@ -527,6 +691,17 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     return null;
   }
 
+  String? _validatePositiveNumber(String? value, String label) {
+    final parsed = double.tryParse((value ?? '').trim());
+    if (parsed == null) {
+      return '$label must be a valid number.';
+    }
+    if (parsed <= 0) {
+      return '$label must be greater than 0.';
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -550,258 +725,68 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
           ],
           Form(
             key: _formKey,
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final sideBySide = constraints.maxWidth >= 1180;
+
+                if (!sideBySide) {
+                  return Column(
+                    children: [
+                      _buildRouteDetailsCard(theme),
+                      const SizedBox(height: 16),
+                      _buildFareSettingsCard(theme, existing),
+                    ],
+                  );
+                }
+
+                return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Route details', style: theme.textTheme.titleLarge),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Pin the start and end points directly on OpenStreetMap, then save the exact same route geometry for online and offline use.',
-                      style: theme.textTheme.bodyMedium,
+                    Expanded(
+                      flex: 5,
+                      child: _buildRouteDetailsCard(theme),
                     ),
-                    const SizedBox(height: 18),
-                    TextFormField(
-                      controller: _nameCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Route name',
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: (value) {
-                        final text = value?.trim() ?? '';
-                        if (text.isEmpty) {
-                          return 'Route name is required.';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 14),
-                    TextFormField(
-                      controller: _codeCtrl,
-                      textCapitalization: TextCapitalization.characters,
-                      decoration: const InputDecoration(
-                        labelText: 'Route code',
-                        border: OutlineInputBorder(),
-                      ),
-                      onChanged: (_) => setState(() {}),
-                      validator: (value) {
-                        final text = value?.trim() ?? '';
-                        if (text.isEmpty) {
-                          return 'Route code is required.';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 14),
-                    TextFormField(
-                      controller: _descriptionCtrl,
-                      minLines: 2,
-                      maxLines: 4,
-                      decoration: const InputDecoration(
-                        labelText: 'Description',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Text(
-                      'Fare settings',
-                      style: theme.textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'These values drive the passenger fare preview and backend fare computation for this route.',
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                    const SizedBox(height: 14),
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final stacked = constraints.maxWidth < 780;
-                        final fields = [
-                          TextFormField(
-                            controller: _fareBaseAmountCtrl,
-                            keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                            decoration: const InputDecoration(
-                              labelText: 'Base fare',
-                              prefixText: 'PHP ',
-                              border: OutlineInputBorder(),
-                            ),
-                            validator: (value) => _validateNonNegativeNumber(
-                              value,
-                              'Base fare',
-                            ),
-                            onChanged: (_) => setState(() {}),
-                          ),
-                          TextFormField(
-                            controller: _fareBaseDistanceCtrl,
-                            keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                            decoration: const InputDecoration(
-                              labelText: 'Base distance',
-                              suffixText: 'km',
-                              border: OutlineInputBorder(),
-                            ),
-                            validator: (value) => _validateNonNegativeNumber(
-                              value,
-                              'Base distance',
-                            ),
-                            onChanged: (_) => setState(() {}),
-                          ),
-                          TextFormField(
-                            controller: _fareAdditionalPerKmCtrl,
-                            keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                            decoration: const InputDecoration(
-                              labelText: 'Additional per km',
-                              prefixText: 'PHP ',
-                              border: OutlineInputBorder(),
-                            ),
-                            validator: (value) => _validateNonNegativeNumber(
-                              value,
-                              'Additional fare',
-                            ),
-                            onChanged: (_) => setState(() {}),
-                          ),
-                        ];
-
-                        if (stacked) {
-                          return Column(
-                            children: [
-                              for (var index = 0;
-                                  index < fields.length;
-                                  index += 1) ...[
-                                fields[index],
-                                if (index < fields.length - 1)
-                                  const SizedBox(height: 12),
-                              ],
-                            ],
-                          );
-                        }
-
-                        return Row(
-                          children: [
-                            for (var index = 0;
-                                index < fields.length;
-                                index += 1) ...[
-                              Expanded(child: fields[index]),
-                              if (index < fields.length - 1)
-                                const SizedBox(width: 12),
-                            ],
-                          ],
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 14),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF102725).withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Text(
-                        _fareRuleSummary(),
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: existing == null
-                            ? const Color(0xFF0F6A5F).withValues(alpha: 0.08)
-                            : const Color(0xFFE29B2D).withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Text(
-                        existing == null
-                            ? 'Saving will create a new route.'
-                            : 'Route code already exists. Saving will update ${existing.label}.',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      flex: 4,
+                      child: _buildFareSettingsCard(theme, existing),
                     ),
                   ],
-                ),
-              ),
+                );
+              },
             ),
           ),
           const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final sideBySide = constraints.maxWidth >= 1280;
+
+              if (!sideBySide) {
+                return Column(
+                  children: [
+                    _buildPinControlsCard(theme),
+                    const SizedBox(height: 16),
+                    _buildMapCard(theme, existing),
+                  ],
+                );
+              }
+
+              return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Pin controls', style: theme.textTheme.titleLarge),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      ChoiceChip(
-                        label: const Text('Place Start Pin'),
-                        selected: _placementMode == _PinPlacementMode.start,
-                        onSelected: (_) {
-                          setState(() {
-                            _placementMode = _PinPlacementMode.start;
-                            _message =
-                                'Tap the map to place or move the start pin.';
-                          });
-                        },
-                      ),
-                      ChoiceChip(
-                        label: const Text('Place End Pin'),
-                        selected: _placementMode == _PinPlacementMode.end,
-                        onSelected: (_) {
-                          setState(() {
-                            _placementMode = _PinPlacementMode.end;
-                            _message =
-                                'Tap the map to place or move the end pin.';
-                          });
-                        },
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _clearPreviewOnly,
-                        icon: const Icon(Icons.layers_clear_outlined),
-                        label: const Text('Clear Route Only'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _clearPins,
-                        icon: const Icon(Icons.restart_alt),
-                        label: const Text('Reset All Pins'),
-                      ),
-                    ],
+                  Expanded(
+                    flex: 3,
+                    child: _buildPinControlsCard(theme),
                   ),
-                  const SizedBox(height: 16),
-                  _CoordinateRow(
-                    label: 'Start',
-                    value: _formatCoordinate(_startPoint),
-                    icon: Icons.flag_circle_outlined,
-                    accent: const Color(0xFF0F6A5F),
-                  ),
-                  const SizedBox(height: 10),
-                  _CoordinateRow(
-                    label: 'End',
-                    value: _formatCoordinate(_endPoint),
-                    icon: Icons.location_on_outlined,
-                    accent: const Color(0xFF8A3B5D),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    flex: 5,
+                    child: _buildMapCard(theme, existing),
                   ),
                 ],
-              ),
-            ),
+              );
+            },
           ),
-          const SizedBox(height: 16),
-          _buildMapCard(theme, existing),
           if (_message != null) ...[
             const SizedBox(height: 16),
             Container(
@@ -831,6 +816,453 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
         title: const Text('Build Route'),
       ),
       body: body,
+    );
+  }
+
+  Widget _buildRouteDetailsCard(ThemeData theme) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Route details', style: theme.textTheme.titleLarge),
+            const SizedBox(height: 8),
+            Text(
+              'Pin the start and end points directly on OpenStreetMap, then save the exact same route geometry for online and offline use.',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 18),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final sideBySide = constraints.maxWidth >= 780;
+                final nameField = TextFormField(
+                  controller: _nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Route name',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (value) {
+                    final text = value?.trim() ?? '';
+                    if (text.isEmpty) {
+                      return 'Route name is required.';
+                    }
+                    return null;
+                  },
+                );
+                final codeField = TextFormField(
+                  controller: _codeCtrl,
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: const InputDecoration(
+                    labelText: 'Route code',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                  validator: (value) {
+                    final text = value?.trim() ?? '';
+                    if (text.isEmpty) {
+                      return 'Route code is required.';
+                    }
+                    return null;
+                  },
+                );
+
+                if (!sideBySide) {
+                  return Column(
+                    children: [
+                      nameField,
+                      const SizedBox(height: 14),
+                      codeField,
+                    ],
+                  );
+                }
+
+                return Row(
+                  children: [
+                    Expanded(child: nameField),
+                    const SizedBox(width: 12),
+                    Expanded(child: codeField),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              controller: _descriptionCtrl,
+              minLines: 2,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                labelText: 'Description',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFareSettingsCard(ThemeData theme, RouteSummaryModel? existing) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Fare settings',
+              style: theme.textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'These values drive the passenger fare preview and backend fare computation for this route.',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 14),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final stacked = constraints.maxWidth < 780;
+                final fields = [
+                  TextFormField(
+                    controller: _fareBaseAmountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Base fare',
+                      prefixText: 'PHP ',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) =>
+                        _validateNonNegativeNumber(value, 'Base fare'),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  TextFormField(
+                    controller: _fareBaseDistanceCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Base distance',
+                      suffixText: 'km',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) =>
+                        _validateNonNegativeNumber(value, 'Base distance'),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  TextFormField(
+                    controller: _fareAdditionalPerKmCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Additional per km',
+                      prefixText: 'PHP ',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) =>
+                        _validateNonNegativeNumber(value, 'Additional fare'),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ];
+
+                if (stacked) {
+                  return Column(
+                    children: [
+                      for (var index = 0;
+                          index < fields.length;
+                          index += 1) ...[
+                        fields[index],
+                        if (index < fields.length - 1)
+                          const SizedBox(height: 12),
+                      ],
+                    ],
+                  );
+                }
+
+                return Row(
+                  children: [
+                    for (var index = 0; index < fields.length; index += 1) ...[
+                      Expanded(child: fields[index]),
+                      if (index < fields.length - 1) const SizedBox(width: 12),
+                    ],
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 14),
+            Text(
+              'ETA settings',
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Record the assumed jeep speed and traffic profile used to compute the saved ETA.',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 14),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final stacked = constraints.maxWidth < 560;
+                final speedField = TextFormField(
+                  controller: _avgJeepSpeedCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Average jeep speed',
+                    suffixText: 'kph',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (value) => _validatePositiveNumber(
+                    value,
+                    'Average jeep speed',
+                  ),
+                  onChanged: (_) => setState(() {}),
+                );
+                final trafficField = DropdownButtonFormField<String>(
+                  initialValue: _trafficProfile,
+                  decoration: const InputDecoration(
+                    labelText: 'Traffic profile',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'light',
+                      child: Text('Light traffic'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'moderate',
+                      child: Text('Moderate traffic'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'heavy',
+                      child: Text('Heavy traffic'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'severe',
+                      child: Text('Severe traffic'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    setState(() => _trafficProfile = value ?? 'moderate');
+                  },
+                );
+
+                if (stacked) {
+                  return Column(
+                    children: [
+                      speedField,
+                      const SizedBox(height: 12),
+                      trafficField,
+                    ],
+                  );
+                }
+
+                return Row(
+                  children: [
+                    Expanded(child: speedField),
+                    const SizedBox(width: 12),
+                    Expanded(child: trafficField),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 14),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2157A5).withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                _etaModelSummary(),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF102725).withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                _fareRuleSummary(),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: existing == null
+                    ? const Color(0xFF0F6A5F).withValues(alpha: 0.08)
+                    : const Color(0xFFE29B2D).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                existing == null
+                    ? 'Saving will create a new route.'
+                    : 'Route code already exists. Saving will update ${existing.label}.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPinControlsCard(ThemeData theme) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            const spacing = 10.0;
+            final columns = constraints.maxWidth >= 1180
+                ? 4
+                : constraints.maxWidth >= 760
+                    ? 2
+                    : 1;
+            final baseWidth = columns == 1
+                ? constraints.maxWidth
+                : (constraints.maxWidth - (spacing * (columns - 1))) / columns;
+
+            double tileWidth(int span) {
+              final safeSpan = math.min(span, columns);
+              if (columns == 1) {
+                return constraints.maxWidth;
+              }
+              return (baseWidth * safeSpan) + (spacing * (safeSpan - 1));
+            }
+
+            return Wrap(
+              spacing: spacing,
+              runSpacing: spacing,
+              children: [
+                SizedBox(
+                  width: tileWidth(columns),
+                  child: _PinInfoTile(
+                    title: 'Pin controls',
+                    subtitle:
+                        'Use start, end, and branch guide points to force the route down the exact road branch you want before saving.',
+                  ),
+                ),
+                SizedBox(
+                  width: tileWidth(1),
+                  child: _PinActionTile(
+                    title: 'Place Start Pin',
+                    subtitle: 'Switch map taps to the start marker',
+                    icon: Icons.flag_circle_outlined,
+                    selected: _placementMode == _PinPlacementMode.start,
+                    accent: const Color(0xFF0F6A5F),
+                    onTap: () {
+                      setState(() {
+                        _placementMode = _PinPlacementMode.start;
+                        _message =
+                            'Tap the map to place or move the start pin.';
+                      });
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: tileWidth(1),
+                  child: _PinActionTile(
+                    title: 'Add Branch Guide',
+                    subtitle: 'Tap the map to add an ordered turn guide point',
+                    icon: Icons.alt_route,
+                    selected: _placementMode == _PinPlacementMode.guide,
+                    accent: const Color(0xFF2157A5),
+                    onTap: () {
+                      setState(() {
+                        _placementMode = _PinPlacementMode.guide;
+                        _message =
+                            'Tap the map to add branch guide points in the order the route should follow.';
+                      });
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: tileWidth(1),
+                  child: _PinActionTile(
+                    title: 'Place End Pin',
+                    subtitle: 'Switch map taps to the destination marker',
+                    icon: Icons.location_on_outlined,
+                    selected: _placementMode == _PinPlacementMode.end,
+                    accent: const Color(0xFF8A3B5D),
+                    onTap: () {
+                      setState(() {
+                        _placementMode = _PinPlacementMode.end;
+                        _message = 'Tap the map to place or move the end pin.';
+                      });
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: tileWidth(1),
+                  child: _PinActionTile(
+                    title: 'Clear Route Only',
+                    subtitle: 'Keep pins but remove live route geometry',
+                    icon: Icons.layers_clear_outlined,
+                    accent: const Color(0xFF2157A5),
+                    onTap: _clearPreviewOnly,
+                  ),
+                ),
+                SizedBox(
+                  width: tileWidth(1),
+                  child: _PinActionTile(
+                    title: 'Reset All Pins',
+                    subtitle: 'Clear both pins and the preview route',
+                    icon: Icons.restart_alt,
+                    accent: const Color(0xFFE29B2D),
+                    onTap: _clearPins,
+                  ),
+                ),
+                SizedBox(
+                  width: tileWidth(columns >= 4 ? 2 : 1),
+                  child: _GuidePointsTile(
+                    points: _guidePoints,
+                    onClear: _guidePoints.isEmpty ? null : _clearGuidePoints,
+                    onRemove: _removeGuidePoint,
+                  ),
+                ),
+                SizedBox(
+                  width: tileWidth(columns >= 4 ? 2 : 1),
+                  child: _CoordinateRow(
+                    label: 'Start',
+                    value: _formatCoordinate(_startPoint),
+                    icon: Icons.flag_circle_outlined,
+                    accent: const Color(0xFF0F6A5F),
+                    compact: true,
+                  ),
+                ),
+                SizedBox(
+                  width: tileWidth(columns >= 4 ? 2 : 1),
+                  child: _CoordinateRow(
+                    label: 'End',
+                    value: _formatCoordinate(_endPoint),
+                    icon: Icons.location_on_outlined,
+                    accent: const Color(0xFF8A3B5D),
+                    compact: true,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
     );
   }
 
@@ -878,7 +1310,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
             Text(
               _offlinePreview
                   ? 'Offline parity view hides the live base tiles and renders the exact saved route geometry on the same bounds.'
-                  : 'Tap the map to pin start/end. When both pins exist, the route is refreshed against the road network.',
+                  : 'Tap the map to pin start/end. Add branch guide points anywhere the road splits so the live route follows the exact direction you want.',
               style: theme.textTheme.bodyMedium,
             ),
             const SizedBox(height: 16),
@@ -930,10 +1362,34 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
                   value: _formatDuration(_previewSnapshot?.durationSeconds),
                 ),
                 _MetaPill(
+                  label: 'Base ETA',
+                  value: _formatDuration(_previewSnapshot?.rawDurationSeconds),
+                ),
+                _MetaPill(
+                  label: 'Traffic delay',
+                  value: _formatDuration(
+                    _previewSnapshot?.trafficDelayInSeconds,
+                  ),
+                ),
+                _MetaPill(
+                  label: 'Jeep speed',
+                  value: '${_formatNumericInput(_averageJeepSpeedKph)} kph',
+                ),
+                _MetaPill(
+                  label: 'Traffic',
+                  value: _trafficProfileLabel(_trafficProfile),
+                ),
+                _MetaPill(
                   label: 'Geometry',
                   value: _previewPoints.isEmpty
                       ? 'No route yet'
                       : '${_previewPoints.length} points',
+                ),
+                _MetaPill(
+                  label: 'Branch guides',
+                  value: _guidePoints.isEmpty
+                      ? 'None'
+                      : '${_guidePoints.length} selected',
                 ),
                 _MetaPill(
                   label: 'Offline ready',
@@ -980,117 +1436,379 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
   }
 
   Widget _buildMapCanvas(ThemeData theme) {
-    return AspectRatio(
-      aspectRatio: 1.05,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(28),
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: _offlinePreview
-                        ? [
-                            const Color(0xFFF2F0E8),
-                            const Color(0xFFE5E2D6),
-                          ]
-                        : [
-                            const Color(0xFFE6F0ED),
-                            const Color(0xFFD3E2E0),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final height =
+            math.max(460.0, math.min(680.0, constraints.maxWidth * 0.48));
+
+        return SizedBox(
+          height: height,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(28),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: _offlinePreview
+                            ? [
+                                const Color(0xFFF2F0E8),
+                                const Color(0xFFE5E2D6),
+                              ]
+                            : [
+                                const Color(0xFFE6F0ED),
+                                const Color(0xFFD3E2E0),
+                              ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                    ),
+                    child: FlutterMap(
+                      key: ValueKey(
+                        'route-builder-map:$_mapVersion:${_offlinePreview ? 'offline' : 'online'}',
+                      ),
+                      options: MapOptions(
+                        initialCenter: _mapCenter,
+                        initialZoom: _mapZoom,
+                        interactionOptions: const InteractionOptions(
+                          flags: InteractiveFlag.all,
+                        ),
+                        onTap: (_, point) => _handleMapTap(point),
+                      ),
+                      children: [
+                        if (!_offlinePreview)
+                          TileLayer(
+                            urlTemplate:
+                                'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                            userAgentPackageName: 'com.parago.mobile',
+                          ),
+                        if (_previewPoints.length >= 2)
+                          PolylineLayer(
+                            polylines: [
+                              Polyline(
+                                points: _previewPoints,
+                                strokeWidth: 6,
+                                color: const Color(0xFF0F6A5F),
+                              ),
+                            ],
+                          ),
+                        if (_guidePoints.isNotEmpty)
+                          CircleLayer(
+                            circles: [
+                              for (final point in _guidePoints)
+                                CircleMarker(
+                                  point: point,
+                                  radius: 8,
+                                  color: const Color(0xFF2157A5)
+                                      .withValues(alpha: 0.20),
+                                  borderStrokeWidth: 2,
+                                  borderColor: const Color(0xFF2157A5),
+                                ),
+                            ],
+                          ),
+                        MarkerLayer(
+                          markers: [
+                            if (_startPoint != null)
+                              Marker(
+                                point: _startPoint!,
+                                width: 140,
+                                height: 78,
+                                child: const _PinnedMarker(
+                                  label: 'Start',
+                                  accent: Color(0xFF0F6A5F),
+                                  icon: Icons.trip_origin,
+                                ),
+                              ),
+                            for (var index = 0;
+                                index < _guidePoints.length;
+                                index += 1)
+                              Marker(
+                                point: _guidePoints[index],
+                                width: 132,
+                                height: 72,
+                                child: _PinnedMarker(
+                                  label: 'Guide ${index + 1}',
+                                  accent: const Color(0xFF2157A5),
+                                  icon: Icons.alt_route,
+                                ),
+                              ),
+                            if (_endPoint != null)
+                              Marker(
+                                point: _endPoint!,
+                                width: 140,
+                                height: 78,
+                                child: const _PinnedMarker(
+                                  label: 'End',
+                                  accent: Color(0xFF8A3B5D),
+                                  icon: Icons.place,
+                                ),
+                              ),
                           ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+                        ),
+                        const RichAttributionWidget(
+                          attributions: [
+                            TextSourceAttribution('OpenStreetMap contributors'),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                child: FlutterMap(
-                  key: ValueKey(
-                    'route-builder-map:$_mapVersion:${_offlinePreview ? 'offline' : 'online'}',
-                  ),
-                  options: MapOptions(
-                    initialCenter: _mapCenter,
-                    initialZoom: _mapZoom,
-                    interactionOptions: const InteractionOptions(
-                      flags: InteractiveFlag.all,
+                Positioned(
+                  left: 14,
+                  top: 14,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.92),
+                      borderRadius: BorderRadius.circular(18),
                     ),
-                    onTap: (_, point) => _handleMapTap(point),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      child: Text(
+                        _offlinePreview
+                            ? 'Offline parity view'
+                            : 'Live OpenStreetMap view',
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
                   ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PinInfoTile extends StatelessWidget {
+  const _PinInfoTile({
+    required this.title,
+    required this.subtitle,
+  });
+
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            subtitle,
+            style: theme.textTheme.bodyMedium,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PinActionTile extends StatelessWidget {
+  const _PinActionTile({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.accent,
+    required this.onTap,
+    this.selected = false,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final Color accent;
+  final VoidCallback onTap;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(22),
+        child: Ink(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: selected
+                ? accent.withValues(alpha: 0.14)
+                : Colors.white.withValues(alpha: 0.72),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: selected
+                  ? accent.withValues(alpha: 0.35)
+                  : Colors.black.withValues(alpha: 0.06),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: accent.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(icon, color: accent, size: 18),
+                  ),
+                  const Spacer(),
+                  if (selected)
+                    Icon(
+                      Icons.check_circle,
+                      color: accent,
+                      size: 20,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                title,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GuidePointsTile extends StatelessWidget {
+  const _GuidePointsTile({
+    required this.points,
+    required this.onRemove,
+    this.onClear,
+  });
+
+  final List<LatLng> points;
+  final ValueChanged<int> onRemove;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: theme.dividerColor,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Branch guides',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              if (onClear != null)
+                TextButton(
+                  onPressed: onClear,
+                  child: const Text('Clear all'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            points.isEmpty
+                ? 'No guide points yet. Add one when the road splits so the route follows the branch you want.'
+                : 'Guide points are followed in order from start to end.',
+            style: theme.textTheme.bodySmall,
+          ),
+          if (points.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            for (var index = 0; index < points.length; index += 1) ...[
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.78),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
                   children: [
-                    if (!_offlinePreview)
-                      TileLayer(
-                        urlTemplate:
-                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'com.parago.mobile',
+                    Container(
+                      width: 24,
+                      height: 24,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2157A5).withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(999),
                       ),
-                    if (_previewPoints.length >= 2)
-                      PolylineLayer(
-                        polylines: [
-                          Polyline(
-                            points: _previewPoints,
-                            strokeWidth: 6,
-                            color: const Color(0xFF0F6A5F),
-                          ),
-                        ],
+                      alignment: Alignment.center,
+                      child: Text(
+                        '${index + 1}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
-                    MarkerLayer(
-                      markers: [
-                        if (_startPoint != null)
-                          Marker(
-                            point: _startPoint!,
-                            width: 140,
-                            height: 78,
-                            child: const _PinnedMarker(
-                              label: 'Start',
-                              accent: Color(0xFF0F6A5F),
-                              icon: Icons.trip_origin,
-                            ),
-                          ),
-                        if (_endPoint != null)
-                          Marker(
-                            point: _endPoint!,
-                            width: 140,
-                            height: 78,
-                            child: const _PinnedMarker(
-                              label: 'End',
-                              accent: Color(0xFF8A3B5D),
-                              icon: Icons.place,
-                            ),
-                          ),
-                      ],
                     ),
-                    const RichAttributionWidget(
-                      attributions: [
-                        TextSourceAttribution('OpenStreetMap contributors'),
-                      ],
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${points[index].latitude.toStringAsFixed(6)}, ${points[index].longitude.toStringAsFixed(6)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => onRemove(index),
+                      icon: const Icon(Icons.close, size: 16),
+                      tooltip: 'Remove guide point',
+                      visualDensity: VisualDensity.compact,
                     ),
                   ],
                 ),
               ),
-            ),
-            Positioned(
-              left: 14,
-              top: 14,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.92),
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  child: Text(
-                    _offlinePreview
-                        ? 'Offline parity view'
-                        : 'Live OpenStreetMap view',
-                    style: theme.textTheme.labelLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-            ),
+              if (index < points.length - 1) const SizedBox(height: 8),
+            ],
           ],
-        ),
+        ],
       ),
     );
   }
@@ -1102,18 +1820,23 @@ class _CoordinateRow extends StatelessWidget {
     required this.value,
     required this.icon,
     required this.accent,
+    this.compact = false,
   });
 
   final String label;
   final String value;
   final IconData icon;
   final Color accent;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(14),
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 10 : 14,
+        vertical: compact ? 8 : 14,
+      ),
       decoration: BoxDecoration(
         color: accent.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(18),
@@ -1132,8 +1855,12 @@ class _CoordinateRow extends StatelessWidget {
                         fontWeight: FontWeight.w700,
                       ),
                 ),
-                const SizedBox(height: 2),
-                Text(value),
+                SizedBox(height: compact ? 0 : 2),
+                Text(
+                  value,
+                  maxLines: compact ? 1 : null,
+                  overflow: compact ? TextOverflow.ellipsis : null,
+                ),
               ],
             ),
           ),

@@ -374,6 +374,11 @@ class _RouteSection extends StatelessWidget {
   final ValueChanged<RouteSummaryModel> onEditLandmarks;
   final ValueChanged<RouteSummaryModel>? onDeactivate;
 
+  int _gridColumns(double maxWidth) {
+    final columns = (maxWidth / 300).floor();
+    return columns.clamp(1, 5);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -387,19 +392,33 @@ class _RouteSection extends StatelessWidget {
             if (routes.isEmpty)
               Text(emptyMessage)
             else
-              Column(
-                children: [
-                  for (var index = 0; index < routes.length; index += 1) ...[
-                    _RouteRow(
-                      route: routes[index],
-                      busy: busyRouteId == routes[index].id,
-                      onEditRoute: onEditRoute,
-                      onEditLandmarks: onEditLandmarks,
-                      onDeactivate: onDeactivate,
-                    ),
-                    if (index < routes.length - 1) const Divider(),
-                  ],
-                ],
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  const spacing = 12.0;
+                  final columns = _gridColumns(constraints.maxWidth);
+                  final cardWidth = columns == 1
+                      ? constraints.maxWidth
+                      : (constraints.maxWidth - (spacing * (columns - 1))) /
+                          columns;
+
+                  return Wrap(
+                    spacing: spacing,
+                    runSpacing: spacing,
+                    children: [
+                      for (final route in routes)
+                        SizedBox(
+                          width: cardWidth,
+                          child: _RouteRow(
+                            route: route,
+                            busy: busyRouteId == route.id,
+                            onEditRoute: onEditRoute,
+                            onEditLandmarks: onEditLandmarks,
+                            onDeactivate: onDeactivate,
+                          ),
+                        ),
+                    ],
+                  );
+                },
               ),
           ],
         ),
@@ -425,13 +444,50 @@ class _RouteRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+    final compactFilledStyle = FilledButton.styleFrom(
+      minimumSize: const Size(0, 40),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    final compactOutlinedStyle = OutlinedButton.styleFrom(
+      minimumSize: const Size(0, 40),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+
+    Widget stopChip(String label, Color color) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Theme.of(context).dividerColor),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             route.label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 4),
@@ -440,11 +496,15 @@ class _RouteRow extends StatelessWidget {
             '${route.pathPoints.length} path pts | '
             '${route.stopPoints.length} landmarks',
             style: Theme.of(context).textTheme.bodyMedium,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 4),
           Text(
             ParagoFormat.statusLabel(route.direction),
             style: Theme.of(context).textTheme.bodySmall,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 10),
           Container(
@@ -461,6 +521,8 @@ class _RouteRow extends StatelessWidget {
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     fontWeight: FontWeight.w700,
                   ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
           if (route.stopPoints.isNotEmpty) ...[
@@ -470,62 +532,45 @@ class _RouteRow extends StatelessWidget {
               runSpacing: 8,
               children: [
                 for (final stop in route.stopPoints.take(3))
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .primary
-                          .withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Text(
-                      stop.name,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                    ),
+                  stopChip(
+                    stop.name,
+                    Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: 0.08),
                   ),
                 if (route.stopPoints.length > 3)
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .secondary
-                          .withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Text(
-                      '+${route.stopPoints.length - 3} more',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                    ),
+                  stopChip(
+                    '+${route.stopPoints.length - 3} more',
+                    Theme.of(context)
+                        .colorScheme
+                        .secondary
+                        .withValues(alpha: 0.12),
                   ),
               ],
             ),
           ],
           const SizedBox(height: 10),
           Wrap(
-            spacing: 10,
-            runSpacing: 10,
+            spacing: 8,
+            runSpacing: 8,
             children: [
               FilledButton.tonalIcon(
                 onPressed: () => onEditRoute(route),
+                style: compactFilledStyle,
                 icon: const Icon(Icons.tune),
                 label: const Text('Edit fare settings'),
               ),
               OutlinedButton.icon(
                 onPressed: () => onEditLandmarks(route),
+                style: compactOutlinedStyle,
                 icon: const Icon(Icons.place_outlined),
                 label: const Text('Edit landmarks'),
               ),
               if (onDeactivate != null)
                 FilledButton.tonal(
                   onPressed: busy ? null : () => onDeactivate!(route),
+                  style: compactFilledStyle,
                   child: busy
                       ? const SizedBox(
                           width: 16,

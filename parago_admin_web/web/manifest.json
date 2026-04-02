@@ -1,11 +1,11 @@
 {
-  "name": "ParaGO! Admin",
-  "short_name": "ParaGO Admin",
+  "name": "SAKAY Admin",
+  "short_name": "SAKAY Admin",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#0F6A5F",
   "theme_color": "#0F6A5F",
-  "description": "ParaGO! admin web console for route, driver, landmark, and operations management.",
+  "description": "SAKAY admin web console for route, driver, landmark, and operations management.",
   "orientation": "portrait-primary",
   "prefer_related_applications": false,
   "icons": [

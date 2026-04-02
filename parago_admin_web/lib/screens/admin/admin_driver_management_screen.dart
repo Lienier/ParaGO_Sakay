@@ -464,6 +464,155 @@ class _AdminDriverManagementScreenState
     }
   }
 
+  int _driverGridColumns(double maxWidth) {
+    final columns = (maxWidth / 320).floor();
+    return columns.clamp(1, 5);
+  }
+
+  Widget _buildDriverCard(Map<String, dynamic> driver) {
+    final userName = _driverDisplayName(driver);
+    final userEmail = _driverEmail(driver);
+    final status = _textOf(driver['status']).toLowerCase();
+    final isVerified = driver['isVerified'] == true;
+    final license = _textOf(driver['licenseNumber']);
+    final employee = _textOf(driver['employeeNumber']);
+    final phone = _textOf(driver['phone']);
+    final routeData = _driverRoute(driver);
+    final routeText = routeData.isEmpty
+        ? 'Unassigned route'
+        : '${routeData['code'] ?? ''} ${routeData['name']}'.trim();
+    final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
+    final driverId = _idOf(driver['_id']);
+    final openTrip = _openTripForDriver(driverId);
+    final scheduleBlockReason = _scheduleTripBlockReason(driver);
+    final schedulingThisDriver = _schedulingDriverId == driverId;
+    final jeepneyPlate =
+        jeepney?['plateNumber']?.toString() ?? 'No jeepney assigned';
+    final jeepneyCapacity = jeepney?['capacity']?.toString() ?? '';
+    final compactButtonStyle = OutlinedButton.styleFrom(
+      minimumSize: const Size(0, 40),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    final compactTextButtonStyle = TextButton.styleFrom(
+      minimumSize: const Size(0, 40),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+
+    Widget infoLine(String label, String value, {TextStyle? style}) {
+      return Text(
+        '$label: $value',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+      );
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              userName.isEmpty ? 'Driver account' : userName,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            if (userEmail.isNotEmpty)
+              Text(
+                userEmail,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13),
+              ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _Badge(
+                  label: 'status: ${_statusLabel(status)}',
+                  color: status == 'active' ? Colors.green : Colors.orange,
+                ),
+                _Badge(
+                  label: isVerified ? 'verified' : 'not verified',
+                  color: isVerified ? Colors.blue : Colors.grey,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            if (license.isNotEmpty) infoLine('License', license),
+            if (employee.isNotEmpty) infoLine('Employee', employee),
+            if (phone.isNotEmpty) infoLine('Phone', phone),
+            infoLine('Route', routeText),
+            infoLine('Jeepney plate', jeepneyPlate),
+            if (jeepneyCapacity.isNotEmpty)
+              infoLine('Capacity', jeepneyCapacity),
+            const SizedBox(height: 6),
+            infoLine(
+              'Trip status',
+              openTrip == null
+                  ? 'No scheduled trip'
+                  : _statusLabel(openTrip.status),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            if (scheduleBlockReason != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                scheduleBlockReason,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.error,
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+            ],
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: schedulingThisDriver || scheduleBlockReason != null
+                      ? null
+                      : () => _scheduleTrip(driver),
+                  style: compactButtonStyle,
+                  icon: schedulingThisDriver
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.playlist_add_check_circle_outlined),
+                  label: Text(
+                    schedulingThisDriver
+                        ? 'Scheduling...'
+                        : openTrip == null
+                            ? 'Schedule trip'
+                            : 'Trip ready',
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: () => _openEditSheet(driver),
+                  style: compactTextButtonStyle,
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('Edit driver'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final searchQuery = _searchCtrl.text.trim().toLowerCase();
@@ -708,127 +857,28 @@ class _AdminDriverManagementScreenState
               ),
             )
           else
-            ...drivers.map((entry) {
-              final driver = entry;
-              final userName = _driverDisplayName(driver);
-              final userEmail = _driverEmail(driver);
-              final status = _textOf(driver['status']).toLowerCase();
-              final isVerified = driver['isVerified'] == true;
-              final license = _textOf(driver['licenseNumber']);
-              final employee = _textOf(driver['employeeNumber']);
-              final phone = _textOf(driver['phone']);
-              final routeData = _driverRoute(driver);
-              final routeText = routeData.isEmpty
-                  ? 'Unassigned route'
-                  : '${routeData['code'] ?? ''} ${routeData['name']}'.trim();
-              final jeepney =
-                  driver['assignedJeepneyId'] as Map<String, dynamic>?;
-              final driverId = _idOf(driver['_id']);
-              final openTrip = _openTripForDriver(driverId);
-              final scheduleBlockReason = _scheduleTripBlockReason(driver);
-              final schedulingThisDriver = _schedulingDriverId == driverId;
-              final jeepneyPlate =
-                  jeepney?['plateNumber']?.toString() ?? 'No jeepney assigned';
-              final jeepneyCapacity = jeepney?['capacity']?.toString() ?? '';
+            LayoutBuilder(
+              builder: (context, constraints) {
+                const spacing = 12.0;
+                final columns = _driverGridColumns(constraints.maxWidth);
+                final cardWidth = columns == 1
+                    ? constraints.maxWidth
+                    : (constraints.maxWidth - (spacing * (columns - 1))) /
+                        columns;
 
-              return Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        userName.isEmpty ? 'Driver account' : userName,
-                        style: Theme.of(context).textTheme.titleMedium,
+                return Wrap(
+                  spacing: spacing,
+                  runSpacing: spacing,
+                  children: [
+                    for (final driver in drivers)
+                      SizedBox(
+                        width: cardWidth,
+                        child: _buildDriverCard(driver),
                       ),
-                      if (userEmail.isNotEmpty)
-                        Text(userEmail, style: const TextStyle(fontSize: 13)),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          _Badge(
-                            label: 'status: ${_statusLabel(status)}',
-                            color: status == 'active'
-                                ? Colors.green
-                                : Colors.orange,
-                          ),
-                          const SizedBox(width: 8),
-                          _Badge(
-                            label: isVerified ? 'verified' : 'not verified',
-                            color: isVerified ? Colors.blue : Colors.grey,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      if (license.isNotEmpty) Text('License: $license'),
-                      if (employee.isNotEmpty) Text('Employee: $employee'),
-                      if (phone.isNotEmpty) Text('Phone: $phone'),
-                      Text('Route: $routeText'),
-                      Text('Jeepney plate: $jeepneyPlate'),
-                      if (jeepneyCapacity.isNotEmpty)
-                        Text('Capacity: $jeepneyCapacity'),
-                      const SizedBox(height: 6),
-                      Text(
-                        openTrip == null
-                            ? 'Trip status: No scheduled trip'
-                            : 'Trip status: ${_statusLabel(openTrip.status)}',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                      ),
-                      if (scheduleBlockReason != null) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          scheduleBlockReason,
-                          style:
-                              Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: Theme.of(context).colorScheme.error,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                        ),
-                      ],
-                      const SizedBox(height: 10),
-                      Wrap(
-                        alignment: WrapAlignment.end,
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          OutlinedButton.icon(
-                            onPressed: schedulingThisDriver ||
-                                    scheduleBlockReason != null
-                                ? null
-                                : () => _scheduleTrip(driver),
-                            icon: schedulingThisDriver
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(
-                                    Icons.playlist_add_check_circle_outlined),
-                            label: Text(
-                              schedulingThisDriver
-                                  ? 'Scheduling...'
-                                  : openTrip == null
-                                      ? 'Schedule trip'
-                                      : 'Trip ready',
-                            ),
-                          ),
-                          TextButton.icon(
-                            onPressed: () => _openEditSheet(driver),
-                            icon: const Icon(Icons.edit_outlined),
-                            label: const Text('Edit driver'),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }),
+                  ],
+                );
+              },
+            ),
         ],
       ),
     );

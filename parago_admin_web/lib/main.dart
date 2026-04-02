@@ -48,7 +48,7 @@ class ParagoApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'ParaGO! Admin',
+      title: 'SAKAY Admin',
       theme: AppTheme.light(),
       home: Consumer<SessionController>(
         builder: (context, session, _) {
@@ -96,7 +96,7 @@ class _BootScreen extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'ParaGO! Admin',
+                  'SAKAY Admin',
                   style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                         color: Colors.white,
                       ),
