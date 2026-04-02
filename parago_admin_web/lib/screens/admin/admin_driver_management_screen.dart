@@ -511,327 +511,324 @@ class _AdminDriverManagementScreenState
             ),
             const SizedBox(height: 12),
           ],
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(18),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        _DriverMetricChip(
-                          label: 'Total',
-                          value: allDrivers.length.toString(),
-                        ),
-                        _DriverMetricChip(
-                          label: 'Active',
-                          value: activeCount.toString(),
-                        ),
-                        _DriverMetricChip(
-                          label: 'Verified',
-                          value: verifiedCount.toString(),
-                        ),
-                        _DriverMetricChip(
-                          label: 'Unassigned',
-                          value: unassignedCount.toString(),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final stacked = constraints.maxWidth < 760;
-                        final searchField = TextField(
-                          controller: _searchCtrl,
-                          onChanged: (_) => setState(() {}),
-                          decoration: const InputDecoration(
-                            labelText: 'Search driver, email, route, or plate',
-                            prefixIcon: Icon(Icons.search),
-                          ),
-                        );
-                        final filterField = DropdownButtonFormField<String>(
-                          initialValue: _statusFilter,
-                          decoration: const InputDecoration(
-                            labelText: 'Filter',
-                          ),
-                          items: const [
-                            DropdownMenuItem(
-                              value: 'all',
-                              child: Text('All drivers'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'active',
-                              child: Text('Active only'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'inactive',
-                              child: Text('Inactive only'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'verified',
-                              child: Text('Verified only'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'unassigned',
-                              child: Text('No route assigned'),
-                            ),
-                          ],
-                          onChanged: (value) {
-                            setState(() => _statusFilter = value ?? 'all');
-                          },
-                        );
-
-                        if (stacked) {
-                          return Column(
-                            children: [
-                              searchField,
-                              const SizedBox(height: 12),
-                              filterField,
-                            ],
-                          );
-                        }
-
-                        return Row(
-                          children: [
-                            Expanded(child: searchField),
-                            const SizedBox(width: 12),
-                            SizedBox(width: 220, child: filterField),
-                          ],
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Container(
+          Card(
+            child: Padding(
               padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(24),
-                gradient: const LinearGradient(
-                  colors: [
-                    Color(0xFF0F6A5F),
-                    Color(0xFF2157A5),
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Driver Management',
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                        ),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      _DriverMetricChip(
+                        label: 'Total',
+                        value: allDrivers.length.toString(),
+                      ),
+                      _DriverMetricChip(
+                        label: 'Active',
+                        value: activeCount.toString(),
+                      ),
+                      _DriverMetricChip(
+                        label: 'Verified',
+                        value: verifiedCount.toString(),
+                      ),
+                      _DriverMetricChip(
+                        label: 'Unassigned',
+                        value: unassignedCount.toString(),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Each driver owns one jeepney. Create both records together and update them from one admin screen.',
-                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          color: Colors.white.withValues(alpha: 0.92),
+                  const SizedBox(height: 16),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final stacked = constraints.maxWidth < 760;
+                      final searchField = TextField(
+                        controller: _searchCtrl,
+                        onChanged: (_) => setState(() {}),
+                        decoration: const InputDecoration(
+                          labelText: 'Search driver, email, route, or plate',
+                          prefixIcon: Icon(Icons.search),
                         ),
+                      );
+                      final filterField = DropdownButtonFormField<String>(
+                        initialValue: _statusFilter,
+                        decoration: const InputDecoration(
+                          labelText: 'Filter',
+                        ),
+                        items: const [
+                          DropdownMenuItem(
+                            value: 'all',
+                            child: Text('All drivers'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'active',
+                            child: Text('Active only'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'inactive',
+                            child: Text('Inactive only'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'verified',
+                            child: Text('Verified only'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'unassigned',
+                            child: Text('No route assigned'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setState(() => _statusFilter = value ?? 'all');
+                        },
+                      );
+
+                      if (stacked) {
+                        return Column(
+                          children: [
+                            searchField,
+                            const SizedBox(height: 12),
+                            filterField,
+                          ],
+                        );
+                      }
+
+                      return Row(
+                        children: [
+                          Expanded(child: searchField),
+                          const SizedBox(width: 12),
+                          SizedBox(width: 220, child: filterField),
+                        ],
+                      );
+                    },
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 14),
-            if (_error != null) ...[
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.errorContainer,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Text(
-                  _error!,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onErrorContainer,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Driver accounts',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${drivers.length} registered driver${drivers.length == 1 ? '' : 's'}',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    Icons.badge_outlined,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(24),
+              gradient: const LinearGradient(
+                colors: [
+                  Color(0xFF0F6A5F),
+                  Color(0xFF2157A5),
                 ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Driver Management',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Each driver owns one jeepney. Create both records together and update them from one admin screen.',
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: Colors.white.withValues(alpha: 0.92),
+                      ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (_error != null) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                _error!,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                ),
               ),
             ),
             const SizedBox(height: 12),
-            if (_loading && drivers.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 32),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (drivers.isEmpty)
-              Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Theme.of(context).dividerColor),
+          ],
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Driver accounts',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${drivers.length} registered driver${drivers.length == 1 ? '' : 's'}',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
                 ),
-                child: Text(
-                  allDrivers.isEmpty
-                      ? 'No drivers found yet. Use the "Create driver" button below to add the first driver account.'
-                      : 'No drivers match the current search or filter.',
+                Icon(
+                  Icons.badge_outlined,
+                  color: Theme.of(context).colorScheme.primary,
                 ),
-              )
-            else
-              ...drivers.map((entry) {
-                final driver = entry;
-                final userName = _driverDisplayName(driver);
-                final userEmail = _driverEmail(driver);
-                final status = _textOf(driver['status']).toLowerCase();
-                final isVerified = driver['isVerified'] == true;
-                final license = _textOf(driver['licenseNumber']);
-                final employee = _textOf(driver['employeeNumber']);
-                final phone = _textOf(driver['phone']);
-                final routeData = _driverRoute(driver);
-                final routeText = routeData.isEmpty
-                    ? 'Unassigned route'
-                    : '${routeData['code'] ?? ''} ${routeData['name']}'.trim();
-                final jeepney =
-                    driver['assignedJeepneyId'] as Map<String, dynamic>?;
-                final driverId = _idOf(driver['_id']);
-                final openTrip = _openTripForDriver(driverId);
-                final scheduleBlockReason = _scheduleTripBlockReason(driver);
-                final schedulingThisDriver = _schedulingDriverId == driverId;
-                final jeepneyPlate = jeepney?['plateNumber']?.toString() ??
-                    'No jeepney assigned';
-                final jeepneyCapacity = jeepney?['capacity']?.toString() ?? '';
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (_loading && drivers.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 32),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (drivers.isEmpty)
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Theme.of(context).dividerColor),
+              ),
+              child: Text(
+                allDrivers.isEmpty
+                    ? 'No drivers found yet. Use the "Create driver" button below to add the first driver account.'
+                    : 'No drivers match the current search or filter.',
+              ),
+            )
+          else
+            ...drivers.map((entry) {
+              final driver = entry;
+              final userName = _driverDisplayName(driver);
+              final userEmail = _driverEmail(driver);
+              final status = _textOf(driver['status']).toLowerCase();
+              final isVerified = driver['isVerified'] == true;
+              final license = _textOf(driver['licenseNumber']);
+              final employee = _textOf(driver['employeeNumber']);
+              final phone = _textOf(driver['phone']);
+              final routeData = _driverRoute(driver);
+              final routeText = routeData.isEmpty
+                  ? 'Unassigned route'
+                  : '${routeData['code'] ?? ''} ${routeData['name']}'.trim();
+              final jeepney =
+                  driver['assignedJeepneyId'] as Map<String, dynamic>?;
+              final driverId = _idOf(driver['_id']);
+              final openTrip = _openTripForDriver(driverId);
+              final scheduleBlockReason = _scheduleTripBlockReason(driver);
+              final schedulingThisDriver = _schedulingDriverId == driverId;
+              final jeepneyPlate =
+                  jeepney?['plateNumber']?.toString() ?? 'No jeepney assigned';
+              final jeepneyCapacity = jeepney?['capacity']?.toString() ?? '';
 
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          userName.isEmpty ? 'Driver account' : userName,
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        if (userEmail.isNotEmpty)
-                          Text(userEmail, style: const TextStyle(fontSize: 13)),
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            _Badge(
-                              label: 'status: ${_statusLabel(status)}',
-                              color: status == 'active'
-                                  ? Colors.green
-                                  : Colors.orange,
-                            ),
-                            const SizedBox(width: 8),
-                            _Badge(
-                              label: isVerified ? 'verified' : 'not verified',
-                              color: isVerified ? Colors.blue : Colors.grey,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        if (license.isNotEmpty) Text('License: $license'),
-                        if (employee.isNotEmpty) Text('Employee: $employee'),
-                        if (phone.isNotEmpty) Text('Phone: $phone'),
-                        Text('Route: $routeText'),
-                        Text('Jeepney plate: $jeepneyPlate'),
-                        if (jeepneyCapacity.isNotEmpty)
-                          Text('Capacity: $jeepneyCapacity'),
-                        const SizedBox(height: 6),
-                        Text(
-                          openTrip == null
-                              ? 'Trip status: No scheduled trip'
-                              : 'Trip status: ${_statusLabel(openTrip.status)}',
-                          style:
-                              Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                        ),
-                        if (scheduleBlockReason != null) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            scheduleBlockReason,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodySmall
-                                ?.copyWith(
-                                  color: Theme.of(context).colorScheme.error,
-                                  fontWeight: FontWeight.w600,
-                                ),
+              return Card(
+                margin: const EdgeInsets.only(bottom: 12),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        userName.isEmpty ? 'Driver account' : userName,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      if (userEmail.isNotEmpty)
+                        Text(userEmail, style: const TextStyle(fontSize: 13)),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          _Badge(
+                            label: 'status: ${_statusLabel(status)}',
+                            color: status == 'active'
+                                ? Colors.green
+                                : Colors.orange,
+                          ),
+                          const SizedBox(width: 8),
+                          _Badge(
+                            label: isVerified ? 'verified' : 'not verified',
+                            color: isVerified ? Colors.blue : Colors.grey,
                           ),
                         ],
-                        const SizedBox(height: 10),
-                        Wrap(
-                          alignment: WrapAlignment.end,
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            OutlinedButton.icon(
-                              onPressed: schedulingThisDriver ||
-                                      scheduleBlockReason != null
-                                  ? null
-                                  : () => _scheduleTrip(driver),
-                              icon: schedulingThisDriver
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : const Icon(
-                                      Icons.playlist_add_check_circle_outlined),
-                              label: Text(
-                                schedulingThisDriver
-                                    ? 'Scheduling...'
-                                    : openTrip == null
-                                        ? 'Schedule trip'
-                                        : 'Trip ready',
-                              ),
+                      ),
+                      const SizedBox(height: 10),
+                      if (license.isNotEmpty) Text('License: $license'),
+                      if (employee.isNotEmpty) Text('Employee: $employee'),
+                      if (phone.isNotEmpty) Text('Phone: $phone'),
+                      Text('Route: $routeText'),
+                      Text('Jeepney plate: $jeepneyPlate'),
+                      if (jeepneyCapacity.isNotEmpty)
+                        Text('Capacity: $jeepneyCapacity'),
+                      const SizedBox(height: 6),
+                      Text(
+                        openTrip == null
+                            ? 'Trip status: No scheduled trip'
+                            : 'Trip status: ${_statusLabel(openTrip.status)}',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
                             ),
-                            TextButton.icon(
-                              onPressed: () => _openEditSheet(driver),
-                              icon: const Icon(Icons.edit_outlined),
-                              label: const Text('Edit driver'),
-                            ),
-                          ],
+                      ),
+                      if (scheduleBlockReason != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          scheduleBlockReason,
+                          style:
+                              Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: Theme.of(context).colorScheme.error,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                         ),
                       ],
-                    ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        alignment: WrapAlignment.end,
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: schedulingThisDriver ||
+                                    scheduleBlockReason != null
+                                ? null
+                                : () => _scheduleTrip(driver),
+                            icon: schedulingThisDriver
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(
+                                    Icons.playlist_add_check_circle_outlined),
+                            label: Text(
+                              schedulingThisDriver
+                                  ? 'Scheduling...'
+                                  : openTrip == null
+                                      ? 'Schedule trip'
+                                      : 'Trip ready',
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: () => _openEditSheet(driver),
+                            icon: const Icon(Icons.edit_outlined),
+                            label: const Text('Edit driver'),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
-                );
-              }),
+                ),
+              );
+            }),
         ],
       ),
     );

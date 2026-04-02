@@ -109,6 +109,7 @@ const validateBoardingAttempt = async ({
       type: 'Point',
       coordinates: [resolvedDestinationLng, resolvedDestinationLat],
     },
+    fareSnapshot: pickupRequest.fareSnapshot || undefined,
     status: 'onboard',
     boardedAt: now,
     canSendStopAlert: true,

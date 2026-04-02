@@ -224,6 +224,27 @@ const buildRouteNavigationPayload = (value, fieldName = 'navigation') => {
   return payload;
 };
 
+const buildRouteFareConfig = (value, fieldName = 'fareConfig') => {
+  if (!isPlainObject(value)) {
+    throw new ApiError(400, `${fieldName} must be an object`);
+  }
+
+  return {
+    baseAmount: normalizeNonNegativeNumber(
+      value.baseAmount,
+      `${fieldName}.baseAmount`
+    ),
+    baseDistanceKm: normalizeNonNegativeNumber(
+      value.baseDistanceKm,
+      `${fieldName}.baseDistanceKm`
+    ),
+    additionalAmountPerKm: normalizeNonNegativeNumber(
+      value.additionalAmountPerKm,
+      `${fieldName}.additionalAmountPerKm`
+    ),
+  };
+};
+
 const buildRouteCreatePayload = (value = {}) => {
   if (!isPlainObject(value)) {
     throw new ApiError(400, 'Route payload is required');
@@ -241,6 +262,9 @@ const buildRouteCreatePayload = (value = {}) => {
     waypoints: [],
     stops: [],
     navigation: undefined,
+    fareConfig: hasOwn(value, 'fareConfig')
+      ? buildRouteFareConfig(value.fareConfig)
+      : undefined,
   };
 
   if (hasOwn(value, 'path')) {
@@ -310,6 +334,9 @@ const buildRouteUpdatePayload = (value = {}) => {
   }
   if (hasOwn(value, 'navigation') && value.navigation != null) {
     updates.navigation = buildRouteNavigationPayload(value.navigation);
+  }
+  if (hasOwn(value, 'fareConfig') && value.fareConfig != null) {
+    updates.fareConfig = buildRouteFareConfig(value.fareConfig);
   }
 
   return updates;

@@ -17,6 +17,26 @@ const normalizePoint = (value, fieldName) => {
   };
 };
 
+const normalizeFareSnapshot = (value) => {
+  if (!value) return undefined;
+  const amount = Number(value.amount);
+  const boardingFare = Number(value.boardingFare);
+  const destinationFare = Number(value.destinationFare);
+  return {
+    boardingStopRef: value.boardingStopRef?.toString() || null,
+    boardingStopOrder: Number.isFinite(Number(value.boardingStopOrder))
+      ? Number(value.boardingStopOrder)
+      : null,
+    boardingFare: Number.isFinite(boardingFare) ? boardingFare : 0,
+    destinationStopRef: value.destinationStopRef?.toString() || null,
+    destinationStopOrder: Number.isFinite(Number(value.destinationStopOrder))
+      ? Number(value.destinationStopOrder)
+      : null,
+    destinationFare: Number.isFinite(destinationFare) ? destinationFare : 0,
+    amount: Number.isFinite(amount) ? amount : 0,
+  };
+};
+
 const serializePickupRequest = (request) => {
   if (!request) return null;
   return {
@@ -28,6 +48,7 @@ const serializePickupRequest = (request) => {
     stopRef: request.stopRef?.toString() || null,
     sourceNote: request.sourceNote?.toString() || null,
     pickupLocation: normalizePoint(request.pickupLocation, 'pickupLocation'),
+    fareSnapshot: normalizeFareSnapshot(request.fareSnapshot),
     destinationStopRef: request.destinationStopRef?.toString() || null,
     destinationLocation: normalizePoint(
       request.destinationLocation,
@@ -46,6 +67,7 @@ const serializeRideSession = (session) => {
     passengerId: session.passengerId?.toString() || '',
     tripSessionId: session.tripSessionId?.toString() || '',
     pickupRequestId: session.pickupRequestId?.toString() || '',
+    fareSnapshot: normalizeFareSnapshot(session.fareSnapshot),
     destinationStopRef: session.destinationStopRef?.toString() || null,
     destinationLocation: normalizePoint(
       session.destinationLocation,

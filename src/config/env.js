@@ -44,6 +44,11 @@ module.exports = {
   pickupCurrentLocationMaxDistanceMeters: Number(
     process.env.PICKUP_CURRENT_LOCATION_MAX_DISTANCE_METERS || 50
   ),
+  fareBaseAmount: Number(process.env.FARE_BASE_AMOUNT || 17),
+  fareBaseDistanceKm: Number(process.env.FARE_BASE_DISTANCE_KM || 4),
+  fareAdditionalAmountPerKm: Number(
+    process.env.FARE_ADDITIONAL_AMOUNT_PER_KM || 2
+  ),
 
   googleClientIds: splitCsv(process.env.GOOGLE_CLIENT_IDS),
   facebookAppToken: process.env.FACEBOOK_APP_TOKEN || '',

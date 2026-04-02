@@ -6,6 +6,7 @@ import '../../core/utils/parago_format.dart';
 import '../../models/transport/route_summary.dart';
 import '../../services/route_service.dart';
 import '../../services/session_controller.dart';
+import 'admin_route_builder_screen.dart';
 import 'admin_route_landmark_editor_screen.dart';
 
 class AdminRouteManagementScreen extends StatefulWidget {
@@ -115,15 +116,29 @@ class _AdminRouteManagementScreenState
   }
 
   Future<void> _openLandmarkEditor(RouteSummaryModel route) async {
-    final updated = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
         builder: (_) => AdminRouteLandmarkEditorScreen(route: route),
       ),
     );
-    if (updated == true && mounted) {
-      await _load();
-      widget.onChanged?.call();
+    if (!mounted) {
+      return;
     }
+    await _load();
+    widget.onChanged?.call();
+  }
+
+  Future<void> _openRouteEditor(RouteSummaryModel route) async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => AdminRouteBuilderScreen(initialRoute: route),
+      ),
+    );
+    if (!mounted || changed != true) {
+      return;
+    }
+    await _load();
+    widget.onChanged?.call();
   }
 
   @override
@@ -166,161 +181,163 @@ class _AdminRouteManagementScreenState
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
         children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(18),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        _RouteMetricChip(
-                          label: 'Routes',
-                          value: _routes.length.toString(),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      _RouteMetricChip(
+                        label: 'Routes',
+                        value: _routes.length.toString(),
+                      ),
+                      _RouteMetricChip(
+                        label: 'Active',
+                        value: _routes
+                            .where((route) => route.status == 'active')
+                            .length
+                            .toString(),
+                      ),
+                      _RouteMetricChip(
+                        label: 'Inactive',
+                        value: _routes
+                            .where((route) => route.status != 'active')
+                            .length
+                            .toString(),
+                      ),
+                      _RouteMetricChip(
+                        label: 'Landmarks',
+                        value: totalLandmarks.toString(),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final stacked = constraints.maxWidth < 760;
+                      final searchField = TextField(
+                        controller: _searchCtrl,
+                        onChanged: (_) => setState(() {}),
+                        decoration: const InputDecoration(
+                          labelText: 'Search route code, name, or landmark',
+                          prefixIcon: Icon(Icons.search),
                         ),
-                        _RouteMetricChip(
-                          label: 'Active',
-                          value: _routes
-                              .where((route) => route.status == 'active')
-                              .length
-                              .toString(),
+                      );
+                      final filterField = DropdownButtonFormField<String>(
+                        initialValue: _statusFilter,
+                        decoration: const InputDecoration(
+                          labelText: 'Filter',
                         ),
-                        _RouteMetricChip(
-                          label: 'Inactive',
-                          value: _routes
-                              .where((route) => route.status != 'active')
-                              .length
-                              .toString(),
-                        ),
-                        _RouteMetricChip(
-                          label: 'Landmarks',
-                          value: totalLandmarks.toString(),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final stacked = constraints.maxWidth < 760;
-                        final searchField = TextField(
-                          controller: _searchCtrl,
-                          onChanged: (_) => setState(() {}),
-                          decoration: const InputDecoration(
-                            labelText: 'Search route code, name, or landmark',
-                            prefixIcon: Icon(Icons.search),
+                        items: const [
+                          DropdownMenuItem(
+                            value: 'all',
+                            child: Text('All routes'),
                           ),
-                        );
-                        final filterField = DropdownButtonFormField<String>(
-                          initialValue: _statusFilter,
-                          decoration: const InputDecoration(
-                            labelText: 'Filter',
+                          DropdownMenuItem(
+                            value: 'active',
+                            child: Text('Active only'),
                           ),
-                          items: const [
-                            DropdownMenuItem(
-                              value: 'all',
-                              child: Text('All routes'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'active',
-                              child: Text('Active only'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'inactive',
-                              child: Text('Inactive only'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'with_landmarks',
-                              child: Text('With landmarks'),
-                            ),
-                          ],
-                          onChanged: (value) {
-                            setState(() => _statusFilter = value ?? 'all');
-                          },
-                        );
+                          DropdownMenuItem(
+                            value: 'inactive',
+                            child: Text('Inactive only'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'with_landmarks',
+                            child: Text('With landmarks'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setState(() => _statusFilter = value ?? 'all');
+                        },
+                      );
 
-                        if (stacked) {
-                          return Column(
-                            children: [
-                              searchField,
-                              const SizedBox(height: 12),
-                              filterField,
-                            ],
-                          );
-                        }
-
-                        return Row(
+                      if (stacked) {
+                        return Column(
                           children: [
-                            Expanded(child: searchField),
-                            const SizedBox(width: 12),
-                            SizedBox(width: 220, child: filterField),
+                            searchField,
+                            const SizedBox(height: 12),
+                            filterField,
                           ],
                         );
-                      },
-                    ),
-                  ],
-                ),
+                      }
+
+                      return Row(
+                        children: [
+                          Expanded(child: searchField),
+                          const SizedBox(width: 12),
+                          SizedBox(width: 220, child: filterField),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (widget.embedded) ...[
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: _loading ? null : _load,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Refresh routes'),
               ),
             ),
             const SizedBox(height: 12),
-            if (widget.embedded) ...[
-              Align(
-                alignment: Alignment.centerRight,
-                child: OutlinedButton.icon(
-                  onPressed: _loading ? null : _load,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Refresh routes'),
-                ),
+          ],
+          if (_error != null) ...[
+            Text(
+              _error!,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.error,
+                fontWeight: FontWeight.w600,
               ),
-              const SizedBox(height: 12),
-            ],
-            if (_error != null) ...[
-              Text(
-                _error!,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
-            if (_loading) ...[
-              const LinearProgressIndicator(),
-              const SizedBox(height: 16),
-            ],
-            if (!_loading && visibleRoutes.isEmpty) ...[
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: Text(
-                  _routes.isEmpty
-                      ? 'No routes available yet.'
-                      : 'No routes match the current search or filter.',
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
-            _RouteSection(
-              title: 'Active routes',
-              emptyMessage: 'No active routes.',
-              routes: activeRoutes,
-              busyRouteId: _busyRouteId,
-              onEditLandmarks: _openLandmarkEditor,
-              onDeactivate: _deactivateRoute,
             ),
-            const SizedBox(height: 18),
-            _RouteSection(
-              title: 'Inactive routes',
-              emptyMessage: 'No inactive routes.',
-              routes: inactiveRoutes,
-              busyRouteId: _busyRouteId,
-              onEditLandmarks: _openLandmarkEditor,
-              onDeactivate: null,
+            const SizedBox(height: 16),
+          ],
+          if (_loading) ...[
+            const LinearProgressIndicator(),
+            const SizedBox(height: 16),
+          ],
+          if (!_loading && visibleRoutes.isEmpty) ...[
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Text(
+                _routes.isEmpty
+                    ? 'No routes available yet.'
+                    : 'No routes match the current search or filter.',
+              ),
             ),
+            const SizedBox(height: 16),
+          ],
+          _RouteSection(
+            title: 'Active routes',
+            emptyMessage: 'No active routes.',
+            routes: activeRoutes,
+            busyRouteId: _busyRouteId,
+            onEditRoute: _openRouteEditor,
+            onEditLandmarks: _openLandmarkEditor,
+            onDeactivate: _deactivateRoute,
+          ),
+          const SizedBox(height: 18),
+          _RouteSection(
+            title: 'Inactive routes',
+            emptyMessage: 'No inactive routes.',
+            routes: inactiveRoutes,
+            busyRouteId: _busyRouteId,
+            onEditRoute: _openRouteEditor,
+            onEditLandmarks: _openLandmarkEditor,
+            onDeactivate: null,
+          ),
         ],
       ),
     );
@@ -344,6 +361,7 @@ class _RouteSection extends StatelessWidget {
     required this.emptyMessage,
     required this.routes,
     required this.busyRouteId,
+    required this.onEditRoute,
     required this.onEditLandmarks,
     required this.onDeactivate,
   });
@@ -352,6 +370,7 @@ class _RouteSection extends StatelessWidget {
   final String emptyMessage;
   final List<RouteSummaryModel> routes;
   final String? busyRouteId;
+  final ValueChanged<RouteSummaryModel> onEditRoute;
   final ValueChanged<RouteSummaryModel> onEditLandmarks;
   final ValueChanged<RouteSummaryModel>? onDeactivate;
 
@@ -374,6 +393,7 @@ class _RouteSection extends StatelessWidget {
                     _RouteRow(
                       route: routes[index],
                       busy: busyRouteId == routes[index].id,
+                      onEditRoute: onEditRoute,
                       onEditLandmarks: onEditLandmarks,
                       onDeactivate: onDeactivate,
                     ),
@@ -392,12 +412,14 @@ class _RouteRow extends StatelessWidget {
   const _RouteRow({
     required this.route,
     required this.busy,
+    required this.onEditRoute,
     required this.onEditLandmarks,
     required this.onDeactivate,
   });
 
   final RouteSummaryModel route;
   final bool busy;
+  final ValueChanged<RouteSummaryModel> onEditRoute;
   final ValueChanged<RouteSummaryModel> onEditLandmarks;
   final ValueChanged<RouteSummaryModel>? onDeactivate;
 
@@ -424,6 +446,23 @@ class _RouteRow extends StatelessWidget {
             ParagoFormat.statusLabel(route.direction),
             style: Theme.of(context).textTheme.bodySmall,
           ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Theme.of(context)
+                  .colorScheme
+                  .secondary
+                  .withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Text(
+              _formatFareRule(route.fareConfig),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ),
           if (route.stopPoints.isNotEmpty) ...[
             const SizedBox(height: 10),
             Wrap(
@@ -442,7 +481,7 @@ class _RouteRow extends StatelessWidget {
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: Text(
-                      '${stop.name} | ${_formatRouteFare(stop.fare)}',
+                      stop.name,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             fontWeight: FontWeight.w600,
                           ),
@@ -474,6 +513,11 @@ class _RouteRow extends StatelessWidget {
             spacing: 10,
             runSpacing: 10,
             children: [
+              FilledButton.tonalIcon(
+                onPressed: () => onEditRoute(route),
+                icon: const Icon(Icons.tune),
+                label: const Text('Edit fare settings'),
+              ),
               OutlinedButton.icon(
                 onPressed: () => onEditLandmarks(route),
                 icon: const Icon(Icons.place_outlined),
@@ -501,6 +545,15 @@ class _RouteRow extends StatelessWidget {
 String _formatRouteFare(double value) {
   final decimals = value == value.truncateToDouble() ? 0 : 2;
   return 'PHP ${value.toStringAsFixed(decimals)}';
+}
+
+String _formatFareRule(RouteFareConfig config) {
+  return 'Fare: ${_formatRouteFare(config.baseAmount)} for first ${_formatDistanceKm(config.baseDistanceKm)}, then ${_formatRouteFare(config.additionalAmountPerKm)}/km';
+}
+
+String _formatDistanceKm(double value) {
+  final decimals = value == value.truncateToDouble() ? 0 : 2;
+  return '${value.toStringAsFixed(decimals)} km';
 }
 
 class _RouteMetricChip extends StatelessWidget {

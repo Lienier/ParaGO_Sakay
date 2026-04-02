@@ -31,6 +31,15 @@ const routeBoundsSchema = new Schema(
   { _id: false }
 );
 
+const fareConfigSchema = new Schema(
+  {
+    baseAmount: { type: Number, min: 0, default: 17 },
+    baseDistanceKm: { type: Number, min: 0, default: 4 },
+    additionalAmountPerKm: { type: Number, min: 0, default: 2 },
+  },
+  { _id: false }
+);
+
 const routeSchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
@@ -66,6 +75,14 @@ const routeSchema = new Schema(
       bounds: routeBoundsSchema,
       distanceMeters: { type: Number, min: 0 },
       durationSeconds: { type: Number, min: 0 },
+    },
+    fareConfig: {
+      type: fareConfigSchema,
+      default: () => ({
+        baseAmount: 17,
+        baseDistanceKm: 4,
+        additionalAmountPerKm: 2,
+      }),
     },
   },
   { timestamps: true }

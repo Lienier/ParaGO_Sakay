@@ -1,3 +1,5 @@
+import 'pickup_request.dart';
+
 class RideSessionModel {
   const RideSessionModel({
     required this.id,
@@ -8,6 +10,7 @@ class RideSessionModel {
     this.destinationStopRef,
     this.destinationLatitude,
     this.destinationLongitude,
+    this.fareSnapshot,
     this.canSendStopAlert,
     this.boardedAt,
     this.endedAt,
@@ -21,9 +24,12 @@ class RideSessionModel {
   final String? destinationStopRef;
   final double? destinationLatitude;
   final double? destinationLongitude;
+  final FareSnapshotModel? fareSnapshot;
   final bool? canSendStopAlert;
   final String? boardedAt;
   final String? endedAt;
+
+  double? get estimatedFare => fareSnapshot?.amount;
 
   factory RideSessionModel.fromJson(Map<String, dynamic> json) {
     return RideSessionModel(
@@ -34,6 +40,7 @@ class RideSessionModel {
       destinationStopRef: json['destinationStopRef']?.toString(),
       destinationLatitude: _readLatitude(json['destinationLocation']),
       destinationLongitude: _readLongitude(json['destinationLocation']),
+      fareSnapshot: FareSnapshotModel.fromJson(json['fareSnapshot']),
       status: json['status']?.toString() ?? '',
       canSendStopAlert: json['canSendStopAlert'] as bool?,
       boardedAt: json['boardedAt']?.toString(),

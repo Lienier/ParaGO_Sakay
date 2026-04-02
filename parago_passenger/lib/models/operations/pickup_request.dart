@@ -12,6 +12,7 @@ class PickupRequestModel {
     this.destinationStopRef,
     this.destinationLatitude,
     this.destinationLongitude,
+    this.fareSnapshot,
     this.expiresAt,
     this.createdAt,
     this.acknowledgedAt,
@@ -29,9 +30,14 @@ class PickupRequestModel {
   final String? destinationStopRef;
   final double? destinationLatitude;
   final double? destinationLongitude;
+  final FareSnapshotModel? fareSnapshot;
   final String? expiresAt;
   final String? createdAt;
   final String? acknowledgedAt;
+
+  double? get estimatedFare => fareSnapshot?.amount;
+  String? get fareBoardingStopRef => fareSnapshot?.boardingStopRef;
+  String? get fareDestinationStopRef => fareSnapshot?.destinationStopRef;
 
   factory PickupRequestModel.fromJson(Map<String, dynamic> json) {
     return PickupRequestModel(
@@ -47,9 +53,50 @@ class PickupRequestModel {
       destinationStopRef: json['destinationStopRef']?.toString(),
       destinationLatitude: _readLatitude(json['destinationLocation']),
       destinationLongitude: _readLongitude(json['destinationLocation']),
+      fareSnapshot: FareSnapshotModel.fromJson(json['fareSnapshot']),
       expiresAt: json['expiresAt']?.toString(),
       createdAt: json['createdAt']?.toString(),
       acknowledgedAt: json['acknowledgedAt']?.toString(),
+    );
+  }
+}
+
+class FareSnapshotModel {
+  const FareSnapshotModel({
+    required this.boardingStopRef,
+    required this.boardingStopOrder,
+    required this.boardingFare,
+    required this.destinationStopRef,
+    required this.destinationStopOrder,
+    required this.destinationFare,
+    required this.amount,
+  });
+
+  final String? boardingStopRef;
+  final int? boardingStopOrder;
+  final double boardingFare;
+  final String? destinationStopRef;
+  final int? destinationStopOrder;
+  final double destinationFare;
+  final double amount;
+
+  static FareSnapshotModel? fromJson(dynamic value) {
+    if (value is! Map && value is! Map<String, dynamic>) {
+      return null;
+    }
+    final map = value is Map<String, dynamic>
+        ? value
+        : (value as Map).map((key, item) => MapEntry(key.toString(), item));
+    return FareSnapshotModel(
+      boardingStopRef: map['boardingStopRef']?.toString(),
+      boardingStopOrder:
+          int.tryParse(map['boardingStopOrder']?.toString() ?? ''),
+      boardingFare: _readNumber(map['boardingFare']) ?? 0,
+      destinationStopRef: map['destinationStopRef']?.toString(),
+      destinationStopOrder:
+          int.tryParse(map['destinationStopOrder']?.toString() ?? ''),
+      destinationFare: _readNumber(map['destinationFare']) ?? 0,
+      amount: _readNumber(map['amount']) ?? 0,
     );
   }
 }
@@ -72,4 +119,11 @@ double? _readLongitude(dynamic value) {
     return null;
   }
   return double.tryParse(coordinates[0].toString());
+}
+
+double? _readNumber(dynamic value) {
+  if (value is num) {
+    return value.toDouble();
+  }
+  return double.tryParse(value?.toString() ?? '');
 }

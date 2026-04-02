@@ -19,9 +19,9 @@ class ActionFeedback {
 
     unawaited(
       showDialog<void>(
-        context: context,
+        context: navigator.context,
         barrierDismissible: false,
-        useRootNavigator: true,
+        useRootNavigator: false,
         builder: (dialogContext) => PopScope(
           canPop: false,
           child: AlertDialog(
@@ -40,7 +40,7 @@ class ActionFeedback {
         ),
       ),
     );
-    await Future<void>.delayed(Duration.zero);
+    await WidgetsBinding.instance.endOfFrame;
 
     try {
       final result = await action();
@@ -51,9 +51,9 @@ class ActionFeedback {
       if (onSuccess != null) {
         await onSuccess(result);
       }
-      if (showSuccess && successMessage != null && context.mounted) {
+      if (showSuccess && successMessage != null && navigator.mounted) {
         await showSuccessDialog(
-          context,
+          navigator.context,
           title: successTitle,
           message: successMessage,
         );
@@ -67,9 +67,9 @@ class ActionFeedback {
       if (onError != null) {
         await onError(error);
       }
-      if (context.mounted) {
+      if (navigator.mounted) {
         await showErrorDialog(
-          context,
+          navigator.context,
           title: errorTitle,
           message: _messageOf(error),
         );
@@ -123,9 +123,10 @@ class ActionFeedback {
     required String message,
     required IconData icon,
   }) {
+    final navigator = Navigator.of(context, rootNavigator: true);
     return showDialog<void>(
-      context: context,
-      useRootNavigator: true,
+      context: navigator.context,
+      useRootNavigator: false,
       builder: (dialogContext) => AlertDialog(
         title: Row(
           children: [

@@ -167,5 +167,4 @@ class AppConfig {
     }
     return '$trimmedBase/$trimmedPath';
   }
-
 }

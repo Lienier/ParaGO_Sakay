@@ -204,8 +204,20 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       center: routeCenter ?? vehiclePosition,
     );
     final jeepneyPosition = vehiclePosition ?? routePath[2];
+    final routeSummary = _effectiveRouteSummaryForTrip(trip);
 
     final markers = <_DriveMarkerData>[
+      for (var index = 0;
+          index < (routeSummary?.stopPoints.length ?? 0);
+          index += 1)
+        _DriveMarkerData(
+          label: '${index + 1}. ${routeSummary!.stopPoints[index].name}',
+          detail: 'Route landmark',
+          position: routeSummary.stopPoints[index].position,
+          icon: Icons.place,
+          markerColor: const Color(0xFF8A3B5D),
+          kind: _DriveMarkerKind.landmark,
+        ),
       _DriveMarkerData(
         label: trip.jeepneyLabel,
         detail: 'Current jeepney location',

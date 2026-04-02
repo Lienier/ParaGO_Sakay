@@ -2508,6 +2508,7 @@ class _DriveMapMarker extends StatelessWidget {
 }
 
 enum _DriveMarkerKind {
+  landmark,
   vehicle,
   pickup,
   unload,

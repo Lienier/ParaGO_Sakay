@@ -10,6 +10,7 @@ const {
   isPointAfterOnRoute,
   isRoutePickupNearRoad,
   pickDefaultRouteCoordinate,
+  resolveRouteFareSnapshot,
 } = require('../utils/routeGeo');
 const { haversineMeters } = require('../utils/geo');
 const asyncHandler = require('../utils/asyncHandler');
@@ -269,6 +270,14 @@ router.post(
     }
 
     const request = await PickupRequest.create({
+      fareSnapshot: resolveRouteFareSnapshot({
+        route,
+        pickupLocation,
+        destinationLocation: {
+          type: 'Point',
+          coordinates: [Number(lngDestination), Number(latDestination)],
+        },
+      }),
       passengerId: passenger._id,
       tripSessionId: trip._id,
       routeId: payload.routeId,

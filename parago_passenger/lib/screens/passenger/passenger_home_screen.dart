@@ -1005,6 +1005,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 
   Future<_PassengerBookingDetails?> _showPickupDialog() async {
+    final farePreview = _estimateFarePreview(
+      _selectedRoute,
+      _draftPickupPoint,
+      _draftUnloadPoint,
+    );
     final pickupStopCtrl = TextEditingController(
       text: _draftPickupLabel ?? 'Nearest loading point',
     );
@@ -1036,6 +1041,33 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (farePreview != null) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFDF7E8),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFFFE1A6)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Estimated fare: ${_formatFareAmount(farePreview.amount)}',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${farePreview.boardingStopRef} to ${farePreview.destinationStopRef}',
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
               TextField(
                 controller: pickupStopCtrl,
                 textInputAction: TextInputAction.next,
@@ -1676,6 +1708,184 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     return '${nearest.name} ($roundedDistance m)';
   }
 
+  _PassengerFarePreview? _estimateFarePreview(
+    RouteSummaryModel? route,
+    LatLng? pickup,
+    LatLng? unload,
+  ) {
+    if (route == null || pickup == null || unload == null) {
+      return null;
+    }
+    final pickupProjection = _nearestRouteProjection(route, pickup);
+    final unloadProjection = _nearestRouteProjection(route, unload);
+    if (pickupProjection == null || unloadProjection == null) {
+      return null;
+    }
+    final distanceMeters = _routeDistanceBetweenProgresses(
+      route,
+      pickupProjection.progress,
+      unloadProjection.progress,
+    );
+    final amount = _computeDistanceFare(route, distanceMeters);
+    final stops = _routeFareStops(route);
+    final boardingStop = _selectNearestFareStop(
+          stops: stops,
+          point: pickup,
+          progress: pickupProjection.progress,
+        ) ??
+        _PassengerFareStop(
+          name: _draftPickupLabel ?? 'Pinned pickup point',
+          progress: pickupProjection.progress,
+          position: pickupProjection.point,
+        );
+    final destinationStop = _selectNearestFareStop(
+          stops: stops,
+          point: unload,
+          progress: unloadProjection.progress,
+          minProgress: boardingStop.progress,
+        ) ??
+        _PassengerFareStop(
+          name: _draftUnloadLabel ?? 'Pinned unload point',
+          progress: unloadProjection.progress,
+          position: unloadProjection.point,
+        );
+    return _PassengerFarePreview(
+      boardingStopRef: boardingStop.name,
+      destinationStopRef: destinationStop.name,
+      amount: amount,
+    );
+  }
+
+  List<_PassengerFareStop> _routeFareStops(RouteSummaryModel route) {
+    final stops = <_PassengerFareStop>[];
+    for (final stop in route.stopPoints) {
+      stops.add(
+        _PassengerFareStop(
+          name: stop.name,
+          progress: _nearestRouteProjection(route, stop.position)?.progress ??
+              stop.order.toDouble(),
+          position: stop.position,
+        ),
+      );
+    }
+    stops.sort((left, right) => left.progress.compareTo(right.progress));
+    return stops;
+  }
+
+  _PassengerFareStop? _selectNearestFareStop({
+    required List<_PassengerFareStop> stops,
+    required LatLng point,
+    double? progress,
+    double? minProgress,
+  }) {
+    final candidates = minProgress == null
+        ? stops
+        : stops.where((stop) => stop.progress >= minProgress).toList();
+    final pool = candidates.isEmpty ? stops : candidates;
+    _PassengerFareStop? nearest;
+    var nearestScore = double.infinity;
+    for (final stop in pool) {
+      final progressDelta =
+          progress == null ? 0 : (stop.progress - progress).abs();
+      final distanceMeters = _distance.as(
+        LengthUnit.Meter,
+        point,
+        stop.position,
+      );
+      final score = progress == null
+          ? distanceMeters
+          : progressDelta * 1000 + distanceMeters;
+      if (score < nearestScore) {
+        nearestScore = score;
+        nearest = stop;
+      }
+    }
+    return nearest;
+  }
+
+  double _routeDistanceBetweenProgresses(
+    RouteSummaryModel? route,
+    double startProgress,
+    double endProgress,
+  ) {
+    final orderedPoints = _orderedRoutePoints(route);
+    if (orderedPoints.length < 2) {
+      return 0;
+    }
+    return math.max(
+      0,
+      _routeDistanceAtProgress(orderedPoints, endProgress) -
+          _routeDistanceAtProgress(orderedPoints, startProgress),
+    );
+  }
+
+  double _routeDistanceAtProgress(List<LatLng> orderedPoints, double progress) {
+    if (orderedPoints.length < 2) {
+      return 0;
+    }
+    final maxProgress = orderedPoints.length - 1;
+    final clampedProgress = progress.clamp(0.0, maxProgress.toDouble());
+    final segmentIndex = math.min(
+      orderedPoints.length - 2,
+      math.max(0, clampedProgress.floor()),
+    );
+    final fraction = clampedProgress - segmentIndex;
+    var distanceMeters = 0.0;
+    for (var index = 0; index < segmentIndex; index += 1) {
+      distanceMeters += _distance.as(
+        LengthUnit.Meter,
+        orderedPoints[index],
+        orderedPoints[index + 1],
+      );
+    }
+    distanceMeters += _distance.as(
+          LengthUnit.Meter,
+          orderedPoints[segmentIndex],
+          orderedPoints[segmentIndex + 1],
+        ) *
+        fraction;
+    return distanceMeters;
+  }
+
+  double _computeDistanceFare(RouteSummaryModel? route, double distanceMeters) {
+    final fareConfig = route?.fareConfig ?? const RouteFareConfig();
+    final baseDistanceMeters = fareConfig.baseDistanceKm * 1000;
+    if (distanceMeters <= baseDistanceMeters) {
+      return fareConfig.baseAmount;
+    }
+    final additionalKm = ((distanceMeters - baseDistanceMeters) / 1000).ceil();
+    return fareConfig.baseAmount +
+        additionalKm * fareConfig.additionalAmountPerKm;
+  }
+
+  String _formatFareAmount(double? amount) {
+    final value = amount ?? 0;
+    final decimals = value == value.truncateToDouble() ? 0 : 2;
+    return 'PHP ${value.toStringAsFixed(decimals)}';
+  }
+
+  _PassengerFarePreview? _draftFarePreview(RouteSummaryModel? route) {
+    return _estimateFarePreview(route, _draftPickupPoint, _draftUnloadPoint);
+  }
+
+  List<Marker> _routeLandmarkMarkers(RouteSummaryModel? route) {
+    final stops = route?.stopPoints ?? const <RouteStopPoint>[];
+    return [
+      for (var index = 0; index < stops.length; index += 1)
+        Marker(
+          point: stops[index].position,
+          width: 172,
+          height: 76,
+          alignment: Alignment.topCenter,
+          child: _PassengerMapPin(
+            label: '${index + 1}. ${stops[index].name}',
+            icon: Icons.place,
+            color: const Color(0xFF8A3B5D),
+          ),
+        ),
+    ];
+  }
+
   String _bookingStateText(PickupRequestModel request) {
     switch (request.status) {
       case 'pending':
@@ -1716,26 +1926,28 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     required List<TripSession> routeTrips,
   }) {
     final routePath = _routeMapPath(selectedRoute, selectedTrip);
-    final tripMarkers = routeTrips
-        .where(
-          (trip) =>
-              trip.jeepneyLatitude != null && trip.jeepneyLongitude != null,
-        )
-        .map(
-          (trip) => Marker(
-            point: LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!),
-            width: trip.id == selectedTrip?.id ? 52 : 44,
-            height: trip.id == selectedTrip?.id ? 52 : 44,
-            child: Icon(
-              Icons.directions_bus_filled,
-              color: trip.id == selectedTrip?.id
-                  ? const Color(0xFF0F6A5F)
-                  : const Color(0xFF2157A5),
-              size: trip.id == selectedTrip?.id ? 36 : 30,
+    final tripMarkers = [
+      ..._routeLandmarkMarkers(selectedRoute),
+      ...routeTrips
+          .where(
+            (trip) =>
+                trip.jeepneyLatitude != null && trip.jeepneyLongitude != null,
+          )
+          .map(
+            (trip) => Marker(
+              point: LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!),
+              width: trip.id == selectedTrip?.id ? 52 : 44,
+              height: trip.id == selectedTrip?.id ? 52 : 44,
+              child: Icon(
+                Icons.directions_bus_filled,
+                color: trip.id == selectedTrip?.id
+                    ? const Color(0xFF0F6A5F)
+                    : const Color(0xFF2157A5),
+                size: trip.id == selectedTrip?.id ? 36 : 30,
+              ),
             ),
           ),
-        )
-        .toList(growable: true);
+    ];
 
     if (_currentPassengerLocation != null) {
       tripMarkers.add(
@@ -1854,26 +2066,28 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     required List<TripSession> routeTrips,
   }) {
     final routePath = _routeMapPath(selectedRoute, selectedTrip);
-    final tripMarkers = routeTrips
-        .where(
-          (trip) =>
-              trip.jeepneyLatitude != null && trip.jeepneyLongitude != null,
-        )
-        .map(
-          (trip) => Marker(
-            point: LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!),
-            width: trip.id == selectedTrip?.id ? 52 : 44,
-            height: trip.id == selectedTrip?.id ? 52 : 44,
-            child: Icon(
-              Icons.directions_bus_filled,
-              color: trip.id == selectedTrip?.id
-                  ? const Color(0xFF0F6A5F)
-                  : const Color(0xFF2157A5),
-              size: trip.id == selectedTrip?.id ? 36 : 30,
+    final tripMarkers = [
+      ..._routeLandmarkMarkers(selectedRoute),
+      ...routeTrips
+          .where(
+            (trip) =>
+                trip.jeepneyLatitude != null && trip.jeepneyLongitude != null,
+          )
+          .map(
+            (trip) => Marker(
+              point: LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!),
+              width: trip.id == selectedTrip?.id ? 52 : 44,
+              height: trip.id == selectedTrip?.id ? 52 : 44,
+              child: Icon(
+                Icons.directions_bus_filled,
+                color: trip.id == selectedTrip?.id
+                    ? const Color(0xFF0F6A5F)
+                    : const Color(0xFF2157A5),
+                size: trip.id == selectedTrip?.id ? 36 : 30,
+              ),
             ),
           ),
-        )
-        .toList(growable: true);
+    ];
 
     if (_currentPassengerLocation != null) {
       tripMarkers.add(
@@ -2117,6 +2331,20 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
               label: 'Unload place',
               value: _draftUnloadLabel ?? 'Not pinned',
             ),
+            _DetailRow(
+              label: 'Estimated fare',
+              value: _draftFarePreview(selectedRoute) == null
+                  ? 'Pin pickup and unload first'
+                  : _formatFareAmount(
+                      _draftFarePreview(selectedRoute)!.amount,
+                    ),
+            ),
+            if (_draftFarePreview(selectedRoute) != null)
+              _DetailRow(
+                label: 'Fare landmarks',
+                value:
+                    '${_draftFarePreview(selectedRoute)!.boardingStopRef} to ${_draftFarePreview(selectedRoute)!.destinationStopRef}',
+              ),
           ],
         ),
       ),
@@ -3477,6 +3705,18 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
               label: 'Destination',
               value: displayRide.destinationStopRef ?? 'Not saved',
             ),
+            if (displayRide.estimatedFare != null)
+              _DetailRow(
+                label: 'Fare',
+                value: _formatFareAmount(displayRide.estimatedFare),
+              ),
+            if (displayRide.fareBoardingStopRef != null &&
+                displayRide.fareDestinationStopRef != null)
+              _DetailRow(
+                label: 'Fare landmarks',
+                value:
+                    '${displayRide.fareBoardingStopRef} to ${displayRide.fareDestinationStopRef}',
+              ),
             if (displayRide.endedAt != null)
               _DetailRow(
                 label: 'Dropped off',
@@ -4262,6 +4502,19 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                               value: selectedBooking.destinationStopRef ??
                                   'Not saved',
                             ),
+                            if (selectedBooking.estimatedFare != null)
+                              _DetailRow(
+                                label: 'Estimated fare',
+                                value: _formatFareAmount(
+                                    selectedBooking.estimatedFare),
+                              ),
+                            if (selectedBooking.fareBoardingStopRef != null &&
+                                selectedBooking.fareDestinationStopRef != null)
+                              _DetailRow(
+                                label: 'Fare landmarks',
+                                value:
+                                    '${selectedBooking.fareBoardingStopRef} to ${selectedBooking.fareDestinationStopRef}',
+                              ),
                             if (selectedBooking.pickupLatitude != null &&
                                 selectedBooking.pickupLongitude != null)
                               _DetailRow(
@@ -4550,6 +4803,30 @@ class _PassengerBookingDetails {
   final String pickupStopRef;
   final String destinationStopRef;
   final String? note;
+}
+
+class _PassengerFarePreview {
+  const _PassengerFarePreview({
+    required this.boardingStopRef,
+    required this.destinationStopRef,
+    required this.amount,
+  });
+
+  final String boardingStopRef;
+  final String destinationStopRef;
+  final double amount;
+}
+
+class _PassengerFareStop {
+  const _PassengerFareStop({
+    required this.name,
+    required this.progress,
+    required this.position,
+  });
+
+  final String name;
+  final double progress;
+  final LatLng position;
 }
 
 class _RouteProjection {

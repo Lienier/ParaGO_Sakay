@@ -18,6 +18,7 @@ class RouteSummaryModel {
     this.distanceMeters,
     this.durationSeconds,
     this.navigationSource,
+    this.fareConfig = const RouteFareConfig(),
   });
 
   final String id;
@@ -36,6 +37,7 @@ class RouteSummaryModel {
   final double? distanceMeters;
   final double? durationSeconds;
   final String? navigationSource;
+  final RouteFareConfig fareConfig;
 
   factory RouteSummaryModel.fromJson(Map<String, dynamic> json) {
     final stops = json['stops'];
@@ -65,6 +67,7 @@ class RouteSummaryModel {
       distanceMeters: _toDouble(navigation?['distanceMeters']),
       durationSeconds: _toDouble(navigation?['durationSeconds']),
       navigationSource: navigation?['source']?.toString(),
+      fareConfig: RouteFareConfig.fromJson(json['fareConfig']),
     );
   }
 
@@ -89,6 +92,27 @@ class RouteSummaryModel {
   }
 
   bool get hasOfflineReadyView => mapPath.length >= 2 && mapBounds != null;
+}
+
+class RouteFareConfig {
+  const RouteFareConfig({
+    this.baseAmount = 17,
+    this.baseDistanceKm = 4,
+    this.additionalAmountPerKm = 2,
+  });
+
+  final double baseAmount;
+  final double baseDistanceKm;
+  final double additionalAmountPerKm;
+
+  factory RouteFareConfig.fromJson(dynamic value) {
+    final map = _asMap(value);
+    return RouteFareConfig(
+      baseAmount: _toDouble(map?['baseAmount']) ?? 17,
+      baseDistanceKm: _toDouble(map?['baseDistanceKm']) ?? 4,
+      additionalAmountPerKm: _toDouble(map?['additionalAmountPerKm']) ?? 2,
+    );
+  }
 }
 
 class RouteStopPoint {

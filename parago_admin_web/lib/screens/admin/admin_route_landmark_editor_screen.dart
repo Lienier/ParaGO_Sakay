@@ -15,9 +15,11 @@ class AdminRouteLandmarkEditorScreen extends StatefulWidget {
   const AdminRouteLandmarkEditorScreen({
     super.key,
     required this.route,
+    this.onSaved,
   });
 
   final RouteSummaryModel route;
+  final Future<void> Function(RouteSummaryModel savedRoute)? onSaved;
 
   @override
   State<AdminRouteLandmarkEditorScreen> createState() =>
@@ -46,7 +48,6 @@ class _AdminRouteLandmarkEditorScreenState
           id: 'existing-$index',
           name: widget.route.stopPoints[index].name,
           code: widget.route.stopPoints[index].code,
-          fare: widget.route.stopPoints[index].fare,
           position: widget.route.stopPoints[index].position,
         ),
     ];
@@ -55,7 +56,7 @@ class _AdminRouteLandmarkEditorScreenState
       _message =
           'Select a landmark to edit it, or turn on move mode to reposition it.';
     } else {
-      _message = 'Tap the route to add the first landmark and fare.';
+      _message = 'Tap the route to add the first landmark.';
     }
   }
 
@@ -127,7 +128,8 @@ class _AdminRouteLandmarkEditorScreenState
       final selected = _selectedLandmark;
       if (selected == null) {
         setState(() {
-          _message = 'Select a landmark first, then tap its new route position.';
+          _message =
+              'Select a landmark first, then tap its new route position.';
         });
         return;
       }
@@ -159,13 +161,12 @@ class _AdminRouteLandmarkEditorScreenState
       id: 'new-${DateTime.now().microsecondsSinceEpoch}',
       name: draft.name,
       code: draft.code,
-      fare: draft.fare,
       position: projection.point,
     );
     setState(() {
       _landmarks = _sortedLandmarks([..._landmarks, landmark]);
       _selectedLandmarkId = landmark.id;
-      _message = '${landmark.name} added. Save to publish the landmark fares.';
+      _message = '${landmark.name} added. Save to publish the landmark.';
     });
   }
 
@@ -175,27 +176,25 @@ class _AdminRouteLandmarkEditorScreenState
       actionLabel: 'Update',
       initialName: landmark.name,
       initialCode: landmark.code,
-      initialFare: landmark.fare,
     );
     if (draft == null || !mounted) {
       return;
     }
 
     setState(() {
-        _landmarks = _sortedLandmarks(
-          _landmarks
-              .map(
-                (entry) => entry.id == landmark.id
-                    ? _EditableRouteLandmark(
-                        id: entry.id,
-                        name: draft.name,
-                        code: draft.code,
-                        fare: draft.fare,
-                        position: entry.position,
-                      )
-                    : entry,
-              )
-              .toList(growable: false),
+      _landmarks = _sortedLandmarks(
+        _landmarks
+            .map(
+              (entry) => entry.id == landmark.id
+                  ? _EditableRouteLandmark(
+                      id: entry.id,
+                      name: draft.name,
+                      code: draft.code,
+                      position: entry.position,
+                    )
+                  : entry,
+            )
+            .toList(growable: false),
       );
       _selectedLandmarkId = landmark.id;
       _message = '${draft.name} updated. Save to sync it for this route.';
@@ -240,30 +239,30 @@ class _AdminRouteLandmarkEditorScreenState
   Future<void> _saveLandmarks() async {
     final session = context.read<SessionController>();
     final routeService = RouteService(session.apiClient);
+    FocusManager.instance.primaryFocus?.unfocus();
 
     setState(() {
       _saving = true;
-      _message = null;
+      _message = 'Saving route landmarks...';
     });
 
     try {
-      final saved = await ActionFeedback.run<RouteSummaryModel>(
-        context: context,
-        loadingMessage: 'Saving route landmarks...',
-        successMessage:
-            'Landmarks for ${widget.route.code} were updated successfully.',
-        action: () => routeService.updateRoute(
-          widget.route.id,
-          {'stops': _buildStopsPayload()},
-        ),
-        onError: (error) async {
-          if (!mounted) return;
-          setState(() => _message = ActionFeedback.messageOf(error));
-        },
+      await routeService.updateRoute(
+        widget.route.id,
+        {'stops': _buildStopsPayload()},
       );
-      if (saved != null && mounted) {
-        Navigator.of(context).pop(true);
+      if (!mounted) {
+        return;
       }
+      setState(() {
+        _message =
+            'Landmarks for ${widget.route.code} saved successfully. You can keep editing or go back.';
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _message = ActionFeedback.messageOf(error));
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -280,7 +279,7 @@ class _AdminRouteLandmarkEditorScreenState
           if ((ordered[index].code ?? '').trim().isNotEmpty)
             'code': ordered[index].code!.trim(),
           'order': index + 1,
-          'fare': ordered[index].fare,
+          'fare': _landmarkFare(ordered[index]),
           'location': {
             'type': 'Point',
             'coordinates': <double>[
@@ -304,6 +303,59 @@ class _AdminRouteLandmarkEditorScreenState
       return leftProgress.compareTo(rightProgress);
     });
     return sorted;
+  }
+
+  double _landmarkFare(_EditableRouteLandmark landmark) {
+    final progress = _nearestRouteProjection(landmark.position)?.progress ?? 0;
+    final distanceMeters = _routeDistanceAtProgress(progress);
+    return _computeDistanceFare(distanceMeters);
+  }
+
+  double _routeDistanceAtProgress(double progress) {
+    final orderedPoints = _routePoints;
+    if (orderedPoints.length < 2) {
+      return 0;
+    }
+
+    final maxProgress = orderedPoints.length - 1;
+    final clampedProgress = progress.clamp(0.0, maxProgress.toDouble());
+    final segmentIndex = math.min(
+      orderedPoints.length - 2,
+      math.max(0, clampedProgress.floor()),
+    );
+    final fraction = clampedProgress - segmentIndex;
+    var distanceMeters = 0.0;
+    for (var index = 0; index < segmentIndex; index += 1) {
+      distanceMeters += _distance.as(
+        LengthUnit.Meter,
+        orderedPoints[index],
+        orderedPoints[index + 1],
+      );
+    }
+    distanceMeters += _distance.as(
+          LengthUnit.Meter,
+          orderedPoints[segmentIndex],
+          orderedPoints[segmentIndex + 1],
+        ) *
+        fraction;
+    return distanceMeters;
+  }
+
+  double _computeDistanceFare(double distanceMeters) {
+    final fareConfig = widget.route.fareConfig;
+    final baseDistanceMeters = fareConfig.baseDistanceKm * 1000;
+    if (distanceMeters <= baseDistanceMeters) {
+      return _roundFare(fareConfig.baseAmount);
+    }
+    final additionalKm =
+        ((distanceMeters - baseDistanceMeters) / 1000).ceil();
+    return _roundFare(
+      fareConfig.baseAmount + additionalKm * fareConfig.additionalAmountPerKm,
+    );
+  }
+
+  double _roundFare(double value) {
+    return (value * 100).roundToDouble() / 100;
   }
 
   _RouteProjection? _nearestRouteProjection(LatLng point) {
@@ -429,102 +481,16 @@ class _AdminRouteLandmarkEditorScreenState
     required String actionLabel,
     String initialName = '',
     String? initialCode,
-    double initialFare = 0,
   }) async {
-    final formKey = GlobalKey<FormState>();
-    final nameCtrl = TextEditingController(text: initialName);
-    final codeCtrl = TextEditingController(text: initialCode ?? '');
-    final fareCtrl = TextEditingController(
-      text: initialFare == initialFare.truncateToDouble()
-          ? initialFare.toStringAsFixed(0)
-          : initialFare.toStringAsFixed(2),
+    return showDialog<_LandmarkDraft>(
+      context: context,
+      builder: (context) => _LandmarkDraftDialog(
+        title: title,
+        actionLabel: actionLabel,
+        initialName: initialName,
+        initialCode: initialCode,
+      ),
     );
-
-    try {
-      return await showDialog<_LandmarkDraft>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(title),
-          content: Form(
-            key: formKey,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextFormField(
-                    controller: nameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Landmark name',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if ((value?.trim() ?? '').isEmpty) {
-                        return 'Landmark name is required.';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: codeCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Short code (optional)',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: fareCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(
-                      labelText: 'Fare',
-                      prefixText: 'PHP ',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      final amount = double.tryParse((value ?? '').trim());
-                      if (amount == null || amount < 0) {
-                        return 'Enter a valid non-negative fare.';
-                      }
-                      return null;
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (!(formKey.currentState?.validate() ?? false)) {
-                  return;
-                }
-                Navigator.of(context).pop(
-                  _LandmarkDraft(
-                    name: nameCtrl.text.trim(),
-                    code: codeCtrl.text.trim().isEmpty
-                        ? null
-                        : codeCtrl.text.trim(),
-                    fare: double.parse(fareCtrl.text.trim()),
-                  ),
-                );
-              },
-              child: Text(actionLabel),
-            ),
-          ],
-        ),
-      );
-    } finally {
-      nameCtrl.dispose();
-      codeCtrl.dispose();
-      fareCtrl.dispose();
-    }
   }
 
   String _formatCoordinate(LatLng point) {
@@ -552,8 +518,13 @@ class _AdminRouteLandmarkEditorScreenState
                   Text(widget.route.label, style: theme.textTheme.titleLarge),
                   const SizedBox(height: 8),
                   Text(
-                    'Route landmarks act as the admin-managed primary drop-off points. Only admins can add, move, edit, and update their fares.',
+                    'Route landmarks act as the admin-managed primary drop-off points. Only admins can add, move, and edit them here.',
                     style: theme.textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Landmark fares are computed automatically from the route fare rule and each landmark\'s distance along the route.',
+                    style: theme.textTheme.bodySmall,
                   ),
                   const SizedBox(height: 12),
                   Wrap(
@@ -599,8 +570,7 @@ class _AdminRouteLandmarkEditorScreenState
                         onSelected: (_) {
                           setState(() {
                             _moveMode = false;
-                            _message =
-                                'Tap the route to add a new landmark and fare.';
+                            _message = 'Tap the route to add a new landmark.';
                           });
                         },
                       ),
@@ -636,7 +606,7 @@ class _AdminRouteLandmarkEditorScreenState
                     child: Text(
                       selectedLandmark == null
                           ? 'No landmark selected yet.'
-                          : 'Selected: ${selectedLandmark.name} | ${_formatFare(selectedLandmark.fare)}',
+                          : 'Selected: ${selectedLandmark.name} | ${_formatFare(_landmarkFare(selectedLandmark))}',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -715,10 +685,9 @@ class _AdminRouteLandmarkEditorScreenState
                                       order: index + 1,
                                       name: _landmarks[index].name,
                                       fareLabel:
-                                          _formatFare(_landmarks[index].fare),
-                                      selected:
-                                          _landmarks[index].id ==
-                                              _selectedLandmarkId,
+                                          _formatFare(_landmarkFare(_landmarks[index])),
+                                      selected: _landmarks[index].id ==
+                                          _selectedLandmarkId,
                                     ),
                                   ),
                                 ),
@@ -726,7 +695,8 @@ class _AdminRouteLandmarkEditorScreenState
                           ),
                           const RichAttributionWidget(
                             attributions: [
-                              TextSourceAttribution('OpenStreetMap contributors'),
+                              TextSourceAttribution(
+                                  'OpenStreetMap contributors'),
                             ],
                           ),
                         ],
@@ -753,11 +723,16 @@ class _AdminRouteLandmarkEditorScreenState
                   else
                     Column(
                       children: [
-                        for (var index = 0; index < _landmarks.length; index += 1)
+                        for (var index = 0;
+                            index < _landmarks.length;
+                            index += 1)
                           _LandmarkListTile(
                             order: index + 1,
                             landmark: _landmarks[index],
-                            selected: _landmarks[index].id == _selectedLandmarkId,
+                            fareLabel:
+                                _formatFare(_landmarkFare(_landmarks[index])),
+                            selected:
+                                _landmarks[index].id == _selectedLandmarkId,
                             coordinateLabel:
                                 _formatCoordinate(_landmarks[index].position),
                             onTap: () {
@@ -861,8 +836,7 @@ class _LandmarkMarker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent =
-        selected ? const Color(0xFF8A3B5D) : const Color(0xFF0F6A5F);
+    final accent = selected ? const Color(0xFF8A3B5D) : const Color(0xFF0F6A5F);
     return Align(
       alignment: Alignment.topCenter,
       child: DecoratedBox(
@@ -908,6 +882,7 @@ class _LandmarkListTile extends StatelessWidget {
   const _LandmarkListTile({
     required this.order,
     required this.landmark,
+    required this.fareLabel,
     required this.selected,
     required this.coordinateLabel,
     required this.onTap,
@@ -917,6 +892,7 @@ class _LandmarkListTile extends StatelessWidget {
 
   final int order;
   final _EditableRouteLandmark landmark;
+  final String fareLabel;
   final bool selected;
   final String coordinateLabel;
   final VoidCallback onTap;
@@ -940,8 +916,10 @@ class _LandmarkListTile extends StatelessWidget {
             child: Row(
               children: [
                 CircleAvatar(
-                  backgroundColor:
-                      Theme.of(context).colorScheme.primary.withValues(alpha: 0.14),
+                  backgroundColor: Theme.of(context)
+                      .colorScheme
+                      .primary
+                      .withValues(alpha: 0.14),
                   foregroundColor: Theme.of(context).colorScheme.primary,
                   child: Text('$order'),
                 ),
@@ -958,9 +936,7 @@ class _LandmarkListTile extends StatelessWidget {
                                 ),
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        '${_formatFare(landmark.fare)} | $coordinateLabel',
-                      ),
+                      Text('$fareLabel | $coordinateLabel'),
                       if ((landmark.code ?? '').trim().isNotEmpty) ...[
                         const SizedBox(height: 2),
                         Text('Code: ${landmark.code}'),
@@ -992,27 +968,23 @@ class _EditableRouteLandmark {
     required this.id,
     required this.name,
     required this.code,
-    required this.fare,
     required this.position,
   });
 
   final String id;
   final String name;
   final String? code;
-  final double fare;
   final LatLng position;
 
   _EditableRouteLandmark copyWith({
     String? name,
     String? code,
-    double? fare,
     LatLng? position,
   }) {
     return _EditableRouteLandmark(
       id: id,
       name: name ?? this.name,
       code: code ?? this.code,
-      fare: fare ?? this.fare,
       position: position ?? this.position,
     );
   }
@@ -1022,12 +994,108 @@ class _LandmarkDraft {
   const _LandmarkDraft({
     required this.name,
     required this.code,
-    required this.fare,
   });
 
   final String name;
   final String? code;
-  final double fare;
+}
+
+class _LandmarkDraftDialog extends StatefulWidget {
+  const _LandmarkDraftDialog({
+    required this.title,
+    required this.actionLabel,
+    required this.initialName,
+    required this.initialCode,
+  });
+
+  final String title;
+  final String actionLabel;
+  final String initialName;
+  final String? initialCode;
+
+  @override
+  State<_LandmarkDraftDialog> createState() => _LandmarkDraftDialogState();
+}
+
+class _LandmarkDraftDialogState extends State<_LandmarkDraftDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _codeCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController(text: widget.initialName);
+    _codeCtrl = TextEditingController(text: widget.initialCode ?? '');
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _codeCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      return;
+    }
+    Navigator.of(context).pop(
+      _LandmarkDraft(
+        name: _nameCtrl.text.trim(),
+        code: _codeCtrl.text.trim().isEmpty ? null : _codeCtrl.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: Form(
+        key: _formKey,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _nameCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Landmark name',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if ((value?.trim() ?? '').isEmpty) {
+                    return 'Landmark name is required.';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _codeCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Short code (optional)',
+                  border: OutlineInputBorder(),
+                ),
+                onFieldSubmitted: (_) => _submit(),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: Text(widget.actionLabel),
+        ),
+      ],
+    );
+  }
 }
 
 class _RouteProjection {

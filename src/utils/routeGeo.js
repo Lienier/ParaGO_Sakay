@@ -1,4 +1,9 @@
 const { haversineMeters } = require('./geo');
+const {
+  fareBaseAmount,
+  fareBaseDistanceKm,
+  fareAdditionalAmountPerKm,
+} = require('../config/env');
 const METERS_PER_DEGREE_LAT = 111320;
 
 const normalizeCoordinatePair = (value) => {
@@ -211,6 +216,264 @@ const pickDefaultRouteCoordinate = (route) => {
   };
 };
 
+const roundToTwo = (value) => Math.round(Number(value || 0) * 100) / 100;
+
+const resolveFareConfig = (route) => {
+  const routeFareConfig = route?.fareConfig || {};
+  return {
+    baseAmount: Number.isFinite(Number(routeFareConfig.baseAmount))
+      ? Number(routeFareConfig.baseAmount)
+      : Number.isFinite(Number(fareBaseAmount))
+          ? Number(fareBaseAmount)
+          : 17,
+    baseDistanceKm: Number.isFinite(Number(routeFareConfig.baseDistanceKm))
+      ? Number(routeFareConfig.baseDistanceKm)
+      : Number.isFinite(Number(fareBaseDistanceKm))
+          ? Number(fareBaseDistanceKm)
+          : 4,
+    additionalAmountPerKm: Number.isFinite(
+      Number(routeFareConfig.additionalAmountPerKm)
+    )
+      ? Number(routeFareConfig.additionalAmountPerKm)
+      : Number.isFinite(Number(fareAdditionalAmountPerKm))
+          ? Number(fareAdditionalAmountPerKm)
+          : 2,
+  };
+};
+
+const routeCumulativeDistances = (coordinates) => {
+  const cumulative = [0];
+  for (let index = 0; index < coordinates.length - 1; index += 1) {
+    const start = coordinates[index];
+    const end = coordinates[index + 1];
+    const segmentMeters = haversineMeters(start[1], start[0], end[1], end[0]);
+    cumulative.push(cumulative[cumulative.length - 1] + segmentMeters);
+  }
+  return cumulative;
+};
+
+const routeDistanceAtProgress = ({ progress, coordinates, cumulativeDistances }) => {
+  if (!coordinates.length || !Number.isFinite(progress)) {
+    return 0;
+  }
+  if (coordinates.length === 1) {
+    return 0;
+  }
+
+  const maxProgress = coordinates.length - 1;
+  const clampedProgress = Math.max(0, Math.min(maxProgress, progress));
+  const segmentIndex = Math.min(
+    coordinates.length - 2,
+    Math.max(0, Math.floor(clampedProgress))
+  );
+  const fraction = Math.max(0, Math.min(1, clampedProgress - segmentIndex));
+  const segmentStart = coordinates[segmentIndex];
+  const segmentEnd = coordinates[segmentIndex + 1];
+  const segmentMeters = haversineMeters(
+    segmentStart[1],
+    segmentStart[0],
+    segmentEnd[1],
+    segmentEnd[0]
+  );
+  return cumulativeDistances[segmentIndex] + segmentMeters * fraction;
+};
+
+const computeDistanceFare = (distanceMeters, fareConfig = {}) => {
+  const normalizedDistance = Number(distanceMeters);
+  if (!Number.isFinite(normalizedDistance) || normalizedDistance < 0) {
+    return 0;
+  }
+
+  const baseAmount = Number.isFinite(Number(fareConfig.baseAmount))
+    ? Number(fareConfig.baseAmount)
+    : 17;
+  const baseDistanceMeters =
+    (Number.isFinite(Number(fareConfig.baseDistanceKm))
+      ? Number(fareConfig.baseDistanceKm)
+      : 4) * 1000;
+  const additionalAmount = Number.isFinite(Number(fareConfig.additionalAmountPerKm))
+    ? Number(fareConfig.additionalAmountPerKm)
+    : 2;
+  if (normalizedDistance <= baseDistanceMeters) {
+    return roundToTwo(baseAmount);
+  }
+  const additionalKm = Math.ceil((normalizedDistance - baseDistanceMeters) / 1000);
+  return roundToTwo(baseAmount + additionalKm * additionalAmount);
+};
+
+const routeStopSnapshots = (route) => {
+  return [...(route?.stops || [])]
+    .map((stop) => {
+      const coordinates = normalizeCoordinatePair(stop?.location?.coordinates);
+      if (!coordinates) {
+        return null;
+      }
+      const projection = nearestRouteProjection({
+        latitude: coordinates[1],
+        longitude: coordinates[0],
+        route,
+      });
+      return {
+        name: String(stop?.name || '').trim(),
+        order: Number(stop?.order || 0),
+        fare: Number.isFinite(Number(stop?.fare)) ? Number(stop.fare) : 0,
+        coordinates,
+        progress: projection?.progress,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftProgress = Number.isFinite(left.progress) ? left.progress : left.order;
+      const rightProgress = Number.isFinite(right.progress) ? right.progress : right.order;
+      if (leftProgress !== rightProgress) {
+        return leftProgress - rightProgress;
+      }
+      return left.order - right.order;
+    });
+};
+
+const selectNearestStopSnapshot = ({
+  stops,
+  pointCoordinates,
+  pointProgress,
+  minProgress,
+}) => {
+  if (!stops.length || !pointCoordinates) {
+    return null;
+  }
+
+  const filteredStops =
+    Number.isFinite(minProgress)
+      ? stops.filter((stop) => {
+          const stopProgress = Number.isFinite(stop.progress)
+            ? stop.progress
+            : stop.order;
+          return stopProgress >= minProgress;
+        })
+      : stops;
+  const candidates = filteredStops.length ? filteredStops : stops;
+
+  let nearest = null;
+  let nearestScore = Number.POSITIVE_INFINITY;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (const stop of candidates) {
+    const stopProgress = Number.isFinite(stop.progress) ? stop.progress : stop.order;
+    const progressDelta = Number.isFinite(pointProgress)
+      ? Math.abs(stopProgress - pointProgress)
+      : 0;
+    const distanceMeters = haversineMeters(
+      pointCoordinates[1],
+      pointCoordinates[0],
+      stop.coordinates[1],
+      stop.coordinates[0]
+    );
+    const score = Number.isFinite(pointProgress)
+      ? progressDelta * 1000 + distanceMeters
+      : distanceMeters;
+    if (
+      !nearest ||
+      score < nearestScore ||
+      (score === nearestScore && distanceMeters < nearestDistance)
+    ) {
+      nearest = stop;
+      nearestScore = score;
+      nearestDistance = distanceMeters;
+    }
+  }
+
+  return nearest;
+};
+
+const resolveRouteFareSnapshot = ({ route, pickupLocation, destinationLocation }) => {
+  const stops = routeStopSnapshots(route);
+  const routeCoordinates = orderedRouteCoordinates(route);
+  const cumulativeDistances = routeCumulativeDistances(routeCoordinates);
+  const fareConfig = resolveFareConfig(route);
+
+  const pickupCoordinates = normalizeCoordinatePair(pickupLocation?.coordinates);
+  const destinationCoordinates = normalizeCoordinatePair(destinationLocation?.coordinates);
+  const pickupProjection = pickupCoordinates
+    ? nearestRouteProjection({
+        latitude: pickupCoordinates[1],
+        longitude: pickupCoordinates[0],
+        route,
+      })
+    : null;
+  const destinationProjection = destinationCoordinates
+    ? nearestRouteProjection({
+        latitude: destinationCoordinates[1],
+        longitude: destinationCoordinates[0],
+        route,
+      })
+    : null;
+
+  const boardingDistanceFromOrigin = pickupProjection
+    ? routeDistanceAtProgress({
+        progress: pickupProjection.progress,
+        coordinates: routeCoordinates,
+        cumulativeDistances,
+      })
+    : 0;
+  const destinationDistanceFromOrigin = destinationProjection
+    ? routeDistanceAtProgress({
+        progress: destinationProjection.progress,
+        coordinates: routeCoordinates,
+        cumulativeDistances,
+      })
+    : boardingDistanceFromOrigin;
+  const segmentDistanceMeters = Math.max(
+    0,
+    destinationDistanceFromOrigin - boardingDistanceFromOrigin
+  );
+
+  if (!stops.length) {
+    return {
+      boardingStopRef: null,
+      boardingStopOrder: null,
+      boardingFare: roundToTwo(
+        computeDistanceFare(boardingDistanceFromOrigin, fareConfig)
+      ),
+      destinationStopRef: null,
+      destinationStopOrder: null,
+      destinationFare: roundToTwo(
+        computeDistanceFare(destinationDistanceFromOrigin, fareConfig)
+      ),
+      amount: roundToTwo(computeDistanceFare(segmentDistanceMeters, fareConfig)),
+    };
+  }
+
+  const boardingStop = selectNearestStopSnapshot({
+    stops,
+    pointCoordinates: pickupCoordinates,
+    pointProgress: pickupProjection?.progress,
+  }) || stops[0];
+  const boardingProgress = Number.isFinite(boardingStop.progress)
+    ? boardingStop.progress
+    : boardingStop.order;
+  const destinationStop = selectNearestStopSnapshot({
+    stops,
+    pointCoordinates: destinationCoordinates,
+    pointProgress: destinationProjection?.progress,
+    minProgress: boardingProgress,
+  }) || boardingStop;
+  const amount = roundToTwo(computeDistanceFare(segmentDistanceMeters, fareConfig));
+
+  return {
+    boardingStopRef: boardingStop.name || null,
+    boardingStopOrder: boardingStop.order || null,
+    boardingFare: roundToTwo(
+      computeDistanceFare(boardingDistanceFromOrigin, fareConfig)
+    ),
+    destinationStopRef: destinationStop.name || null,
+    destinationStopOrder: destinationStop.order || null,
+    destinationFare: roundToTwo(
+      computeDistanceFare(destinationDistanceFromOrigin, fareConfig)
+    ),
+    amount,
+  };
+};
+
 module.exports = {
   collectRouteCoordinates,
   orderedRouteCoordinates,
@@ -219,4 +482,5 @@ module.exports = {
   isPointAfterOnRoute,
   isRoutePickupNearRoad,
   pickDefaultRouteCoordinate,
+  resolveRouteFareSnapshot,
 };

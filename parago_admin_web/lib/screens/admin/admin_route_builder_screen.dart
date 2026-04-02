@@ -19,10 +19,12 @@ class AdminRouteBuilderScreen extends StatefulWidget {
     super.key,
     this.embedded = false,
     this.onSaved,
+    this.initialRoute,
   });
 
   final bool embedded;
   final VoidCallback? onSaved;
+  final RouteSummaryModel? initialRoute;
 
   @override
   State<AdminRouteBuilderScreen> createState() =>
@@ -36,6 +38,9 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
   final _nameCtrl = TextEditingController();
   final _codeCtrl = TextEditingController();
   final _descriptionCtrl = TextEditingController();
+  final _fareBaseAmountCtrl = TextEditingController(text: '17');
+  final _fareBaseDistanceCtrl = TextEditingController(text: '4');
+  final _fareAdditionalPerKmCtrl = TextEditingController(text: '2');
   final OpenStreetMapRoutingService _routingService =
       OpenStreetMapRoutingService();
   final RoutePreviewCache _routePreviewCache = RoutePreviewCache();
@@ -56,6 +61,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
   @override
   void initState() {
     super.initState();
+    _seedFromRoute(widget.initialRoute);
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadRoutes());
   }
 
@@ -64,8 +70,42 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     _nameCtrl.dispose();
     _codeCtrl.dispose();
     _descriptionCtrl.dispose();
+    _fareBaseAmountCtrl.dispose();
+    _fareBaseDistanceCtrl.dispose();
+    _fareAdditionalPerKmCtrl.dispose();
     _routingService.dispose();
     super.dispose();
+  }
+
+  void _seedFromRoute(RouteSummaryModel? route) {
+    if (route == null) {
+      return;
+    }
+    _nameCtrl.text = route.name;
+    _codeCtrl.text = route.code;
+    _descriptionCtrl.text = route.description ?? '';
+    _fareBaseAmountCtrl.text = _formatNumericInput(route.fareConfig.baseAmount);
+    _fareBaseDistanceCtrl.text =
+        _formatNumericInput(route.fareConfig.baseDistanceKm);
+    _fareAdditionalPerKmCtrl.text =
+        _formatNumericInput(route.fareConfig.additionalAmountPerKm);
+
+    final previewPoints =
+        route.pathPoints.length >= 2 ? route.pathPoints : route.mapPath;
+    if (previewPoints.length >= 2) {
+      _previewSnapshot = CachedRouteSnapshot(
+        routeId: route.id,
+        routeCode: route.code,
+        points: previewPoints,
+        startPoint: route.originPoint ?? previewPoints.first,
+        endPoint: route.destinationPoint ?? previewPoints.last,
+        bounds: route.mapBounds ?? RouteMapBounds.fromPoints(previewPoints),
+        distanceMeters: route.distanceMeters,
+        durationSeconds: route.durationSeconds,
+      );
+      _startPoint = _previewSnapshot!.startPoint;
+      _endPoint = _previewSnapshot!.endPoint;
+    }
   }
 
   Future<void> _loadRoutes() async {
@@ -204,7 +244,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     final session = context.read<SessionController>();
     final routeService = RouteService(session.apiClient);
     final payload = _buildRoutePayload();
-    final existing = _existingRouteByCode(_normalizedCode);
+    final existing = _resolvedExistingRoute;
 
     setState(() {
       _savingRoute = true;
@@ -296,6 +336,17 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     return null;
   }
 
+  RouteSummaryModel? get _resolvedExistingRoute {
+    final normalizedCode = _normalizedCode;
+    final initialRoute = widget.initialRoute;
+    if (initialRoute != null &&
+        normalizedCode.isNotEmpty &&
+        initialRoute.code.toLowerCase() == normalizedCode.toLowerCase()) {
+      return initialRoute;
+    }
+    return _existingRouteByCode(normalizedCode);
+  }
+
   String get _normalizedCode => _codeCtrl.text.trim().toUpperCase();
 
   List<LatLng> get _previewPoints =>
@@ -303,6 +354,23 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
 
   RouteMapBounds? get _previewBounds =>
       _previewSnapshot?.bounds ?? RouteMapBounds.fromPoints(_previewPoints);
+
+  double _parseFareInput(TextEditingController controller, double fallback) {
+    return double.tryParse(controller.text.trim()) ?? fallback;
+  }
+
+  String _formatNumericInput(double value) {
+    return value == value.truncateToDouble()
+        ? value.toStringAsFixed(0)
+        : value.toStringAsFixed(2);
+  }
+
+  String _fareRuleSummary() {
+    final baseAmount = _parseFareInput(_fareBaseAmountCtrl, 17);
+    final baseDistanceKm = _parseFareInput(_fareBaseDistanceCtrl, 4);
+    final additionalAmount = _parseFareInput(_fareAdditionalPerKmCtrl, 2);
+    return 'First ${_formatNumericInput(baseDistanceKm)} km = PHP ${_formatNumericInput(baseAmount)}, then PHP ${_formatNumericInput(additionalAmount)} per succeeding kilometer.';
+  }
 
   LatLng get _mapCenter {
     final bounds = _previewBounds;
@@ -343,6 +411,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
   }
 
   Map<String, dynamic> _buildRoutePayload() {
+    final existing = _resolvedExistingRoute;
     final pathCoordinates = _previewPoints
         .map((point) => <double>[point.longitude, point.latitude])
         .toList(growable: false);
@@ -352,8 +421,8 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     return {
       'name': _nameCtrl.text.trim(),
       'code': _normalizedCode,
-      'direction': 'circular',
-      'status': 'active',
+      'direction': existing?.direction ?? 'circular',
+      'status': existing?.status ?? 'active',
       'description': _descriptionCtrl.text.trim(),
       'path': {
         'type': 'LineString',
@@ -376,7 +445,28 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
             },
           },
       ],
-      'stops': const <Map<String, dynamic>>[],
+      'stops': [
+        for (final stop in existing?.stopPoints ?? const <RouteStopPoint>[])
+          {
+            'name': stop.name,
+            if (stop.code != null && stop.code!.trim().isNotEmpty)
+              'code': stop.code,
+            'order': stop.order,
+            'fare': stop.fare,
+            'location': {
+              'type': 'Point',
+              'coordinates': <double>[
+                stop.position.longitude,
+                stop.position.latitude,
+              ],
+            },
+          },
+      ],
+      'fareConfig': {
+        'baseAmount': _parseFareInput(_fareBaseAmountCtrl, 17),
+        'baseDistanceKm': _parseFareInput(_fareBaseDistanceCtrl, 4),
+        'additionalAmountPerKm': _parseFareInput(_fareAdditionalPerKmCtrl, 2),
+      },
       'navigation': {
         'source': 'openstreetmap',
         'origin': {
@@ -426,190 +516,308 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     return '${hours}h ${remainingMinutes}m';
   }
 
+  String? _validateNonNegativeNumber(String? value, String label) {
+    final parsed = double.tryParse((value ?? '').trim());
+    if (parsed == null) {
+      return '$label must be a valid number.';
+    }
+    if (parsed < 0) {
+      return '$label must be 0 or higher.';
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final existing = _existingRouteByCode(_normalizedCode);
+    final existing = _resolvedExistingRoute;
 
     final body = RefreshIndicator(
       onRefresh: _loadRoutes,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
         children: [
-            if (widget.embedded) ...[
-              Align(
-                alignment: Alignment.centerRight,
-                child: OutlinedButton.icon(
-                  onPressed: _loadingRoutes ? null : _loadRoutes,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Refresh routes'),
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            Form(
-              key: _formKey,
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Route details', style: theme.textTheme.titleLarge),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Pin the start and end points directly on OpenStreetMap, then save the exact same route geometry for online and offline use.',
-                        style: theme.textTheme.bodyMedium,
-                      ),
-                      const SizedBox(height: 18),
-                      TextFormField(
-                        controller: _nameCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Route name',
-                          border: OutlineInputBorder(),
-                        ),
-                        validator: (value) {
-                          final text = value?.trim() ?? '';
-                          if (text.isEmpty) {
-                            return 'Route name is required.';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 14),
-                      TextFormField(
-                        controller: _codeCtrl,
-                        textCapitalization: TextCapitalization.characters,
-                        decoration: const InputDecoration(
-                          labelText: 'Route code',
-                          border: OutlineInputBorder(),
-                        ),
-                        onChanged: (_) => setState(() {}),
-                        validator: (value) {
-                          final text = value?.trim() ?? '';
-                          if (text.isEmpty) {
-                            return 'Route code is required.';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 14),
-                      TextFormField(
-                        controller: _descriptionCtrl,
-                        minLines: 2,
-                        maxLines: 4,
-                        decoration: const InputDecoration(
-                          labelText: 'Description',
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: existing == null
-                              ? const Color(0xFF0F6A5F).withValues(alpha: 0.08)
-                              : const Color(0xFFE29B2D).withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Text(
-                          existing == null
-                              ? 'Saving will create a new route.'
-                              : 'Route code already exists. Saving will update ${existing.label}.',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+          if (widget.embedded) ...[
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: _loadingRoutes ? null : _loadRoutes,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Refresh routes'),
               ),
             ),
-            const SizedBox(height: 16),
-            Card(
+            const SizedBox(height: 12),
+          ],
+          Form(
+            key: _formKey,
+            child: Card(
               child: Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Pin controls', style: theme.textTheme.titleLarge),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        ChoiceChip(
-                          label: const Text('Place Start Pin'),
-                          selected: _placementMode == _PinPlacementMode.start,
-                          onSelected: (_) {
-                            setState(() {
-                              _placementMode = _PinPlacementMode.start;
-                              _message =
-                                  'Tap the map to place or move the start pin.';
-                            });
-                          },
-                        ),
-                        ChoiceChip(
-                          label: const Text('Place End Pin'),
-                          selected: _placementMode == _PinPlacementMode.end,
-                          onSelected: (_) {
-                            setState(() {
-                              _placementMode = _PinPlacementMode.end;
-                              _message =
-                                  'Tap the map to place or move the end pin.';
-                            });
-                          },
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: _clearPreviewOnly,
-                          icon: const Icon(Icons.layers_clear_outlined),
-                          label: const Text('Clear Route Only'),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: _clearPins,
-                          icon: const Icon(Icons.restart_alt),
-                          label: const Text('Reset All Pins'),
-                        ),
-                      ],
+                    Text('Route details', style: theme.textTheme.titleLarge),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Pin the start and end points directly on OpenStreetMap, then save the exact same route geometry for online and offline use.',
+                      style: theme.textTheme.bodyMedium,
                     ),
-                    const SizedBox(height: 16),
-                    _CoordinateRow(
-                      label: 'Start',
-                      value: _formatCoordinate(_startPoint),
-                      icon: Icons.flag_circle_outlined,
-                      accent: const Color(0xFF0F6A5F),
+                    const SizedBox(height: 18),
+                    TextFormField(
+                      controller: _nameCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Route name',
+                        border: OutlineInputBorder(),
+                      ),
+                      validator: (value) {
+                        final text = value?.trim() ?? '';
+                        if (text.isEmpty) {
+                          return 'Route name is required.';
+                        }
+                        return null;
+                      },
                     ),
-                    const SizedBox(height: 10),
-                    _CoordinateRow(
-                      label: 'End',
-                      value: _formatCoordinate(_endPoint),
-                      icon: Icons.location_on_outlined,
-                      accent: const Color(0xFF8A3B5D),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _codeCtrl,
+                      textCapitalization: TextCapitalization.characters,
+                      decoration: const InputDecoration(
+                        labelText: 'Route code',
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                      validator: (value) {
+                        final text = value?.trim() ?? '';
+                        if (text.isEmpty) {
+                          return 'Route code is required.';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _descriptionCtrl,
+                      minLines: 2,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        labelText: 'Description',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      'Fare settings',
+                      style: theme.textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'These values drive the passenger fare preview and backend fare computation for this route.',
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 14),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final stacked = constraints.maxWidth < 780;
+                        final fields = [
+                          TextFormField(
+                            controller: _fareBaseAmountCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            decoration: const InputDecoration(
+                              labelText: 'Base fare',
+                              prefixText: 'PHP ',
+                              border: OutlineInputBorder(),
+                            ),
+                            validator: (value) => _validateNonNegativeNumber(
+                              value,
+                              'Base fare',
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                          TextFormField(
+                            controller: _fareBaseDistanceCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            decoration: const InputDecoration(
+                              labelText: 'Base distance',
+                              suffixText: 'km',
+                              border: OutlineInputBorder(),
+                            ),
+                            validator: (value) => _validateNonNegativeNumber(
+                              value,
+                              'Base distance',
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                          TextFormField(
+                            controller: _fareAdditionalPerKmCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            decoration: const InputDecoration(
+                              labelText: 'Additional per km',
+                              prefixText: 'PHP ',
+                              border: OutlineInputBorder(),
+                            ),
+                            validator: (value) => _validateNonNegativeNumber(
+                              value,
+                              'Additional fare',
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ];
+
+                        if (stacked) {
+                          return Column(
+                            children: [
+                              for (var index = 0;
+                                  index < fields.length;
+                                  index += 1) ...[
+                                fields[index],
+                                if (index < fields.length - 1)
+                                  const SizedBox(height: 12),
+                              ],
+                            ],
+                          );
+                        }
+
+                        return Row(
+                          children: [
+                            for (var index = 0;
+                                index < fields.length;
+                                index += 1) ...[
+                              Expanded(child: fields[index]),
+                              if (index < fields.length - 1)
+                                const SizedBox(width: 12),
+                            ],
+                          ],
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF102725).withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Text(
+                        _fareRuleSummary(),
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: existing == null
+                            ? const Color(0xFF0F6A5F).withValues(alpha: 0.08)
+                            : const Color(0xFFE29B2D).withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Text(
+                        existing == null
+                            ? 'Saving will create a new route.'
+                            : 'Route code already exists. Saving will update ${existing.label}.',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 16),
-            _buildMapCard(theme, existing),
-            if (_message != null) ...[
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF102725).withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Text(
-                  _message!,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Pin controls', style: theme.textTheme.titleLarge),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Place Start Pin'),
+                        selected: _placementMode == _PinPlacementMode.start,
+                        onSelected: (_) {
+                          setState(() {
+                            _placementMode = _PinPlacementMode.start;
+                            _message =
+                                'Tap the map to place or move the start pin.';
+                          });
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('Place End Pin'),
+                        selected: _placementMode == _PinPlacementMode.end,
+                        onSelected: (_) {
+                          setState(() {
+                            _placementMode = _PinPlacementMode.end;
+                            _message =
+                                'Tap the map to place or move the end pin.';
+                          });
+                        },
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _clearPreviewOnly,
+                        icon: const Icon(Icons.layers_clear_outlined),
+                        label: const Text('Clear Route Only'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _clearPins,
+                        icon: const Icon(Icons.restart_alt),
+                        label: const Text('Reset All Pins'),
+                      ),
+                    ],
                   ),
+                  const SizedBox(height: 16),
+                  _CoordinateRow(
+                    label: 'Start',
+                    value: _formatCoordinate(_startPoint),
+                    icon: Icons.flag_circle_outlined,
+                    accent: const Color(0xFF0F6A5F),
+                  ),
+                  const SizedBox(height: 10),
+                  _CoordinateRow(
+                    label: 'End',
+                    value: _formatCoordinate(_endPoint),
+                    icon: Icons.location_on_outlined,
+                    accent: const Color(0xFF8A3B5D),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          _buildMapCard(theme, existing),
+          if (_message != null) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF102725).withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                _message!,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-            ],
+            ),
+          ],
         ],
       ),
     );
