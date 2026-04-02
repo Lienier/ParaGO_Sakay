@@ -54,11 +54,29 @@ const buildDailyTimeline = ({ from, to, boardedRows, unloadedRows }) => {
   return timeline;
 };
 
-const normalizeTopStopRows = (rows = []) =>
-  rows.map((entry) => ({
-    label: entry._id?.toString() || 'Unknown stop',
-    count: Number(entry.count || 0),
-  }));
+const normalizeTopLocationRows = (rows = []) =>
+  rows
+    .map((entry) => {
+      const coordinates = Array.isArray(entry?._id?.coordinates)
+        ? entry._id.coordinates.map((value) => Number(value))
+        : [];
+      if (coordinates.length < 2) {
+        return null;
+      }
+      const [longitude, latitude] = coordinates;
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        return null;
+      }
+      return {
+        label: entry?._id?.label?.toString() || 'Unknown location',
+        count: Number(entry.count || 0),
+        location: {
+          latitude,
+          longitude,
+        },
+      };
+    })
+    .filter(Boolean);
 
 const parseDates = (req) => {
   const from = req.query.from ? new Date(req.query.from) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -185,8 +203,8 @@ router.get(
       totalUnloaded,
       boardedByDay,
       unloadedByDay,
-      topBoardingStops,
-      topUnloadStops,
+      topBoardingLocations,
+      topUnloadLocations,
     ] = await Promise.all([
       RideSession.countDocuments(boardedMatch),
       RideSession.countDocuments(unloadedMatch),
@@ -225,33 +243,77 @@ router.get(
       RideSession.aggregate([
         { $match: boardedMatch },
         {
-          $project: {
-            stopRef: '$fareSnapshot.boardingStopRef',
+          $lookup: {
+            from: 'pickuprequests',
+            localField: 'pickupRequestId',
+            foreignField: '_id',
+            as: 'pickupRequest',
           },
         },
-        { $match: { stopRef: { $nin: [null, ''] } } },
-        { $group: { _id: '$stopRef', count: { $sum: 1 } } },
-        { $sort: { count: -1, _id: 1 } },
-        { $limit: 5 },
+        {
+          $unwind: {
+            path: '$pickupRequest',
+            preserveNullAndEmptyArrays: false,
+          },
+        },
+        {
+          $project: {
+            label: {
+              $ifNull: ['$pickupRequest.stopRef', '$fareSnapshot.boardingStopRef'],
+            },
+            coordinates: '$pickupRequest.pickupLocation.coordinates',
+          },
+        },
+        {
+          $match: {
+            label: { $nin: [null, ''] },
+            coordinates: { $type: 'array' },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              label: '$label',
+              coordinates: '$coordinates',
+            },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { count: -1, '_id.label': 1 } },
+        { $limit: 6 },
       ]),
       RideSession.aggregate([
         { $match: unloadedMatch },
         {
           $project: {
-            stopRef: {
+            label: {
               $ifNull: ['$fareSnapshot.destinationStopRef', '$destinationStopRef'],
             },
+            coordinates: '$destinationLocation.coordinates',
           },
         },
-        { $match: { stopRef: { $nin: [null, ''] } } },
-        { $group: { _id: '$stopRef', count: { $sum: 1 } } },
-        { $sort: { count: -1, _id: 1 } },
-        { $limit: 5 },
+        {
+          $match: {
+            label: { $nin: [null, ''] },
+            coordinates: { $type: 'array' },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              label: '$label',
+              coordinates: '$coordinates',
+            },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { count: -1, '_id.label': 1 } },
+        { $limit: 6 },
       ]),
     ]);
 
-    const normalizedBoardingStops = normalizeTopStopRows(topBoardingStops);
-    const normalizedUnloadStops = normalizeTopStopRows(topUnloadStops);
+    const normalizedBoardingLocations = normalizeTopLocationRows(topBoardingLocations);
+    const normalizedUnloadLocations = normalizeTopLocationRows(topUnloadLocations);
 
     return ok(
       res,
@@ -261,8 +323,8 @@ router.get(
         summary: {
           totalBoarded,
           totalUnloaded,
-          topBoardingStop: normalizedBoardingStops[0] || null,
-          topUnloadStop: normalizedUnloadStops[0] || null,
+          topBoardingLocation: normalizedBoardingLocations[0] || null,
+          topUnloadLocation: normalizedUnloadLocations[0] || null,
         },
         daily: buildDailyTimeline({
           from,
@@ -270,8 +332,8 @@ router.get(
           boardedRows: boardedByDay,
           unloadedRows: unloadedByDay,
         }),
-        topBoardingStops: normalizedBoardingStops,
-        topUnloadStops: normalizedUnloadStops,
+        topBoardingLocations: normalizedBoardingLocations,
+        topUnloadLocations: normalizedUnloadLocations,
       },
       'Passenger flow report'
     );

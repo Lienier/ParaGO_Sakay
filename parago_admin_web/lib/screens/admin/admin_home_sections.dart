@@ -57,14 +57,18 @@ class _AdminOverviewPage extends StatelessWidget {
     final passengerFlow = passengerFlowReport ?? const <String, dynamic>{};
     final summary = _readDynamicMap(passengerFlow['summary']);
     final dailyFlow = _parsePassengerFlowSeries(passengerFlow['daily']);
-    final topBoardingStops = _parsePassengerFlowStops(
-      passengerFlow['topBoardingStops'],
+    final topBoardingLocations = _parsePassengerFlowLocations(
+      passengerFlow['topBoardingLocations'],
     );
-    final topUnloadStops = _parsePassengerFlowStops(
-      passengerFlow['topUnloadStops'],
+    final topUnloadLocations = _parsePassengerFlowLocations(
+      passengerFlow['topUnloadLocations'],
     );
-    final topBoardingStop = _parsePassengerFlowStop(summary['topBoardingStop']);
-    final topUnloadStop = _parsePassengerFlowStop(summary['topUnloadStop']);
+    final topBoardingLocation = _parsePassengerFlowLocation(
+      summary['topBoardingLocation'],
+    );
+    final topUnloadLocation = _parsePassengerFlowLocation(
+      summary['topUnloadLocation'],
+    );
 
     return RefreshIndicator(
       onRefresh: () => onRefresh(silent: false),
@@ -133,7 +137,7 @@ class _AdminOverviewPage extends StatelessWidget {
           _SectionCard(
             title: 'Passenger boarding and unload report',
             subtitle:
-                'Shows where passengers most often get on and unload, plus the day-by-day boarding and unload trend for the last 7 days.',
+                'Shows the locations where passengers most often board and unload, with a separate 7-day trend underneath.',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -152,26 +156,34 @@ class _AdminOverviewPage extends StatelessWidget {
                       accent: const Color(0xFFE29B2D),
                     ),
                     _PassengerFlowStatTile(
-                      label: 'Top boarding stop',
-                      value: topBoardingStop?.label ?? 'No data yet',
-                      caption: topBoardingStop == null
+                      label: 'Top boarding location',
+                      value: topBoardingLocation?.label ?? 'No data yet',
+                      caption: topBoardingLocation == null
                           ? null
-                          : '${topBoardingStop.count} passengers',
+                          : '${topBoardingLocation.count} passengers',
                       accent: const Color(0xFF2157A5),
                     ),
                     _PassengerFlowStatTile(
-                      label: 'Top unload stop',
-                      value: topUnloadStop?.label ?? 'No data yet',
-                      caption: topUnloadStop == null
+                      label: 'Top unload location',
+                      value: topUnloadLocation?.label ?? 'No data yet',
+                      caption: topUnloadLocation == null
                           ? null
-                          : '${topUnloadStop.count} passengers',
+                          : '${topUnloadLocation.count} passengers',
                       accent: const Color(0xFF8A3B5D),
                     ),
                   ],
                 ),
                 const SizedBox(height: 18),
+                if (topBoardingLocations.isNotEmpty || topUnloadLocations.isNotEmpty)
+                  _PassengerFlowHotspotMap(
+                    boardingLocations: topBoardingLocations,
+                    unloadLocations: topUnloadLocations,
+                  )
+                else
+                  const Text('No location-based boarding and unload data yet.'),
+                const SizedBox(height: 18),
                 if (dailyFlow.isEmpty)
-                  const Text('No passenger flow data available yet.')
+                  const Text('No passenger flow trend data available yet.')
                 else
                   _PassengerFlowChart(series: dailyFlow),
                 const SizedBox(height: 18),
@@ -179,15 +191,15 @@ class _AdminOverviewPage extends StatelessWidget {
                   builder: (context, constraints) {
                     final stacked = constraints.maxWidth < 900;
                     final boardingCard = _PassengerFlowTopStopsCard(
-                      title: 'Most boarded stops',
-                      emptyLabel: 'No boarding-stop data yet.',
-                      stops: topBoardingStops,
+                      title: 'Most boarded locations',
+                      emptyLabel: 'No boarding-location data yet.',
+                      stops: topBoardingLocations,
                       accent: const Color(0xFF0F6A5F),
                     );
                     final unloadCard = _PassengerFlowTopStopsCard(
-                      title: 'Most unloaded stops',
-                      emptyLabel: 'No unload-stop data yet.',
-                      stops: topUnloadStops,
+                      title: 'Most unloaded locations',
+                      emptyLabel: 'No unload-location data yet.',
+                      stops: topUnloadLocations,
                       accent: const Color(0xFFE29B2D),
                     );
 
@@ -215,6 +227,196 @@ class _AdminOverviewPage extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _PassengerFlowHotspotMap extends StatelessWidget {
+  const _PassengerFlowHotspotMap({
+    required this.boardingLocations,
+    required this.unloadLocations,
+  });
+
+  final List<_PassengerFlowLocation> boardingLocations;
+  final List<_PassengerFlowLocation> unloadLocations;
+
+  @override
+  Widget build(BuildContext context) {
+    final points = <LatLng>[
+      for (final location in boardingLocations) location.position,
+      for (final location in unloadLocations) location.position,
+    ];
+    final center = _hotspotMapCenter(points);
+    final zoom = _hotspotMapZoom(points);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Most boarded and unloaded locations',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Map hotspots show where passengers most often board and unload.',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            children: const [
+              _ChartLegend(
+                label: 'Boarded',
+                color: Color(0xFF0F6A5F),
+              ),
+              _ChartLegend(
+                label: 'Unloaded',
+                color: Color(0xFFE29B2D),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 360,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: FlutterMap(
+                options: MapOptions(
+                  initialCenter: center,
+                  initialZoom: zoom,
+                  interactionOptions: const InteractionOptions(
+                    flags: InteractiveFlag.all,
+                  ),
+                ),
+                children: [
+                  TileLayer(
+                    urlTemplate:
+                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'com.parago.mobile',
+                  ),
+                  MarkerLayer(
+                    markers: [
+                      for (final location in boardingLocations)
+                        Marker(
+                          point: location.position,
+                          width: 130,
+                          height: 72,
+                          child: _HotspotMarker(
+                            label: location.label,
+                            count: location.count,
+                            accent: const Color(0xFF0F6A5F),
+                            icon: Icons.login_rounded,
+                          ),
+                        ),
+                      for (final location in unloadLocations)
+                        Marker(
+                          point: location.position,
+                          width: 130,
+                          height: 72,
+                          child: _HotspotMarker(
+                            label: location.label,
+                            count: location.count,
+                            accent: const Color(0xFFE29B2D),
+                            icon: Icons.logout_rounded,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const RichAttributionWidget(
+                    attributions: [
+                      TextSourceAttribution('OpenStreetMap contributors'),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HotspotMarker extends StatelessWidget {
+  const _HotspotMarker({
+    required this.label,
+    required this.count,
+    required this.accent,
+    required this.icon,
+  });
+
+  final String label;
+  final int count;
+  final Color accent;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 120),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.95),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 26,
+              height: 26,
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Icon(icon, size: 16, color: accent),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                  Text(
+                    '$count',
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          color: accent,
+                          fontWeight: FontWeight.w800,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -440,7 +642,7 @@ class _PassengerFlowTopStopsCard extends StatelessWidget {
 
   final String title;
   final String emptyLabel;
-  final List<_PassengerFlowStop> stops;
+  final List<_PassengerFlowLocation> stops;
   final Color accent;
 
   @override
@@ -683,28 +885,41 @@ int _readCount(dynamic value) {
   return int.tryParse(value?.toString() ?? '') ?? 0;
 }
 
-_PassengerFlowStop? _parsePassengerFlowStop(dynamic value) {
+_PassengerFlowLocation? _parsePassengerFlowLocation(dynamic value) {
   final map = _readDynamicMap(value);
   if (map.isEmpty) {
     return null;
   }
-  return _PassengerFlowStop(
-    label: map['label']?.toString() ?? 'Unknown stop',
+  final location = _parseLatLngMap(map['location']);
+  if (location == null) {
+    return null;
+  }
+  return _PassengerFlowLocation(
+    label: map['label']?.toString() ?? 'Unknown location',
     count: _readCount(map['count']),
+    position: location,
   );
 }
 
-List<_PassengerFlowStop> _parsePassengerFlowStops(dynamic value) {
+List<_PassengerFlowLocation> _parsePassengerFlowLocations(dynamic value) {
   if (value is! List) {
-    return const <_PassengerFlowStop>[];
+    return const <_PassengerFlowLocation>[];
   }
-  return value.map((entry) {
+  return value
+      .map((entry) {
     final map = _readDynamicMap(entry);
-    return _PassengerFlowStop(
-      label: map['label']?.toString() ?? 'Unknown stop',
+        final location = _parseLatLngMap(map['location']);
+        if (location == null) {
+          return null;
+        }
+        return _PassengerFlowLocation(
+      label: map['label']?.toString() ?? 'Unknown location',
       count: _readCount(map['count']),
-    );
-  }).toList(growable: false);
+          position: location,
+        );
+      })
+      .whereType<_PassengerFlowLocation>()
+      .toList(growable: false);
 }
 
 List<_PassengerFlowDayPoint> _parsePassengerFlowSeries(dynamic value) {
@@ -721,14 +936,16 @@ List<_PassengerFlowDayPoint> _parsePassengerFlowSeries(dynamic value) {
   }).toList(growable: false);
 }
 
-class _PassengerFlowStop {
-  const _PassengerFlowStop({
+class _PassengerFlowLocation {
+  const _PassengerFlowLocation({
     required this.label,
     required this.count,
+    required this.position,
   });
 
   final String label;
   final int count;
+  final LatLng position;
 }
 
 class _PassengerFlowDayPoint {
@@ -741,4 +958,59 @@ class _PassengerFlowDayPoint {
   final String label;
   final int boarded;
   final int unloaded;
+}
+
+LatLng? _parseLatLngMap(dynamic value) {
+  final map = _readDynamicMap(value);
+  final latitude = double.tryParse(map['latitude']?.toString() ?? '');
+  final longitude = double.tryParse(map['longitude']?.toString() ?? '');
+  if (latitude == null || longitude == null) {
+    return null;
+  }
+  return LatLng(latitude, longitude);
+}
+
+LatLng _hotspotMapCenter(List<LatLng> points) {
+  if (points.isEmpty) {
+    return const LatLng(14.6091, 121.0223);
+  }
+  var minLat = points.first.latitude;
+  var maxLat = points.first.latitude;
+  var minLng = points.first.longitude;
+  var maxLng = points.first.longitude;
+
+  for (final point in points.skip(1)) {
+    if (point.latitude < minLat) minLat = point.latitude;
+    if (point.latitude > maxLat) maxLat = point.latitude;
+    if (point.longitude < minLng) minLng = point.longitude;
+    if (point.longitude > maxLng) maxLng = point.longitude;
+  }
+
+  return LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2);
+}
+
+double _hotspotMapZoom(List<LatLng> points) {
+  if (points.length < 2) {
+    return 13.2;
+  }
+
+  var minLat = points.first.latitude;
+  var maxLat = points.first.latitude;
+  var minLng = points.first.longitude;
+  var maxLng = points.first.longitude;
+
+  for (final point in points.skip(1)) {
+    if (point.latitude < minLat) minLat = point.latitude;
+    if (point.latitude > maxLat) maxLat = point.latitude;
+    if (point.longitude < minLng) minLng = point.longitude;
+    if (point.longitude > maxLng) maxLng = point.longitude;
+  }
+
+  final span = math.max((maxLat - minLat).abs(), (maxLng - minLng).abs());
+  if (span < 0.003) return 15.5;
+  if (span < 0.008) return 14.5;
+  if (span < 0.02) return 13.5;
+  if (span < 0.05) return 12.5;
+  if (span < 0.12) return 11.5;
+  return 10.5;
 }
