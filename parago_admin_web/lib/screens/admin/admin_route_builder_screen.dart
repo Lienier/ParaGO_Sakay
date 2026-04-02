@@ -33,12 +33,6 @@ class AdminRouteBuilderScreen extends StatefulWidget {
 
 class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
   static const _defaultCenter = LatLng(14.6091, 121.0223);
-  static const Map<String, double> _trafficProfileMultipliers = {
-    'light': 1.0,
-    'moderate': 1.2,
-    'heavy': 1.5,
-    'severe': 1.9,
-  };
 
   final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
@@ -47,7 +41,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
   final _fareBaseAmountCtrl = TextEditingController(text: '17');
   final _fareBaseDistanceCtrl = TextEditingController(text: '4');
   final _fareAdditionalPerKmCtrl = TextEditingController(text: '2');
-  final _avgJeepSpeedCtrl = TextEditingController(text: '18');
   final RoutePreviewCache _routePreviewCache = RoutePreviewCache();
 
   List<RouteSummaryModel> _routes = [];
@@ -56,7 +49,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
   List<LatLng> _guidePoints = [];
   CachedRouteSnapshot? _previewSnapshot;
   _PinPlacementMode _placementMode = _PinPlacementMode.start;
-  String _trafficProfile = 'moderate';
   bool _offlinePreview = false;
   bool _loadingRoutes = false;
   bool _buildingRoute = false;
@@ -80,7 +72,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     _fareBaseAmountCtrl.dispose();
     _fareBaseDistanceCtrl.dispose();
     _fareAdditionalPerKmCtrl.dispose();
-    _avgJeepSpeedCtrl.dispose();
     super.dispose();
   }
 
@@ -96,10 +87,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
         _formatNumericInput(route.fareConfig.baseDistanceKm);
     _fareAdditionalPerKmCtrl.text =
         _formatNumericInput(route.fareConfig.additionalAmountPerKm);
-    _avgJeepSpeedCtrl.text = _formatNumericInput(
-      route.averageJeepSpeedKph ?? 18,
-    );
-    _trafficProfile = route.trafficProfile ?? 'moderate';
 
     final previewPoints =
         route.pathPoints.length >= 2 ? route.pathPoints : route.mapPath;
@@ -118,10 +105,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
         durationSeconds: route.durationSeconds,
         rawDurationSeconds: route.rawDurationSeconds ?? route.durationSeconds,
         trafficDelayInSeconds: route.trafficDelayInSeconds,
-        averageJeepSpeedKph: route.averageJeepSpeedKph ?? 18,
-        trafficMultiplier: route.trafficMultiplier ??
-            _trafficProfileMultipliers[_trafficProfile],
-        trafficProfile: route.trafficProfile ?? _trafficProfile,
       );
       _startPoint = _previewSnapshot!.startPoint;
       _endPoint = _previewSnapshot!.endPoint;
@@ -226,10 +209,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
       if (!mounted || requestId != _buildRequestSerial) return;
 
       setState(() {
-        final adjustedDuration = _computeAdjustedEtaSeconds(
-          distanceMeters: route.distanceMeters,
-          rawDurationSeconds: route.durationSeconds,
-        );
         _previewSnapshot = CachedRouteSnapshot(
           routeCode: _normalizedCode,
           points: route.points,
@@ -237,12 +216,9 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
           endPoint: endPoint,
           bounds: route.bounds ?? RouteMapBounds.fromPoints(route.points),
           distanceMeters: route.distanceMeters,
-          durationSeconds: adjustedDuration,
+          durationSeconds: route.durationSeconds,
           rawDurationSeconds: route.rawDurationSeconds ?? route.durationSeconds,
           trafficDelayInSeconds: route.trafficDelayInSeconds,
-          averageJeepSpeedKph: _averageJeepSpeedKph,
-          trafficMultiplier: _trafficMultiplier,
-          trafficProfile: _trafficProfile,
         );
         _message = autoTriggered
             ? 'Route refreshed from the selected pins and guide points.'
@@ -322,9 +298,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
             durationSeconds: _previewSnapshot?.durationSeconds,
             rawDurationSeconds: _previewSnapshot?.rawDurationSeconds,
             trafficDelayInSeconds: _previewSnapshot?.trafficDelayInSeconds,
-            averageJeepSpeedKph: _previewSnapshot?.averageJeepSpeedKph,
-            trafficMultiplier: _previewSnapshot?.trafficMultiplier,
-            trafficProfile: _previewSnapshot?.trafficProfile,
           );
           return saved;
         },
@@ -448,61 +421,10 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     return double.tryParse(controller.text.trim()) ?? fallback;
   }
 
-  double get _averageJeepSpeedKph {
-    final parsed = double.tryParse(_avgJeepSpeedCtrl.text.trim());
-    if (parsed == null || parsed < 1) {
-      return 18;
-    }
-    return parsed;
-  }
-
-  double get _trafficMultiplier =>
-      _trafficProfileMultipliers[_trafficProfile] ?? 1.2;
-
   String _formatNumericInput(double value) {
     return value == value.truncateToDouble()
         ? value.toStringAsFixed(0)
         : value.toStringAsFixed(2);
-  }
-
-  double? _computeAdjustedEtaSeconds({
-    double? distanceMeters,
-    double? rawDurationSeconds,
-  }) {
-    final speedKph = _averageJeepSpeedKph;
-    final distanceBasedSeconds = distanceMeters == null
-        ? null
-        : (distanceMeters / 1000) / speedKph * 3600;
-    final baselineSeconds =
-        switch ((rawDurationSeconds, distanceBasedSeconds)) {
-      (final raw?, final speedBased?) => math.max(raw, speedBased),
-      (final raw?, null) => raw,
-      (null, final speedBased?) => speedBased,
-      _ => null,
-    };
-    if (baselineSeconds == null) {
-      return null;
-    }
-    return baselineSeconds * _trafficMultiplier;
-  }
-
-  String _trafficProfileLabel(String value) {
-    switch (value) {
-      case 'light':
-        return 'Light traffic';
-      case 'moderate':
-        return 'Moderate traffic';
-      case 'heavy':
-        return 'Heavy traffic';
-      case 'severe':
-        return 'Severe traffic';
-      default:
-        return value;
-    }
-  }
-
-  String _etaModelSummary() {
-    return 'Base ETA comes from TomTom traffic-aware routing. The saved ETA then respects avg jeep speed ${_formatNumericInput(_averageJeepSpeedKph)} kph and applies the ${_trafficProfileLabel(_trafficProfile).toLowerCase()} profile (${_trafficMultiplier.toStringAsFixed(2)}x) so your operational assumption is recorded with the route.';
   }
 
   String _fareRuleSummary() {
@@ -609,7 +531,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
       },
       'navigation': {
         'source': 'tomtom',
-        'trafficProfile': _trafficProfile,
         'origin': {
           'type': 'Point',
           'coordinates': <double>[
@@ -633,8 +554,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
           'rawDurationSeconds': _previewSnapshot!.rawDurationSeconds,
         if (_previewSnapshot?.trafficDelayInSeconds != null)
           'trafficDelayInSeconds': _previewSnapshot!.trafficDelayInSeconds,
-        'averageJeepSpeedKph': _averageJeepSpeedKph,
-        'trafficMultiplier': _trafficMultiplier,
       },
     };
   }
@@ -687,17 +606,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     }
     if (parsed < 0) {
       return '$label must be 0 or higher.';
-    }
-    return null;
-  }
-
-  String? _validatePositiveNumber(String? value, String label) {
-    final parsed = double.tryParse((value ?? '').trim());
-    if (parsed == null) {
-      return '$label must be a valid number.';
-    }
-    if (parsed <= 0) {
-      return '$label must be greater than 0.';
     }
     return null;
   }
@@ -992,99 +900,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
               },
             ),
             const SizedBox(height: 14),
-            Text(
-              'ETA settings',
-              style: theme.textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Record the assumed jeep speed and traffic profile used to compute the saved ETA.',
-              style: theme.textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 14),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final stacked = constraints.maxWidth < 560;
-                final speedField = TextFormField(
-                  controller: _avgJeepSpeedCtrl,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    labelText: 'Average jeep speed',
-                    suffixText: 'kph',
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (value) => _validatePositiveNumber(
-                    value,
-                    'Average jeep speed',
-                  ),
-                  onChanged: (_) => setState(() {}),
-                );
-                final trafficField = DropdownButtonFormField<String>(
-                  initialValue: _trafficProfile,
-                  decoration: const InputDecoration(
-                    labelText: 'Traffic profile',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: const [
-                    DropdownMenuItem(
-                      value: 'light',
-                      child: Text('Light traffic'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'moderate',
-                      child: Text('Moderate traffic'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'heavy',
-                      child: Text('Heavy traffic'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'severe',
-                      child: Text('Severe traffic'),
-                    ),
-                  ],
-                  onChanged: (value) {
-                    setState(() => _trafficProfile = value ?? 'moderate');
-                  },
-                );
-
-                if (stacked) {
-                  return Column(
-                    children: [
-                      speedField,
-                      const SizedBox(height: 12),
-                      trafficField,
-                    ],
-                  );
-                }
-
-                return Row(
-                  children: [
-                    Expanded(child: speedField),
-                    const SizedBox(width: 12),
-                    Expanded(child: trafficField),
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 14),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2157A5).withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Text(
-                _etaModelSummary(),
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(14),
@@ -1141,7 +956,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
                 : (constraints.maxWidth - (spacing * (columns - 1))) / columns;
 
             double tileWidth(int span) {
-              final safeSpan = math.min(span, columns);
+              final safeSpan = span < columns ? span : columns;
               if (columns == 1) {
                 return constraints.maxWidth;
               }
@@ -1360,24 +1175,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
                 _MetaPill(
                   label: 'ETA',
                   value: _formatDuration(_previewSnapshot?.durationSeconds),
-                ),
-                _MetaPill(
-                  label: 'Base ETA',
-                  value: _formatDuration(_previewSnapshot?.rawDurationSeconds),
-                ),
-                _MetaPill(
-                  label: 'Traffic delay',
-                  value: _formatDuration(
-                    _previewSnapshot?.trafficDelayInSeconds,
-                  ),
-                ),
-                _MetaPill(
-                  label: 'Jeep speed',
-                  value: '${_formatNumericInput(_averageJeepSpeedKph)} kph',
-                ),
-                _MetaPill(
-                  label: 'Traffic',
-                  value: _trafficProfileLabel(_trafficProfile),
                 ),
                 _MetaPill(
                   label: 'Geometry',

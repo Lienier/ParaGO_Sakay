@@ -4,12 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/config/app_config.dart';
-import '../../core/utils/admin_report_summary.dart';
 import '../../core/utils/parago_format.dart';
-import '../../models/transport/route_summary.dart';
 import '../../services/admin_service.dart';
 import '../../services/realtime_socket_service.dart';
-import '../../services/route_service.dart';
 import '../../services/session_controller.dart';
 import '../../widgets/metric_card.dart';
 import 'admin_driver_management_screen.dart';
@@ -34,13 +31,7 @@ class AdminHomeScreen extends StatefulWidget {
 
 class _AdminHomeScreenState extends State<AdminHomeScreen> {
   Map<String, dynamic>? _dashboard;
-  Map<String, dynamic>? _requestReport;
-  Map<String, dynamic>? _boardingReport;
-  Map<String, dynamic>? _alertReport;
-  Map<String, dynamic>? _tripActivityReport;
-  Map<String, dynamic>? _routeDemandReport;
-  List<dynamic> _activity = [];
-  List<RouteSummaryModel> _routes = [];
+  Map<String, dynamic>? _passengerFlowReport;
   bool _loading = false;
   String? _error;
   DateTime? _lastSyncedAt;
@@ -53,7 +44,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   Future<void> _load({bool silent = false}) async {
     final session = context.read<SessionController>();
     final admin = AdminService(session.apiClient);
-    final routeService = RouteService(session.apiClient);
     final requestStartedAt = DateTime.now();
 
     if (!silent) {
@@ -65,28 +55,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       final from = now.subtract(const Duration(days: 7));
       final results = await Future.wait<dynamic>([
         admin.dashboard(),
-        admin.recentActivity(),
-        admin.reportRequests(
+        admin.reportPassengerFlow(
           fromIso: from.toIso8601String(),
           toIso: now.toIso8601String(),
         ),
-        admin.reportBoarding(
-          fromIso: from.toIso8601String(),
-          toIso: now.toIso8601String(),
-        ),
-        admin.reportAlerts(
-          fromIso: from.toIso8601String(),
-          toIso: now.toIso8601String(),
-        ),
-        admin.reportTripActivity(
-          fromIso: from.toIso8601String(),
-          toIso: now.toIso8601String(),
-        ),
-        admin.reportRouteDemand(
-          fromIso: from.toIso8601String(),
-          toIso: now.toIso8601String(),
-        ),
-        routeService.getRoutes(useCache: true),
       ]);
 
       final usedStaleCache = session.apiClient.recentTelemetry.any(
@@ -97,13 +69,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       if (!mounted) return;
       setState(() {
         _dashboard = results[0] as Map<String, dynamic>;
-        _activity = results[1] as List<dynamic>;
-        _requestReport = results[2] as Map<String, dynamic>;
-        _boardingReport = results[3] as Map<String, dynamic>;
-        _alertReport = results[4] as Map<String, dynamic>;
-        _tripActivityReport = results[5] as Map<String, dynamic>;
-        _routeDemandReport = results[6] as Map<String, dynamic>;
-        _routes = results[7] as List<RouteSummaryModel>;
+        _passengerFlowReport = results[1] as Map<String, dynamic>;
         _error = null;
         _lastSyncedAt = DateTime.now();
         _showingCachedSnapshot = usedStaleCache;
@@ -183,27 +149,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     }
 
     final payload = _normalizeRealtimePayload(event['payload']);
-    final title = event['title']?.toString() ?? 'Operations update';
-    final body = event['body']?.toString() ?? '';
-    final createdAt = event['createdAt']?.toString();
 
     setState(() {
       _dashboard = _applyDashboardRealtimeEvent(
         _dashboard,
         notificationType: notificationType,
-        payload: payload,
-      );
-      _requestReport = _applyRequestReportRealtimeEvent(
-        _requestReport,
-        notificationType: notificationType,
-        payload: payload,
-      );
-      _activity = _prependRealtimeActivity(
-        _activity,
-        notificationType: notificationType,
-        title: title,
-        body: body,
-        createdAt: createdAt,
         payload: payload,
       );
     });
@@ -261,90 +211,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     return next;
   }
 
-  Map<String, dynamic> _applyRequestReportRealtimeEvent(
-    Map<String, dynamic>? current, {
-    required String notificationType,
-    required Map<String, dynamic> payload,
-  }) {
-    final request = _normalizeRealtimePayload(payload['request']);
-    if (request.isEmpty) {
-      return current ?? <String, dynamic>{'total': 0, 'byStatus': <dynamic>[]};
-    }
-
-    final currentStatus = request['status']?.toString() ?? '';
-    if (currentStatus.isEmpty) {
-      return current ?? <String, dynamic>{'total': 0, 'byStatus': <dynamic>[]};
-    }
-
-    final rows = List<Map<String, dynamic>>.from(
-      (current?['byStatus'] as List<dynamic>? ?? const <dynamic>[])
-          .map((entry) => Map<String, dynamic>.from(entry as Map)),
-    );
-    var total = _readIntMetric(current?['total']);
-
-    if (notificationType == 'pickup_request_created') {
-      total += 1;
-      _adjustStatusCount(rows, currentStatus, 1);
-    } else {
-      final previousStatus = payload['previousStatus']?.toString() ?? '';
-      if (previousStatus.isNotEmpty && previousStatus != currentStatus) {
-        _adjustStatusCount(rows, previousStatus, -1);
-        _adjustStatusCount(rows, currentStatus, 1);
-      }
-    }
-
-    rows.removeWhere((row) => _readIntMetric(row['count']) <= 0);
-    return <String, dynamic>{'total': total, 'byStatus': rows};
-  }
-
-  void _adjustStatusCount(
-    List<Map<String, dynamic>> rows,
-    String status,
-    int delta,
-  ) {
-    final index = rows.indexWhere((row) => row['_id']?.toString() == status);
-    if (index >= 0) {
-      rows[index] = <String, dynamic>{
-        ...rows[index],
-        'count':
-            (_readIntMetric(rows[index]['count']) + delta).clamp(0, 1 << 30),
-      };
-      return;
-    }
-
-    if (delta > 0) {
-      rows.add(<String, dynamic>{'_id': status, 'count': delta});
-    }
-  }
-
-  List<dynamic> _prependRealtimeActivity(
-    List<dynamic> current, {
-    required String notificationType,
-    required String title,
-    required String body,
-    required String? createdAt,
-    required Map<String, dynamic> payload,
-  }) {
-    final next = List<dynamic>.from(current);
-    next.insert(
-      0,
-      <String, dynamic>{
-        'action': title,
-        'entity': notificationType,
-        'details': <String, dynamic>{
-          'message': body,
-          'notificationType': notificationType,
-          ...payload,
-        },
-        'createdAt': createdAt ?? DateTime.now().toUtc().toIso8601String(),
-      },
-    );
-    if (next.length > 40) {
-      next.removeRange(40, next.length);
-    }
-    return next;
-  }
-
   int _readIntMetric(dynamic value) {
     if (value is int) {
       return value;
@@ -378,7 +244,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   String _sectionSubtitle(_AdminWorkspaceSection section) {
     switch (section) {
       case _AdminWorkspaceSection.overview:
-        return 'Live operations metrics, recent activity, route health, and pickup behavior.';
+        return 'Live operations metrics with a focused passenger boarding and unload report.';
       case _AdminWorkspaceSection.drivers:
         return 'Create driver accounts, assign jeepneys, and schedule trips from one workspace.';
       case _AdminWorkspaceSection.routeBuilder:
@@ -389,31 +255,16 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   }
 
   Widget _buildWorkspaceContent() {
-    final session = context.read<SessionController>();
     switch (_selectedSection) {
       case _AdminWorkspaceSection.overview:
         return _AdminOverviewPage(
           loading: _loading,
           error: _error,
           dashboard: _dashboard,
-          requestReport: _requestReport,
-          boardingReport: _boardingReport,
-          alertReport: _alertReport,
-          tripActivityReport: _tripActivityReport,
-          routeDemandReport: _routeDemandReport,
-          activity: _activity,
-          routes: _routes,
-          telemetry: summarizeTelemetry(session.apiClient.recentTelemetry),
+          passengerFlowReport: _passengerFlowReport,
           lastSyncedAt: _lastSyncedAt,
           showingCachedSnapshot: _showingCachedSnapshot,
           onRefresh: _load,
-          onSelectDrivers: () =>
-              setState(() => _selectedSection = _AdminWorkspaceSection.drivers),
-          onSelectBuilder: () => setState(
-            () => _selectedSection = _AdminWorkspaceSection.routeBuilder,
-          ),
-          onSelectRoutes: () =>
-              setState(() => _selectedSection = _AdminWorkspaceSection.routes),
         );
       case _AdminWorkspaceSection.drivers:
         return AdminDriverManagementScreen(

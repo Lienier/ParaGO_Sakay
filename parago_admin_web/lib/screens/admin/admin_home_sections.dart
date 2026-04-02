@@ -37,51 +37,34 @@ class _AdminOverviewPage extends StatelessWidget {
     required this.loading,
     required this.error,
     required this.dashboard,
-    required this.requestReport,
-    required this.boardingReport,
-    required this.alertReport,
-    required this.tripActivityReport,
-    required this.routeDemandReport,
-    required this.activity,
-    required this.routes,
-    required this.telemetry,
+    required this.passengerFlowReport,
     required this.lastSyncedAt,
     required this.showingCachedSnapshot,
     required this.onRefresh,
-    required this.onSelectDrivers,
-    required this.onSelectBuilder,
-    required this.onSelectRoutes,
   });
 
   final bool loading;
   final String? error;
   final Map<String, dynamic>? dashboard;
-  final Map<String, dynamic>? requestReport;
-  final Map<String, dynamic>? boardingReport;
-  final Map<String, dynamic>? alertReport;
-  final Map<String, dynamic>? tripActivityReport;
-  final Map<String, dynamic>? routeDemandReport;
-  final List<dynamic> activity;
-  final List<RouteSummaryModel> routes;
-  final List<TelemetryRollup> telemetry;
+  final Map<String, dynamic>? passengerFlowReport;
   final DateTime? lastSyncedAt;
   final bool showingCachedSnapshot;
   final Future<void> Function({bool silent}) onRefresh;
-  final VoidCallback onSelectDrivers;
-  final VoidCallback onSelectBuilder;
-  final VoidCallback onSelectRoutes;
 
   @override
   Widget build(BuildContext context) {
     final metrics = dashboard ?? const <String, dynamic>{};
-    final requestRows = parseStatusReportRows(requestReport?['byStatus']);
-    final requestTotal = requestReport?['total']?.toString() ??
-        totalStatusCount(requestRows).toString();
-    final boardingRows = parseStatusReportRows(boardingReport?['byStatus']);
-    final alertRows = parseStatusReportRows(alertReport?['byStatus']);
-    final tripRows = parseStatusReportRows(tripActivityReport?['byStatus']);
-    final routeDemandRows =
-        routeDemandReport?['routes'] as List<dynamic>? ?? const <dynamic>[];
+    final passengerFlow = passengerFlowReport ?? const <String, dynamic>{};
+    final summary = _readDynamicMap(passengerFlow['summary']);
+    final dailyFlow = _parsePassengerFlowSeries(passengerFlow['daily']);
+    final topBoardingStops = _parsePassengerFlowStops(
+      passengerFlow['topBoardingStops'],
+    );
+    final topUnloadStops = _parsePassengerFlowStops(
+      passengerFlow['topUnloadStops'],
+    );
+    final topBoardingStop = _parsePassengerFlowStop(summary['topBoardingStop']);
+    final topUnloadStop = _parsePassengerFlowStop(summary['topUnloadStop']);
 
     return RefreshIndicator(
       onRefresh: () => onRefresh(silent: false),
@@ -91,7 +74,7 @@ class _AdminOverviewPage extends StatelessWidget {
           const _AdminHero(
             title: 'Operations overview',
             subtitle:
-                'Monitor active trips, pickup demand, landmark-ready routes, and operations activity from one browser workspace.',
+                'See the live trip counts, pending pickups, onboard rides, and a focused passenger flow report from one place.',
           ),
           if (loading) ...[
             const SizedBox(height: 16),
@@ -105,7 +88,7 @@ class _AdminOverviewPage extends StatelessWidget {
             const SizedBox(height: 16),
             _AdminInfoBanner(
               message: showingCachedSnapshot
-                  ? 'Showing cached operational data from ${ParagoFormat.relative(lastSyncedAt!.toIso8601String())} while the connection stabilizes.'
+                  ? 'Showing the latest saved dashboard data from ${ParagoFormat.relative(lastSyncedAt!.toIso8601String())}.'
                   : 'Last synced ${ParagoFormat.relative(lastSyncedAt!.toIso8601String())}.',
             ),
           ],
@@ -144,358 +127,386 @@ class _AdminOverviewPage extends StatelessWidget {
                   caption: 'Passengers currently onboard active trips',
                 ),
               ),
-              SizedBox(
-                width: 260,
-                child: MetricCard(
-                  label: 'Active alerts',
-                  value: metrics['activeAlerts']?.toString() ?? '0',
-                  icon: Icons.notifications_active_outlined,
-                  accent: const Color(0xFF8A3B5D),
-                  caption: 'Digital stop alerts still needing action',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 18),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              _QuickActionCard(
-                icon: Icons.manage_accounts_outlined,
-                title: 'Manage drivers',
-                description:
-                    'Create drivers, assign routes, and schedule trips from one workspace.',
-                actionLabel: 'Open drivers',
-                onPressed: onSelectDrivers,
-              ),
-              _QuickActionCard(
-                icon: Icons.alt_route_outlined,
-                title: 'Build route geometry',
-                description:
-                    'Map the live route shape and keep the offline snapshot aligned.',
-                actionLabel: 'Open builder',
-                onPressed: onSelectBuilder,
-              ),
-              _QuickActionCard(
-                icon: Icons.place_outlined,
-                title: 'Manage landmarks',
-                description:
-                    'Update drop-off landmarks and edit per-landmark fares for active routes.',
-                actionLabel: 'Open routes',
-                onPressed: onSelectRoutes,
-              ),
             ],
           ),
           const SizedBox(height: 18),
           _SectionCard(
-            title: 'Weekly pickup report',
-            subtitle: 'Total requests in the last 7 days: $requestTotal',
-            child: requestRows.isEmpty
-                ? const Text('No request data available yet.')
-                : _buildReportWrap(context, requestRows),
-          ),
-          const SizedBox(height: 18),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final compact = constraints.maxWidth < 900;
-              final cards = <Widget>[
-                _MiniReportCard(
-                  title: 'Boarding report',
-                  subtitle:
-                      'Ride-session states this week (${totalStatusCount(boardingRows)} total)',
-                  body: boardingRows.isEmpty
-                      ? const Text('No boarding activity yet.')
-                      : _buildReportWrap(context, boardingRows),
-                ),
-                _MiniReportCard(
-                  title: 'Alert report',
-                  subtitle:
-                      'Passenger stop-alert outcomes (${totalStatusCount(alertRows)} total)',
-                  body: alertRows.isEmpty
-                      ? const Text('No stop alerts recorded yet.')
-                      : _buildReportWrap(context, alertRows),
-                ),
-                _MiniReportCard(
-                  title: 'Trip activity',
-                  subtitle:
-                      'Trip lifecycle states (${totalStatusCount(tripRows)} total)',
-                  body: tripRows.isEmpty
-                      ? const Text('No trip activity recorded yet.')
-                      : _buildReportWrap(context, tripRows),
-                ),
-              ];
-
-              if (compact) {
-                return Column(
+            title: 'Passenger boarding and unload report',
+            subtitle:
+                'Shows where passengers most often get on and unload, plus the day-by-day boarding and unload trend for the last 7 days.',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
                   children: [
-                    for (final card in cards) ...[
-                      card,
-                      const SizedBox(height: 18),
-                    ],
+                    _PassengerFlowStatTile(
+                      label: 'Total boarded',
+                      value: _readCount(summary['totalBoarded']).toString(),
+                      accent: const Color(0xFF0F6A5F),
+                    ),
+                    _PassengerFlowStatTile(
+                      label: 'Total unloaded',
+                      value: _readCount(summary['totalUnloaded']).toString(),
+                      accent: const Color(0xFFE29B2D),
+                    ),
+                    _PassengerFlowStatTile(
+                      label: 'Top boarding stop',
+                      value: topBoardingStop?.label ?? 'No data yet',
+                      caption: topBoardingStop == null
+                          ? null
+                          : '${topBoardingStop.count} passengers',
+                      accent: const Color(0xFF2157A5),
+                    ),
+                    _PassengerFlowStatTile(
+                      label: 'Top unload stop',
+                      value: topUnloadStop?.label ?? 'No data yet',
+                      caption: topUnloadStop == null
+                          ? null
+                          : '${topUnloadStop.count} passengers',
+                      accent: const Color(0xFF8A3B5D),
+                    ),
                   ],
-                );
-              }
+                ),
+                const SizedBox(height: 18),
+                if (dailyFlow.isEmpty)
+                  const Text('No passenger flow data available yet.')
+                else
+                  _PassengerFlowChart(series: dailyFlow),
+                const SizedBox(height: 18),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final stacked = constraints.maxWidth < 900;
+                    final boardingCard = _PassengerFlowTopStopsCard(
+                      title: 'Most boarded stops',
+                      emptyLabel: 'No boarding-stop data yet.',
+                      stops: topBoardingStops,
+                      accent: const Color(0xFF0F6A5F),
+                    );
+                    final unloadCard = _PassengerFlowTopStopsCard(
+                      title: 'Most unloaded stops',
+                      emptyLabel: 'No unload-stop data yet.',
+                      stops: topUnloadStops,
+                      accent: const Color(0xFFE29B2D),
+                    );
 
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (var index = 0; index < cards.length; index += 1) ...[
-                    Expanded(child: cards[index]),
-                    if (index < cards.length - 1) const SizedBox(width: 12),
-                  ],
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 18),
-          _SectionCard(
-            title: 'Route demand analytics',
-            subtitle:
-                'Top-demand routes ranked by pickup requests to support dispatch and coverage decisions.',
-            child: routeDemandRows.isEmpty
-                ? const Text('No route-demand data available yet.')
-                : Column(
-                    children: routeDemandRows.take(5).map((entry) {
-                      final item = _readDynamicMap(entry);
-                      final routeId = item['_id']?.toString() ?? '';
-                      final totalRequests =
-                          item['totalRequests']?.toString() ?? '0';
-                      final route = _findRouteById(routes, routeId);
-                      final label = route?.label.isNotEmpty == true
-                          ? route!.label
-                          : 'Route $routeId';
-                      final subtitle = route == null
-                          ? 'Route metadata is unavailable in this snapshot.'
-                          : '${route.stopPoints.length} landmarks · ${ParagoFormat.statusLabel(route.status)}';
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF8F8F5),
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: Row(
-                            children: [
-                              CircleAvatar(
-                                backgroundColor: Theme.of(context)
-                                    .colorScheme
-                                    .primary
-                                    .withValues(alpha: 0.10),
-                                foregroundColor:
-                                    Theme.of(context).colorScheme.primary,
-                                child: Text(
-                                  '${routeDemandRows.indexOf(entry) + 1}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      label,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleMedium
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(subtitle),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Text(
-                                '$totalRequests requests',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .labelLarge
-                                    ?.copyWith(fontWeight: FontWeight.w800),
-                              ),
-                            ],
-                          ),
-                        ),
+                    if (stacked) {
+                      return Column(
+                        children: [
+                          boardingCard,
+                          const SizedBox(height: 12),
+                          unloadCard,
+                        ],
                       );
-                    }).toList(growable: false),
-                  ),
-          ),
-          const SizedBox(height: 18),
-          _SectionCard(
-            title: 'Managed routes',
-            subtitle:
-                '${routes.length} route${routes.length == 1 ? '' : 's'} currently available',
-            child: routes.isEmpty
-                ? const Text('No routes available yet.')
-                : Column(
-                    children: routes.take(5).map((route) {
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.03),
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                route.label,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleMedium
-                                    ?.copyWith(
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '${ParagoFormat.statusLabel(route.status)} | ${route.stopPoints.length} landmarks',
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }).toList(growable: false),
-                  ),
-          ),
-          const SizedBox(height: 18),
-          _SectionCard(
-            title: 'Client performance snapshot',
-            subtitle:
-                'Recent console request timings help document responsiveness during evaluation.',
-            child: telemetry.isEmpty
-                ? const Text(
-                    'Telemetry will appear after the first API requests complete.',
-                  )
-                : Column(
-                    children: telemetry.map((entry) {
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF8F8F5),
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      entry.label,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleMedium
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      '${entry.requestCount} requests · ${entry.failureCount} failures · ${entry.staleHits} cache fallbacks',
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Text(
-                                    'avg ${entry.averageDurationMs} ms',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .labelLarge
-                                        ?.copyWith(fontWeight: FontWeight.w800),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text('max ${entry.maxDurationMs} ms'),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }).toList(growable: false),
-                  ),
-          ),
-          const SizedBox(height: 18),
-          _SectionCard(
-            title: 'Recent activity',
-            subtitle: 'Latest operations and system events',
-            child: activity.isEmpty
-                ? const Text('No activity logs recorded yet.')
-                : Column(
-                    children: activity.take(8).map((entry) {
-                      final item = _readDynamicMap(entry);
-                      final action = item['action']?.toString() ??
-                          item['event']?.toString() ??
-                          'Activity';
-                      final actor = item['actorName']?.toString() ??
-                          item['actorId']?.toString() ??
-                          'System';
-                      final createdAt = item['createdAt']?.toString();
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: CircleAvatar(
-                            backgroundColor: Theme.of(context)
-                                .colorScheme
-                                .secondary
-                                .withValues(alpha: 0.16),
-                            foregroundColor:
-                                Theme.of(context).colorScheme.primary,
-                            child: const Icon(Icons.history_toggle_off),
-                          ),
-                          title: Text(action),
-                          subtitle: Text(
-                            '$actor | ${ParagoFormat.relative(createdAt)}',
-                          ),
-                        ),
-                      );
-                    }).toList(growable: false),
-                  ),
+                    }
+
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: boardingCard),
+                        const SizedBox(width: 12),
+                        Expanded(child: unloadCard),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _buildReportWrap(
-    BuildContext context,
-    List<StatusReportMetric> rows,
-  ) {
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: rows.map((row) {
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+class _PassengerFlowStatTile extends StatelessWidget {
+  const _PassengerFlowStatTile({
+    required this.label,
+    required this.value,
+    required this.accent,
+    this.caption,
+  });
+
+  final String label;
+  final String value;
+  final Color accent;
+  final String? caption;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 220,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: accent,
+                  fontWeight: FontWeight.w800,
+                ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+          ),
+          if (caption != null) ...[
+            const SizedBox(height: 6),
+            Text(caption!),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PassengerFlowChart extends StatelessWidget {
+  const _PassengerFlowChart({required this.series});
+
+  final List<_PassengerFlowDayPoint> series;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxValue = series.fold<int>(
+      1,
+      (max, point) => [
+        max,
+        point.boarded,
+        point.unloaded,
+      ].reduce((left, right) => left > right ? left : right),
+    );
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F8F5),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            children: const [
+              _ChartLegend(
+                label: 'Boarded',
+                color: Color(0xFF0F6A5F),
+              ),
+              _ChartLegend(
+                label: 'Unloaded',
+                color: Color(0xFFE29B2D),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          SizedBox(
+            height: 240,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (final point in series)
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.bottomCenter,
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  _FlowBar(
+                                    value: point.boarded,
+                                    maxValue: maxValue,
+                                    color: const Color(0xFF0F6A5F),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  _FlowBar(
+                                    value: point.unloaded,
+                                    maxValue: maxValue,
+                                    color: const Color(0xFFE29B2D),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            point.label,
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FlowBar extends StatelessWidget {
+  const _FlowBar({
+    required this.value,
+    required this.maxValue,
+    required this.color,
+  });
+
+  final int value;
+  final int maxValue;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final normalized = maxValue <= 0 ? 0.0 : value / maxValue;
+    final height = 22 + (normalized * 150);
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        Text(
+          '$value',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+        ),
+        const SizedBox(height: 6),
+        Container(
+          width: 16,
+          height: height,
           decoration: BoxDecoration(
-            color:
-                Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(18),
+            color: color,
+            borderRadius: BorderRadius.circular(999),
           ),
-          child: Text(
-            '${ParagoFormat.statusLabel(row.status)} | ${row.count}',
-            style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChartLegend extends StatelessWidget {
+  const _ChartLegend({
+    required this.label,
+    required this.color,
+  });
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(999),
           ),
-        );
-      }).toList(growable: false),
+        ),
+        const SizedBox(width: 8),
+        Text(label),
+      ],
+    );
+  }
+}
+
+class _PassengerFlowTopStopsCard extends StatelessWidget {
+  const _PassengerFlowTopStopsCard({
+    required this.title,
+    required this.emptyLabel,
+    required this.stops,
+    required this.accent,
+  });
+
+  final String title;
+  final String emptyLabel;
+  final List<_PassengerFlowStop> stops;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+          ),
+          const SizedBox(height: 12),
+          if (stops.isEmpty)
+            Text(emptyLabel)
+          else
+            Column(
+              children: [
+                for (var index = 0; index < stops.length; index += 1) ...[
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 14,
+                        backgroundColor: accent.withValues(alpha: 0.12),
+                        foregroundColor: accent,
+                        child: Text(
+                          '${index + 1}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          stops[index].label,
+                          style:
+                              Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        '${stops[index].count}',
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                    ],
+                  ),
+                  if (index < stops.length - 1) const SizedBox(height: 10),
+                ],
+              ],
+            ),
+        ],
+      ),
     );
   }
 }
@@ -629,91 +640,6 @@ class _SectionCard extends StatelessWidget {
   }
 }
 
-class _QuickActionCard extends StatelessWidget {
-  const _QuickActionCard({
-    required this.icon,
-    required this.title,
-    required this.description,
-    required this.actionLabel,
-    required this.onPressed,
-  });
-
-  final IconData icon;
-  final String title;
-  final String description;
-  final String actionLabel;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 280,
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(icon, color: Theme.of(context).colorScheme.primary),
-              const SizedBox(height: 12),
-              Text(
-                title,
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-              ),
-              const SizedBox(height: 8),
-              Text(description),
-              const SizedBox(height: 16),
-              OutlinedButton.icon(
-                onPressed: onPressed,
-                icon: const Icon(Icons.arrow_forward_outlined),
-                label: Text(actionLabel),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MiniReportCard extends StatelessWidget {
-  const _MiniReportCard({
-    required this.title,
-    required this.subtitle,
-    required this.body,
-  });
-
-  final String title;
-  final String subtitle;
-  final Widget body;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-            ),
-            const SizedBox(height: 6),
-            Text(subtitle),
-            const SizedBox(height: 14),
-            body,
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 IconData _sectionIcon(_AdminWorkspaceSection section) {
   switch (section) {
     case _AdminWorkspaceSection.overview:
@@ -750,14 +676,69 @@ Map<String, dynamic> _readDynamicMap(dynamic value) {
   return const <String, dynamic>{};
 }
 
-RouteSummaryModel? _findRouteById(
-  List<RouteSummaryModel> routes,
-  String routeId,
-) {
-  for (final route in routes) {
-    if (route.id == routeId) {
-      return route;
-    }
+int _readCount(dynamic value) {
+  if (value is int) {
+    return value;
   }
-  return null;
+  return int.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+_PassengerFlowStop? _parsePassengerFlowStop(dynamic value) {
+  final map = _readDynamicMap(value);
+  if (map.isEmpty) {
+    return null;
+  }
+  return _PassengerFlowStop(
+    label: map['label']?.toString() ?? 'Unknown stop',
+    count: _readCount(map['count']),
+  );
+}
+
+List<_PassengerFlowStop> _parsePassengerFlowStops(dynamic value) {
+  if (value is! List) {
+    return const <_PassengerFlowStop>[];
+  }
+  return value.map((entry) {
+    final map = _readDynamicMap(entry);
+    return _PassengerFlowStop(
+      label: map['label']?.toString() ?? 'Unknown stop',
+      count: _readCount(map['count']),
+    );
+  }).toList(growable: false);
+}
+
+List<_PassengerFlowDayPoint> _parsePassengerFlowSeries(dynamic value) {
+  if (value is! List) {
+    return const <_PassengerFlowDayPoint>[];
+  }
+  return value.map((entry) {
+    final map = _readDynamicMap(entry);
+    return _PassengerFlowDayPoint(
+      label: map['label']?.toString() ?? '-',
+      boarded: _readCount(map['boarded']),
+      unloaded: _readCount(map['unloaded']),
+    );
+  }).toList(growable: false);
+}
+
+class _PassengerFlowStop {
+  const _PassengerFlowStop({
+    required this.label,
+    required this.count,
+  });
+
+  final String label;
+  final int count;
+}
+
+class _PassengerFlowDayPoint {
+  const _PassengerFlowDayPoint({
+    required this.label,
+    required this.boarded,
+    required this.unloaded,
+  });
+
+  final String label;
+  final int boarded;
+  final int unloaded;
 }

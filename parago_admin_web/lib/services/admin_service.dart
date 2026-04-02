@@ -229,6 +229,24 @@ class AdminService {
     return response['data'] as Map<String, dynamic>;
   }
 
+  Future<Map<String, dynamic>> reportPassengerFlow({
+    required String fromIso,
+    required String toIso,
+    String? routeId,
+  }) async {
+    final response = await _client.request(
+      method: 'GET',
+      path: '/reports/passenger-flow',
+      queryParameters: {
+        'from': fromIso,
+        'to': toIso,
+        if (routeId != null) 'routeId': routeId,
+      },
+      useCache: true,
+    );
+    return response['data'] as Map<String, dynamic>;
+  }
+
   Future<TripSession> createTrip({
     required String driverId,
     required String jeepneyId,
