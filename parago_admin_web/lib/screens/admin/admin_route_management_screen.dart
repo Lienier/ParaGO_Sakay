@@ -128,19 +128,6 @@ class _AdminRouteManagementScreenState
     widget.onChanged?.call();
   }
 
-  Future<void> _openRouteEditor(RouteSummaryModel route) async {
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(
-        builder: (_) => AdminRouteBuilderScreen(initialRoute: route),
-      ),
-    );
-    if (!mounted || changed != true) {
-      return;
-    }
-    await _load();
-    widget.onChanged?.call();
-  }
-
   @override
   Widget build(BuildContext context) {
     final query = _searchCtrl.text.trim().toLowerCase();
@@ -324,7 +311,7 @@ class _AdminRouteManagementScreenState
             emptyMessage: 'No active routes.',
             routes: activeRoutes,
             busyRouteId: _busyRouteId,
-            onEditRoute: _openRouteEditor,
+            onEditRoute: null,
             onEditLandmarks: _openLandmarkEditor,
             onDeactivate: _deactivateRoute,
           ),
@@ -334,7 +321,7 @@ class _AdminRouteManagementScreenState
             emptyMessage: 'No inactive routes.',
             routes: inactiveRoutes,
             busyRouteId: _busyRouteId,
-            onEditRoute: _openRouteEditor,
+            onEditRoute: null,
             onEditLandmarks: _openLandmarkEditor,
             onDeactivate: null,
           ),
@@ -361,7 +348,7 @@ class _RouteSection extends StatelessWidget {
     required this.emptyMessage,
     required this.routes,
     required this.busyRouteId,
-    required this.onEditRoute,
+    this.onEditRoute,
     required this.onEditLandmarks,
     required this.onDeactivate,
   });
@@ -370,7 +357,7 @@ class _RouteSection extends StatelessWidget {
   final String emptyMessage;
   final List<RouteSummaryModel> routes;
   final String? busyRouteId;
-  final ValueChanged<RouteSummaryModel> onEditRoute;
+  final ValueChanged<RouteSummaryModel>? onEditRoute;
   final ValueChanged<RouteSummaryModel> onEditLandmarks;
   final ValueChanged<RouteSummaryModel>? onDeactivate;
 
@@ -431,14 +418,14 @@ class _RouteRow extends StatelessWidget {
   const _RouteRow({
     required this.route,
     required this.busy,
-    required this.onEditRoute,
+    this.onEditRoute,
     required this.onEditLandmarks,
     required this.onDeactivate,
   });
 
   final RouteSummaryModel route;
   final bool busy;
-  final ValueChanged<RouteSummaryModel> onEditRoute;
+  final ValueChanged<RouteSummaryModel>? onEditRoute;
   final ValueChanged<RouteSummaryModel> onEditLandmarks;
   final ValueChanged<RouteSummaryModel>? onDeactivate;
 
@@ -555,12 +542,6 @@ class _RouteRow extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              FilledButton.tonalIcon(
-                onPressed: () => onEditRoute(route),
-                style: compactFilledStyle,
-                icon: const Icon(Icons.tune),
-                label: const Text('Edit fare settings'),
-              ),
               OutlinedButton.icon(
                 onPressed: () => onEditLandmarks(route),
                 style: compactOutlinedStyle,

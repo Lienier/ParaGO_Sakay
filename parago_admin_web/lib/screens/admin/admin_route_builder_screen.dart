@@ -637,30 +637,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
               builder: (context, constraints) {
                 final sideBySide = constraints.maxWidth >= 1180;
 
-                if (!sideBySide) {
-                  return Column(
-                    children: [
-                      _buildRouteDetailsCard(theme),
-                      const SizedBox(height: 16),
-                      _buildFareSettingsCard(theme, existing),
-                    ],
-                  );
-                }
-
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      flex: 5,
-                      child: _buildRouteDetailsCard(theme),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      flex: 4,
-                      child: _buildFareSettingsCard(theme, existing),
-                    ),
-                  ],
-                );
+                return _buildRouteDetailsCard(theme);
               },
             ),
           ),

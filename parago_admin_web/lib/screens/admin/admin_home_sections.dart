@@ -852,6 +852,8 @@ IconData _sectionIcon(_AdminWorkspaceSection section) {
       return Icons.alt_route_outlined;
     case _AdminWorkspaceSection.routes:
       return Icons.place_outlined;
+    case _AdminWorkspaceSection.fareSettings:
+      return Icons.payments_outlined;
   }
 }
 
@@ -865,6 +867,8 @@ String _sectionLabel(_AdminWorkspaceSection section) {
       return 'Route Builder';
     case _AdminWorkspaceSection.routes:
       return 'Routes';
+    case _AdminWorkspaceSection.fareSettings:
+      return 'Fare Settings';
   }
 }
 

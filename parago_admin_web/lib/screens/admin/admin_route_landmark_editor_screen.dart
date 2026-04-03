@@ -51,13 +51,6 @@ class _AdminRouteLandmarkEditorScreenState
           position: widget.route.stopPoints[index].position,
         ),
     ];
-    if (_landmarks.isNotEmpty) {
-      _selectedLandmarkId = _landmarks.first.id;
-      _message =
-          'Select a landmark to edit it, or turn on move mode to reposition it.';
-    } else {
-      _message = 'Tap the route to add the first landmark.';
-    }
   }
 
   _EditableRouteLandmark? get _selectedLandmark {
@@ -551,204 +544,255 @@ class _AdminRouteLandmarkEditorScreenState
             ),
           ),
           const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Placement tools', style: theme.textTheme.titleLarge),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      ChoiceChip(
-                        label: const Text('Add landmark'),
-                        selected: !_moveMode,
-                        onSelected: (_) {
-                          setState(() {
-                            _moveMode = false;
-                            _message = 'Tap the route to add a new landmark.';
-                          });
-                        },
-                      ),
-                      ChoiceChip(
-                        label: const Text('Move selected'),
-                        selected: _moveMode,
-                        onSelected: (_) {
-                          setState(() {
-                            _moveMode = true;
-                            _message = selectedLandmark == null
-                                ? 'Select a landmark first, then tap its new route position.'
-                                : 'Tap the route to move ${selectedLandmark.name}.';
-                          });
-                        },
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: selectedLandmark == null
-                            ? null
-                            : () => _editLandmark(selectedLandmark),
-                        icon: const Icon(Icons.edit_location_alt_outlined),
-                        label: const Text('Edit selected'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0F6A5F).withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: Text(
-                      selectedLandmark == null
-                          ? 'No landmark selected yet.'
-                          : 'Selected: ${selectedLandmark.name} | ${_formatFare(_landmarkFare(selectedLandmark))}',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Route map', style: theme.textTheme.titleLarge),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Tap the route line to add a landmark. In move mode, select a landmark first and tap a new spot on the route to reposition it.',
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 16),
-                  if (_saving) ...[
-                    const LinearProgressIndicator(),
-                    const SizedBox(height: 14),
-                  ],
-                  AspectRatio(
-                    aspectRatio: 1.08,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(28),
-                      child: FlutterMap(
-                        options: MapOptions(
-                          initialCenter: _mapCenter,
-                          initialZoom: _mapZoom,
-                          interactionOptions: const InteractionOptions(
-                            flags: InteractiveFlag.all,
-                          ),
-                          onTap: (_, point) => _handleMapTap(point),
-                        ),
-                        children: [
-                          TileLayer(
-                            urlTemplate:
-                                'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                            userAgentPackageName: 'com.parago.mobile',
-                          ),
-                          if (_routePoints.length >= 2)
-                            PolylineLayer(
-                              polylines: [
-                                Polyline(
-                                  points: _routePoints,
-                                  strokeWidth: 6,
-                                  color: const Color(0xFF0F6A5F),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 5,
+                child: Column(
+                  children: [
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Placement tools', style: theme.textTheme.titleLarge),
+                            const SizedBox(height: 12),
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: [
+                                ChoiceChip(
+                                  label: const Text('Add landmark'),
+                                  selected: !_moveMode,
+                                  onSelected: (_) {
+                                    setState(() {
+                                      _moveMode = false;
+                                    });
+                                  },
+                                ),
+                                ChoiceChip(
+                                  label: const Text('Move selected'),
+                                  selected: _moveMode,
+                                  onSelected: (_) {
+                                    setState(() {
+                                      _moveMode = true;
+                                    });
+                                  },
+                                ),
+                                OutlinedButton.icon(
+                                  onPressed: selectedLandmark == null
+                                      ? null
+                                      : () => _editLandmark(selectedLandmark),
+                                  icon: const Icon(Icons.edit_location_alt_outlined),
+                                  label: const Text('Edit selected'),
                                 ),
                               ],
                             ),
-                          MarkerLayer(
-                            markers: [
-                              for (var index = 0;
-                                  index < _landmarks.length;
-                                  index += 1)
-                                Marker(
-                                  point: _landmarks[index].position,
-                                  width: 168,
-                                  height: 86,
-                                  child: GestureDetector(
-                                    onTap: () {
-                                      setState(() {
-                                        _selectedLandmarkId =
-                                            _landmarks[index].id;
-                                        _message =
-                                            '${_landmarks[index].name} selected.';
-                                      });
-                                    },
-                                    child: _LandmarkMarker(
-                                      order: index + 1,
-                                      name: _landmarks[index].name,
-                                      fareLabel: _formatFare(
-                                          _landmarkFare(_landmarks[index])),
-                                      selected: _landmarks[index].id ==
-                                          _selectedLandmarkId,
-                                    ),
-                                  ),
+                            const SizedBox(height: 14),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF0F6A5F).withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                              child: Text(
+                                selectedLandmark == null
+                                    ? 'No landmark selected yet.'
+                                    : 'Selected: ${selectedLandmark.name} | ${_formatFare(_landmarkFare(selectedLandmark))}',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
                                 ),
-                            ],
-                          ),
-                          const RichAttributionWidget(
-                            attributions: [
-                              TextSourceAttribution(
-                                  'OpenStreetMap contributors'),
-                            ],
-                          ),
-                        ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 16),
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Landmarks', style: theme.textTheme.titleLarge),
+                            const SizedBox(height: 12),
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(minHeight: 160),
+                              child: _landmarks.isEmpty
+                                  ? Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .surfaceContainerHighest
+                                            .withValues(alpha: 0.45),
+                                        borderRadius: BorderRadius.circular(18),
+                                        border: Border.all(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .outlineVariant
+                                              .withValues(alpha: 0.6),
+                                        ),
+                                      ),
+                                      child: Align(
+                                        alignment: Alignment.topLeft,
+                                        child: Text(
+                                          'No drop-off landmarks yet. Tap the route map to add one.',
+                                          style: theme.textTheme.bodyMedium,
+                                        ),
+                                      ),
+                                    )
+                                  : Column(
+                                      children: [
+                                        for (var index = 0;
+                                            index < _landmarks.length;
+                                            index += 1)
+                                          _LandmarkListTile(
+                                            order: index + 1,
+                                            landmark: _landmarks[index],
+                                            fareLabel:
+                                                _formatFare(_landmarkFare(_landmarks[index])),
+                                            selected:
+                                                _landmarks[index].id == _selectedLandmarkId,
+                                            coordinateLabel:
+                                                _formatCoordinate(_landmarks[index].position),
+                                            onTap: () {
+                                              setState(() {
+                                                _selectedLandmarkId = _landmarks[index].id;
+                                                _message =
+                                                    '${_landmarks[index].name} selected.';
+                                              });
+                                            },
+                                            onEdit: () => _editLandmark(_landmarks[index]),
+                                            onDelete: () => _deleteLandmark(_landmarks[index]),
+                                          ),
+                                      ],
+                                    ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: _saving ? null : _saveLandmarks,
+                        icon: _saving
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.4,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Icon(Icons.save_outlined),
+                        label: Text(
+                          _saving ? 'Saving...' : 'Save Landmark Updates',
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Landmarks', style: theme.textTheme.titleLarge),
-                  const SizedBox(height: 12),
-                  if (_landmarks.isEmpty)
-                    const Text(
-                      'No drop-off landmarks yet. Tap the route map to add one.',
-                    )
-                  else
-                    Column(
+              const SizedBox(width: 16),
+              Expanded(
+                flex: 7,
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        for (var index = 0;
-                            index < _landmarks.length;
-                            index += 1)
-                          _LandmarkListTile(
-                            order: index + 1,
-                            landmark: _landmarks[index],
-                            fareLabel:
-                                _formatFare(_landmarkFare(_landmarks[index])),
-                            selected:
-                                _landmarks[index].id == _selectedLandmarkId,
-                            coordinateLabel:
-                                _formatCoordinate(_landmarks[index].position),
-                            onTap: () {
-                              setState(() {
-                                _selectedLandmarkId = _landmarks[index].id;
-                                _message =
-                                    '${_landmarks[index].name} selected.';
-                              });
-                            },
-                            onEdit: () => _editLandmark(_landmarks[index]),
-                            onDelete: () => _deleteLandmark(_landmarks[index]),
+                        Text('Route map', style: theme.textTheme.titleLarge),
+                        const SizedBox(height: 8),
+                        const SizedBox(height: 16),
+                        if (_saving) ...[
+                          const LinearProgressIndicator(),
+                          const SizedBox(height: 14),
+                        ],
+                        AspectRatio(
+                          aspectRatio: 1.32,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(28),
+                            child: FlutterMap(
+                              options: MapOptions(
+                                initialCenter: _mapCenter,
+                                initialZoom: _mapZoom,
+                                interactionOptions: const InteractionOptions(
+                                  flags: InteractiveFlag.all,
+                                ),
+                                onTap: (_, point) => _handleMapTap(point),
+                              ),
+                              children: [
+                                TileLayer(
+                                  urlTemplate:
+                                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                  userAgentPackageName: 'com.parago.mobile',
+                                ),
+                                if (_routePoints.length >= 2)
+                                  PolylineLayer(
+                                    polylines: [
+                                      Polyline(
+                                        points: _routePoints,
+                                        strokeWidth: 6,
+                                        color: const Color(0xFF0F6A5F),
+                                      ),
+                                    ],
+                                  ),
+                                MarkerLayer(
+                                  markers: [
+                                    for (var index = 0;
+                                        index < _landmarks.length;
+                                        index += 1)
+                                      Marker(
+                                        point: _landmarks[index].position,
+                                        width: 168,
+                                        height: 86,
+                                        child: GestureDetector(
+                                          onTap: () {
+                                            setState(() {
+                                              _selectedLandmarkId =
+                                                  _landmarks[index].id;
+                                              _message =
+                                                  '${_landmarks[index].name} selected.';
+                                            });
+                                          },
+                                          child: _LandmarkMarker(
+                                            order: index + 1,
+                                            name: _landmarks[index].name,
+                                            fareLabel: _formatFare(
+                                                _landmarkFare(_landmarks[index])),
+                                            selected: _landmarks[index].id ==
+                                                _selectedLandmarkId,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                const RichAttributionWidget(
+                                  attributions: [
+                                    TextSourceAttribution(
+                                        'OpenStreetMap contributors'),
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
+                        ),
                       ],
                     ),
-                ],
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
           if (_message != null) ...[
             const SizedBox(height: 16),
@@ -766,21 +810,6 @@ class _AdminRouteLandmarkEditorScreenState
               ),
             ),
           ],
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: _saving ? null : _saveLandmarks,
-            icon: _saving
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.4,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.save_outlined),
-            label: Text(_saving ? 'Saving...' : 'Save Landmark Updates'),
-          ),
         ],
       ),
     );

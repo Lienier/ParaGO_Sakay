@@ -248,7 +248,7 @@ class AdminService {
   }
 
   Future<TripSession> createTrip({
-    required String driverId,
+    String? driverId,
     required String jeepneyId,
     required String routeId,
     String status = 'scheduled',
@@ -258,7 +258,8 @@ class AdminService {
       method: 'POST',
       path: '/trips',
       body: {
-        'driverId': driverId,
+        if (driverId != null && driverId.trim().isNotEmpty)
+          'driverId': driverId,
         'jeepneyId': jeepneyId,
         'routeId': routeId,
         'status': status,

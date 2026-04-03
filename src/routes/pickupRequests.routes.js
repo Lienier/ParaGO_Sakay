@@ -52,6 +52,24 @@ const pointCoordinates = (value) =>
     ? [Number(value.coordinates[0]), Number(value.coordinates[1])]
     : null;
 
+const ensureDriverCanHandlePickup = ({ driver, trip }) => {
+  if (!driver) {
+    throw new ApiError(403, 'Driver profile missing');
+  }
+  if (driver.status !== 'active') {
+    throw new ApiError(403, 'Driver account must be active to handle pickups');
+  }
+  if (!driver.isVerified) {
+    throw new ApiError(403, 'Driver must be verified to handle pickups');
+  }
+  if (!driver.assignedJeepneyId) {
+    throw new ApiError(403, 'Driver must be assigned to a jeepney before handling pickups');
+  }
+  if (String(driver.assignedJeepneyId) !== String(trip.jeepneyId)) {
+    throw new ApiError(403, 'Focused trip must use the driver assigned jeepney');
+  }
+};
+
 const reverseGeocodeLabel = async ({ latitude, longitude }) => {
   if (!tomtomApiKey) {
     return null;
@@ -423,6 +441,7 @@ router.patch(
       driver = await ensureDriverAssignedToTrip(req.user, trip, {
         forbiddenMessage: 'You are not assigned to this request',
       });
+      ensureDriverCanHandlePickup({ driver, trip });
     }
     if (!trip.driverId) {
       throw new ApiError(409, 'Trip driver missing');
@@ -484,10 +503,14 @@ router.patch(
     const trip = await requireTrip(request.tripSessionId, {
       notFoundMessage: 'Trip not found for this request',
     });
+    if (trip.status !== 'active') {
+      throw new ApiError(409, 'Trip is not active for pickup confirmation');
+    }
     if (req.user.role === DRIVER) {
-      await ensureDriverAssignedToTrip(req.user, trip, {
+      const driver = await ensureDriverAssignedToTrip(req.user, trip, {
         forbiddenMessage: 'You are not assigned to this request',
       });
+      ensureDriverCanHandlePickup({ driver, trip });
     }
     if (request.status !== 'acknowledged') {
       if (request.status !== 'pending') {

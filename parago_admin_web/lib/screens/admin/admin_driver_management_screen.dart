@@ -251,15 +251,6 @@ class _AdminDriverManagementScreenState
       return 'Driver profile is missing.';
     }
 
-    final status = _textOf(driver['status']).toLowerCase();
-    if (status != 'active') {
-      return 'Driver account must be active.';
-    }
-
-    if (driver['isVerified'] != true) {
-      return 'Driver must be verified first.';
-    }
-
     final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
     final jeepneyId = _nullableIdOf(jeepney);
     if (jeepneyId == null) {
@@ -267,16 +258,6 @@ class _AdminDriverManagementScreenState
     }
     if (_textOf(jeepney?['status']).toLowerCase() != 'active') {
       return 'Assigned jeepney must be active.';
-    }
-
-    final route = _driverRoute(driver);
-    final routeId = _nullableIdOf(route);
-    if (routeId == null) {
-      return 'Assign a route first.';
-    }
-    final routeStatus = _textOf(route['status']).toLowerCase();
-    if (routeStatus.isNotEmpty && routeStatus != 'active') {
-      return 'Assigned route must be active.';
     }
 
     final openTrip = _openTripForDriver(driverId);
@@ -299,17 +280,63 @@ class _AdminDriverManagementScreenState
       return;
     }
 
+    final activeRoutes = _routes
+        .where((route) => route.status.toLowerCase() == 'active')
+        .toList(growable: false);
+    if (activeRoutes.isEmpty) {
+      if (!mounted) return;
+      await ActionFeedback.showInfoDialog(
+        context,
+        title: 'Trip cannot be scheduled',
+        message: 'No active route is available for scheduling.',
+      );
+      return;
+    }
+
+    final defaultRoute = _driverRoute(driver);
+    String selectedRouteId = _nullableIdOf(defaultRoute) ?? activeRoutes.first.id;
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) {
-        final route = _driverRoute(driver);
+        final selectedRoute = _routes.firstWhere(
+          (route) => route.id == selectedRouteId,
+          orElse: () => activeRoutes.first,
+        );
         final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
         return AlertDialog(
           title: const Text('Schedule trip'),
-          content: Text(
-            'Create a scheduled trip for ${_driverDisplayName(driver)} using '
-            '${jeepney?['plateNumber'] ?? 'the assigned jeepney'} on '
-            '${route['code'] ?? route['name'] ?? 'the assigned route'}?',
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Create a scheduled trip for ${_driverDisplayName(driver)} using '
+                '${jeepney?['plateNumber'] ?? 'the assigned jeepney'}.',
+              ),
+              const SizedBox(height: 16),
+              StatefulBuilder(
+                builder: (context, setInnerState) => DropdownButtonFormField<String>(
+                  value: selectedRouteId,
+                  decoration: const InputDecoration(labelText: 'Route'),
+                  items: [
+                    for (final route in activeRoutes)
+                      DropdownMenuItem(
+                        value: route.id,
+                        child: Text('${route.code} - ${route.name}'),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null || value.isEmpty) return;
+                    setInnerState(() => selectedRouteId = value);
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Selected route: ${selectedRoute.code} - ${selectedRoute.name}',
+              ),
+            ],
           ),
           actions: [
             TextButton(
@@ -336,9 +363,12 @@ class _AdminDriverManagementScreenState
     final admin = AdminService(session.apiClient);
     final driverId = _idOf(driver['_id']);
     final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
-    final route = _driverRoute(driver);
     final jeepneyId = _nullableIdOf(jeepney)!;
-    final routeId = _nullableIdOf(route)!;
+    final selectedRoute = _routes.firstWhere(
+      (route) => route.id == selectedRouteId,
+      orElse: () => activeRoutes.first,
+    );
+    final routeId = selectedRoute.id;
 
     setState(() => _schedulingDriverId = driverId);
     try {
@@ -346,7 +376,7 @@ class _AdminDriverManagementScreenState
         context: context,
         loadingMessage: 'Scheduling trip...',
         successMessage:
-            'Trip scheduled for ${_driverDisplayName(driver)} (${route['code'] ?? route['name'] ?? 'assigned route'}).',
+          'Trip scheduled for ${_driverDisplayName(driver)} (${selectedRoute.code} - ${selectedRoute.name}).',
         action: () => admin.createTrip(
           driverId: driverId,
           jeepneyId: jeepneyId,

@@ -354,6 +354,12 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     required List<RideSessionModel> focusedRides,
     required double mapHeight,
   }) {
+    final startRequirementMessage = focusedTrip == null
+        ? null
+        : _driverStartRequirementMessage(trip: focusedTrip);
+    final pickupRequirementMessage = focusedTrip == null
+        ? null
+        : _driverPickupRequirementMessage(trip: focusedTrip);
     final displayedOnboard = _displayedOnboardCount(focusedTrip, focusedRides);
     final activeAlerts = focusedAlerts
         .where(
@@ -427,6 +433,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       trip: focusedTrip,
       driverName: session.user?.fullName ?? 'Driver',
       statusMessage: _statusMessage,
+      requirementMessage: _driverOperationsBannerMessage(focusedTrip),
       availabilityNote: _availabilityNote,
       isOnline: _isOnline,
       activePickupCount: focusedRequests
@@ -452,18 +459,24 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           ? null
           : () => _changePassengerCount(focusedTrip.id, -1),
       onStartTrip:
-          focusedTrip == null || _loading || focusedTrip.status == 'active'
+          _loading ||
+              (focusedTrip != null && focusedTrip.status == 'active') ||
+              startRequirementMessage != null
               ? null
-              : () => _startTrip(focusedTrip.id),
+              : () => _startTrip(focusedTrip),
       onEndTrip:
           focusedTrip == null || _loading || focusedTrip.status != 'active'
               ? null
               : () => _endTrip(focusedTrip.id),
       onTogglePickup:
-          focusedTrip == null || _loading || focusedTrip.status != 'active'
+          focusedTrip == null ||
+                  _loading ||
+                  focusedTrip.status != 'active' ||
+                  (focusedTrip.acceptRequests == false &&
+                      pickupRequirementMessage != null)
               ? null
               : () => _toggleAccept(
-                    focusedTrip.id,
+                    focusedTrip,
                     !(focusedTrip.acceptRequests ?? true),
                   ),
       onAcknowledgeAlert: activeAlerts.isEmpty
@@ -477,6 +490,9 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     required TripSession? focusedTrip,
     required List<PickupRequestModel> requests,
   }) {
+    final pickupRequirementMessage = focusedTrip == null
+        ? null
+        : _driverPickupRequirementMessage(trip: focusedTrip);
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
@@ -488,6 +504,10 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           accent: const Color(0xFFE29B2D),
         ),
         const SizedBox(height: 16),
+        if (pickupRequirementMessage != null) ...[
+          _DriverStatusBanner(message: pickupRequirementMessage),
+          const SizedBox(height: 16),
+        ],
         if (focusedTrip == null)
           const _DriverEmptyState(
             title: 'No trip selected',
@@ -508,13 +528,15 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                   'Passenger requested a roadside pickup.',
               status: request.status,
               primaryLabel: request.status == 'pending' ? 'Acknowledge' : null,
-              onPrimary: request.status == 'pending'
-                  ? () => _acknowledgeRequest(request.id)
+              onPrimary: request.status == 'pending' &&
+                      pickupRequirementMessage == null
+                  ? () => _acknowledgeRequest(focusedTrip, request.id)
                   : null,
               secondaryLabel:
                   request.status == 'acknowledged' ? 'Complete pickup' : null,
-              onSecondary: request.status == 'acknowledged'
-                  ? () => _completeRequest(request)
+              onSecondary: request.status == 'acknowledged' &&
+                      pickupRequirementMessage == null
+                  ? () => _completeRequest(focusedTrip, request)
                   : null,
               icon: Icons.person_pin_circle_outlined,
             ),

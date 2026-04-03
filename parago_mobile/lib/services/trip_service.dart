@@ -21,6 +21,23 @@ class TripService {
         .toList();
   }
 
+  Future<TripSession> createTrip({
+    required String jeepneyId,
+    required String routeId,
+    String status = 'active',
+  }) async {
+    final response = await _client.request(
+      method: 'POST',
+      path: '/trips',
+      body: {
+        'jeepneyId': jeepneyId,
+        'routeId': routeId,
+        'status': status,
+      },
+    );
+    return TripSession.fromJson(response['data'] as Map<String, dynamic>);
+  }
+
   Future<TripSession> startTrip(String tripId) async {
     final response = await _client.request(
       method: 'PATCH',

@@ -52,6 +52,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Map<String, List<StopAlertModel>> _tripAlerts = {};
   Map<String, List<RideSessionModel>> _tripRides = {};
   Map<String, int> _manualOnboardAdjustments = {};
+  Map<String, dynamic> _driverProfile = {};
   String? _assignedRouteId;
   String? _focusedTripId;
   int _tabIndex = 0;
@@ -467,6 +468,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         _notifications = notifications;
         _routes = routes;
         _cachedRoutePreviewPoints = cachedRoutePreviewPoints;
+        _driverProfile = driverProfile;
         _assignedRouteId = assignedRouteId;
         if (driverStatus == 'active' || driverStatus == 'inactive') {
           _isOnline = driverStatus == 'active';
@@ -941,15 +943,130 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     );
   }
 
-  Future<void> _startTrip(String tripId) async {
+  Future<void> _startTrip(TripSession? trip) async {
     final session = context.read<SessionController>();
     final tripService = TripService(session.apiClient);
+
+    if (trip != null) {
+      if (!_ensureDriverReady(
+        failurePrefix: 'Cannot start the trip yet.',
+        trip: trip,
+      )) {
+        return;
+      }
+      await _runDriverAction(
+        loadingMessage: 'Starting trip...',
+        successMessage:
+            'Trip started. The driver map is now ready for live pickup handling.',
+        action: () => tripService.startTrip(trip.id),
+      );
+      return;
+    }
+
+    final jeepneyId =
+        _readProfileEntityId(_driverProfile['assignedJeepneyId']);
+    if (jeepneyId == null) {
+      await _showDriverRequirementMessage(
+        'Cannot start a trip yet. Assign a jeepney first.',
+      );
+      return;
+    }
+
+    if (!_ensureDriverReady(
+      failurePrefix: 'Cannot start the trip yet.',
+    )) {
+      return;
+    }
+
+    final activeRoutes = _routes
+        .where((route) => route.status.toLowerCase() == 'active')
+        .toList(growable: false);
+    if (activeRoutes.isEmpty) {
+      await _showDriverRequirementMessage(
+        'Cannot start a trip yet. No active route is available.',
+      );
+      return;
+    }
+
+    final chosenRoute = await _chooseRouteForNewTrip(activeRoutes);
+    if (chosenRoute == null || !mounted) {
+      return;
+    }
+
     await _runDriverAction(
-      loadingMessage: 'Starting trip...',
+      loadingMessage: 'Creating trip...',
       successMessage:
           'Trip started. The driver map is now ready for live pickup handling.',
-      action: () => tripService.startTrip(tripId),
+      action: () => tripService.createTrip(
+        jeepneyId: jeepneyId,
+        routeId: chosenRoute.id,
+        status: 'active',
+      ),
     );
+  }
+
+  Future<RouteSummaryModel?> _chooseRouteForNewTrip(
+    List<RouteSummaryModel> routes,
+  ) async {
+    if (routes.isEmpty) return null;
+
+    RouteSummaryModel selectedRoute = routes.first;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Choose route'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Select the route you want to start for this trip.',
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: selectedRoute.id,
+                    decoration: const InputDecoration(labelText: 'Route'),
+                    items: [
+                      for (final route in routes)
+                        DropdownMenuItem(
+                          value: route.id,
+                          child: Text(route.label),
+                        ),
+                    ],
+                    onChanged: (value) {
+                      if (value == null || value.isEmpty) return;
+                      final match = routes.firstWhere(
+                        (route) => route.id == value,
+                        orElse: () => selectedRoute,
+                      );
+                      setState(() => selectedRoute = match);
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('Start trip'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      return null;
+    }
+    return selectedRoute;
   }
 
   Future<void> _endTrip(String tripId) async {
@@ -962,7 +1079,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     );
   }
 
-  Future<void> _toggleAccept(String tripId, bool accept) async {
+  Future<void> _toggleAccept(TripSession trip, bool accept) async {
+    if (accept &&
+        !_ensureDriverReady(
+          failurePrefix: 'Cannot reopen pickup requests yet.',
+          trip: trip,
+          requireActiveTrip: true,
+        )) {
+      return;
+    }
     final session = context.read<SessionController>();
     final tripService = TripService(session.apiClient);
     await _runDriverAction(
@@ -971,11 +1096,21 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           : 'Pausing pickup requests...',
       successMessage:
           accept ? 'Pickup requests reopened.' : 'Pickup requests paused.',
-      action: () => tripService.setTripAvailability(tripId, accept),
+      action: () => tripService.setTripAvailability(trip.id, accept),
     );
   }
 
-  Future<void> _acknowledgeRequest(String requestId) async {
+  Future<void> _acknowledgeRequest(
+    TripSession trip,
+    String requestId,
+  ) async {
+    if (!_ensureDriverReady(
+      failurePrefix: 'Cannot acknowledge pickups yet.',
+      trip: trip,
+      requireActiveTrip: true,
+    )) {
+      return;
+    }
     final session = context.read<SessionController>();
     final driverService = DriverService(session.apiClient);
     await _runDriverAction(
@@ -985,7 +1120,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     );
   }
 
-  Future<void> _completeRequest(PickupRequestModel request) async {
+  Future<void> _completeRequest(
+    TripSession trip,
+    PickupRequestModel request,
+  ) async {
+    if (!_ensureDriverReady(
+      failurePrefix: 'Cannot confirm pickups yet.',
+      trip: trip,
+      requireActiveTrip: true,
+    )) {
+      return;
+    }
     final confirmed = await _showPickupCompletionConfirmation(request);
     if (confirmed != true || !mounted) {
       return;
@@ -1201,14 +1346,114 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     });
   }
 
-  String? _readAssignedRouteId(Map<String, dynamic> profile) {
-    final assignedRoute = profile['assignedRouteId'];
-    if (assignedRoute is Map<String, dynamic>) {
-      final id = assignedRoute['_id']?.toString().trim();
+  String? _readProfileEntityId(dynamic value) {
+    if (value is Map<String, dynamic>) {
+      final id = value['_id']?.toString().trim();
       return (id == null || id.isEmpty) ? null : id;
     }
-    final id = assignedRoute?.toString().trim();
+    final id = value?.toString().trim();
     return (id == null || id.isEmpty) ? null : id;
+  }
+
+  String? _readAssignedRouteId(Map<String, dynamic> profile) {
+    return _readProfileEntityId(profile['assignedRouteId']);
+  }
+
+  List<String> _driverOperationalIssues({
+    TripSession? trip,
+    bool requireActiveTrip = false,
+  }) {
+    final issues = <String>[];
+
+    if (requireActiveTrip) {
+      if (trip == null) {
+        issues.add('Select an active trip first.');
+      } else if (trip.status != 'active') {
+        issues.add('Start the trip before handling pickups.');
+      }
+    }
+
+    if (_driverProfile.isEmpty) {
+      return issues;
+    }
+
+    final driverStatus = _driverProfile['status']?.toString().toLowerCase();
+    if (driverStatus != 'active') {
+      issues.add('Driver account must be active.');
+    }
+
+    if (_driverProfile['isVerified'] != true) {
+      issues.add('Driver must be verified first.');
+    }
+
+    final assignedJeepneyId =
+        _readProfileEntityId(_driverProfile['assignedJeepneyId']);
+    if (assignedJeepneyId == null) {
+      issues.add('Assign a jeepney first.');
+    } else if (trip != null &&
+        trip.jeepneyId.isNotEmpty &&
+        assignedJeepneyId != trip.jeepneyId) {
+      issues.add('Focused trip must use the assigned jeepney.');
+    }
+
+    return issues;
+  }
+
+  String? _driverStartRequirementMessage({TripSession? trip}) {
+    final issues = _driverOperationalIssues(trip: trip);
+    if (issues.isEmpty) {
+      return null;
+    }
+    return 'Driver requirements incomplete. ${issues.join(' ')}';
+  }
+
+  String? _driverPickupRequirementMessage({TripSession? trip}) {
+    final issues = _driverOperationalIssues(
+      trip: trip,
+      requireActiveTrip: true,
+    );
+    if (issues.isEmpty) {
+      return null;
+    }
+    return 'Pickup is locked. ${issues.join(' ')}';
+  }
+
+  String? _driverOperationsBannerMessage(TripSession? trip) {
+    if (trip?.status == 'active') {
+      return _driverPickupRequirementMessage(trip: trip);
+    }
+    return _driverStartRequirementMessage(trip: trip);
+  }
+
+  bool _ensureDriverReady({
+    required String failurePrefix,
+    TripSession? trip,
+    bool requireActiveTrip = false,
+  }) {
+    final issues = _driverOperationalIssues(
+      trip: trip,
+      requireActiveTrip: requireActiveTrip,
+    );
+    if (issues.isEmpty) {
+      return true;
+    }
+
+    final message = '$failurePrefix ${issues.join(' ')}';
+    if (mounted) {
+      setState(() => _statusMessage = message);
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.hideCurrentSnackBar();
+      messenger?.showSnackBar(SnackBar(content: Text(message)));
+    }
+    return false;
+  }
+
+  Future<void> _showDriverRequirementMessage(String message) async {
+    if (!mounted) return;
+    setState(() => _statusMessage = message);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _changePassengerCount(String tripId, int delta) {
@@ -1535,6 +1780,7 @@ class _DriveMapPanel extends StatelessWidget {
     required this.cameraTarget,
     required this.driverName,
     required this.statusMessage,
+    required this.requirementMessage,
     required this.availabilityNote,
     required this.isOnline,
     required this.activePickupCount,
@@ -1558,6 +1804,7 @@ class _DriveMapPanel extends StatelessWidget {
   final LatLng cameraTarget;
   final String driverName;
   final String? statusMessage;
+  final String? requirementMessage;
   final String availabilityNote;
   final bool isOnline;
   final int activePickupCount;
@@ -1619,6 +1866,10 @@ class _DriveMapPanel extends StatelessWidget {
                       isOnline: isOnline,
                       availabilityNote: availabilityNote,
                     ),
+                    if (requirementMessage != null) ...[
+                      const SizedBox(height: 12),
+                      _DriverStatusBanner(message: requirementMessage!),
+                    ],
                     if (statusMessage != null) ...[
                       const SizedBox(height: 12),
                       _DriverStatusBanner(message: statusMessage!),
@@ -1981,6 +2232,24 @@ class _DriveMapPanel extends StatelessWidget {
                             : '${activeDestinationAlerts.first.stopRef} plus ${activeDestinationAlerts.length - 1} more unloading alerts are active.',
                         actionLabel: 'Acknowledge',
                         onAction: onAcknowledgeAlert,
+                      ),
+                    ],
+                    if (requirementMessage != null) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.95),
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: Text(
+                          requirementMessage!,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                          ),
+                        ),
                       ),
                     ],
                     if (statusMessage != null && statusMessage!.isNotEmpty) ...[

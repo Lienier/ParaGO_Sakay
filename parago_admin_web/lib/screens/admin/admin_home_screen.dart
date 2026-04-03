@@ -14,6 +14,7 @@ import '../../services/session_controller.dart';
 import '../../widgets/metric_card.dart';
 import 'admin_driver_management_screen.dart';
 import 'admin_route_builder_screen.dart';
+import 'admin_route_fare_settings_screen.dart';
 import 'admin_route_management_screen.dart';
 
 part 'admin_home_sections.dart';
@@ -23,6 +24,7 @@ enum _AdminWorkspaceSection {
   drivers,
   routeBuilder,
   routes,
+  fareSettings,
 }
 
 class AdminHomeScreen extends StatefulWidget {
@@ -241,6 +243,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         return 'Route Builder';
       case _AdminWorkspaceSection.routes:
         return 'Route Management';
+      case _AdminWorkspaceSection.fareSettings:
+        return 'Fare Settings';
     }
   }
 
@@ -254,6 +258,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         return 'Create or update route geometry directly on the map with offline-ready snapshots.';
       case _AdminWorkspaceSection.routes:
         return 'Edit active routes, landmark drop-off points, and per-landmark fares.';
+      case _AdminWorkspaceSection.fareSettings:
+        return 'Configure base fares, distance rates, and fare rules for your routes.';
     }
   }
 
@@ -283,6 +289,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         return AdminRouteManagementScreen(
           embedded: true,
           onChanged: () => _load(silent: true),
+        );
+      case _AdminWorkspaceSection.fareSettings:
+        return AdminRouteFareSettingsScreen(
+          embedded: true,
         );
     }
   }

@@ -102,10 +102,12 @@ router.post(
       ) {
         throw new ApiError(403, 'This jeepney is not assigned to the driver');
       }
-      if (driver.assignedRouteId && String(driver.assignedRouteId) !== String(route._id)) {
-        throw new ApiError(403, 'This route is not assigned to the driver');
-      }
       payload.driverId = driver._id;
+    } else {
+      const requestedStatus = payload.status || 'scheduled';
+      if (requestedStatus !== 'scheduled' && !payload.driverId) {
+        throw new ApiError(400, 'driverId is required when creating a non-scheduled trip');
+      }
     }
     const trip = await TripSession.create({
       ...payload,
@@ -131,12 +133,23 @@ router.patch(
       throw new ApiError(409, 'Trip is already closed');
     }
     if (req.user.role === DRIVER) {
-      const driver = await ensureDriverAssignedToTrip(req.user, trip);
+      const driver = await requireCurrentDriver(req.user);
       if (driver.status !== 'active') {
         throw new ApiError(403, 'Driver account must be active to start a trip');
       }
       if (!driver.isVerified) {
         throw new ApiError(403, 'Driver must be verified to start a trip');
+      }
+      if (
+        driver.assignedJeepneyId &&
+        String(driver.assignedJeepneyId) !== String(trip.jeepneyId)
+      ) {
+        throw new ApiError(403, 'This jeepney is not assigned to the driver');
+      }
+      if (!trip.driverId) {
+        trip.driverId = driver._id;
+      } else if (String(trip.driverId) !== String(driver._id)) {
+        throw new ApiError(403, 'You are not assigned to this trip');
       }
     }
     trip.status = 'active';

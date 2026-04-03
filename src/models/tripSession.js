@@ -5,7 +5,7 @@ const { Schema } = mongoose;
 const tripSessionSchema = new Schema(
   {
     jeepneyId: { type: Schema.Types.ObjectId, ref: 'Jeepney', required: true },
-    driverId: { type: Schema.Types.ObjectId, ref: 'Driver', required: true },
+    driverId: { type: Schema.Types.ObjectId, ref: 'Driver' },
     routeId: { type: Schema.Types.ObjectId, ref: 'Route', required: true },
     routePathSnapshot: {
       type: {
