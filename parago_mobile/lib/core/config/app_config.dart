@@ -18,7 +18,7 @@ class AppConfig {
       String.fromEnvironment('ORS_API_KEY', defaultValue: '');
   static const bool _enableRealtimeFallback = bool.fromEnvironment(
     'PARAGO_ENABLE_REALTIME',
-    defaultValue: false,
+    defaultValue: true,
   );
 
   static String? _resolvedApiBaseUrl;

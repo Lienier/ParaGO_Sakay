@@ -15,20 +15,11 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
   }
 
   RouteSummaryModel? _effectiveRouteSummaryForTrip(TripSession trip) {
-    final assignedRoute = _assignedRouteSummary();
     final tripRoute = _routeSummaryForTrip(trip);
-
-    if (assignedRoute != null) {
-      if (assignedRoute.id == trip.routeId) {
-        return assignedRoute;
-      }
-      if (assignedRoute.mapPath.isNotEmpty ||
-          assignedRoute.referencePoints.isNotEmpty) {
-        return assignedRoute;
-      }
+    if (tripRoute != null) {
+      return tripRoute;
     }
-
-    return tripRoute ?? assignedRoute;
+    return _assignedRouteSummary();
   }
 
   List<LatLng> _cachedPreviewPath({
@@ -482,6 +473,80 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       onAcknowledgeAlert: activeAlerts.isEmpty
           ? null
           : () => _acknowledgeAlert(activeAlerts.first.id),
+        readLiveData: () {
+        final liveTrip = _focusedTrip;
+        final liveRequests = liveTrip == null
+          ? const <PickupRequestModel>[]
+          : (_tripRequests[liveTrip.id] ?? const <PickupRequestModel>[]);
+        final liveAlerts = liveTrip == null
+          ? const <StopAlertModel>[]
+          : (_tripAlerts[liveTrip.id] ?? const <StopAlertModel>[]);
+        final liveRides = liveTrip == null
+          ? const <RideSessionModel>[]
+          : (_tripRides[liveTrip.id] ?? const <RideSessionModel>[]);
+
+        final liveStartRequirement = liveTrip == null
+          ? null
+          : _driverStartRequirementMessage(trip: liveTrip);
+        final livePickupRequirement = liveTrip == null
+          ? null
+          : _driverPickupRequirementMessage(trip: liveTrip);
+        final liveActiveAlerts = liveAlerts
+          .where(
+            (alert) =>
+              _DriverHomeScreenState._activeAlertStatuses.contains(
+              alert.status,
+              ),
+          )
+          .toList(growable: false);
+
+        return _DrivePanelLiveData(
+          trip: liveTrip,
+          routeLabel: liveTrip == null
+            ? (_assignedRouteSummary()?.label ?? 'Metro overview')
+            : _routeLabel(liveTrip),
+          isOnline: _isOnline,
+          availabilityNote: _availabilityNote,
+          requirementMessage: _driverOperationsBannerMessage(liveTrip),
+          statusMessage: _statusMessage,
+          displayedOnboard: _displayedOnboardCount(liveTrip, liveRides),
+          manualAdjustment:
+            liveTrip == null ? 0 : (_manualOnboardAdjustments[liveTrip.id] ?? 0),
+          activePickupCount: liveRequests
+            .where(
+            (request) => _DriverHomeScreenState._pickupStatuses.contains(
+              request.status,
+            ),
+            )
+            .length,
+          activeDestinationAlerts: liveActiveAlerts,
+          onIncrement: liveTrip == null
+            ? null
+            : () => _changePassengerCount(liveTrip.id, 1),
+          onDecrement: liveTrip == null
+            ? null
+            : () => _changePassengerCount(liveTrip.id, -1),
+          onStartTrip: _loading ||
+              (liveTrip != null && liveTrip.status == 'active') ||
+              liveStartRequirement != null
+            ? null
+            : () => _startTrip(liveTrip),
+          onEndTrip:
+            liveTrip == null || _loading || liveTrip.status != 'active'
+              ? null
+              : () => _endTrip(liveTrip.id),
+          onTogglePickup: liveTrip == null ||
+              _loading ||
+              liveTrip.status != 'active' ||
+              (liveTrip.acceptRequests == false &&
+                livePickupRequirement != null)
+            ? null
+            : () => _toggleAccept(
+              liveTrip,
+              !(liveTrip.acceptRequests ?? true),
+              ),
+        );
+        },
       height: mapHeight,
     );
   }

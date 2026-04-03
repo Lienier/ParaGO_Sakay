@@ -66,6 +66,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Timer? _liveRefreshTimer;
   Timer? _availabilityTimer;
   StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
+  StreamSubscription<Map<String, dynamic>>? _realtimeOperationsSubscription;
   bool _locationPluginUnavailable = false;
   bool _locationLoopActive = true;
   bool _silentRefreshActive = false;
@@ -74,6 +75,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   bool? _lastPublishedOnline;
   AppLifecycleState? _appLifecycleState;
   int _loadGeneration = 0;
+  DateTime? _lastRealtimeOpsRefreshAt;
   Set<String> _knownNotificationIds = <String>{};
   Set<String> _knownActiveStopAlertIds = <String>{};
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
@@ -114,6 +116,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _liveRefreshTimer?.cancel();
     _availabilityTimer?.cancel();
     _realtimeNotificationSubscription?.cancel();
+    _realtimeOperationsSubscription?.cancel();
     _realtimeSocketService.dispose();
     super.dispose();
   }
@@ -362,9 +365,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     }
 
     _realtimeNotificationSubscription?.cancel();
+    _realtimeOperationsSubscription?.cancel();
     _realtimeNotificationSubscription =
         _realtimeSocketService.notificationCreatedStream.listen(
       _handleRealtimeSocketNotification,
+    );
+    _realtimeOperationsSubscription =
+        _realtimeSocketService.operationsChangedStream.listen(
+      _handleRealtimeOperationsChanged,
     );
     _realtimeSocketService.connect(
       apiBaseUrl: session.apiClient.baseUrl,
@@ -379,25 +387,79 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return;
     }
 
-    final notification = NotificationModel.fromJson(event);
-    if (notification.id.isEmpty) {
+    final notification = _extractRealtimeNotification(event);
+    if (notification == null || notification.id.isEmpty) {
+      await _refreshFromSocketEvent();
       return;
     }
 
     final alreadyKnown = _knownNotificationIds.contains(notification.id) ||
         _notifications.any((item) => item.id == notification.id);
-    final applied = _applyRealtimeDriverNotification(notification);
+    _applyRealtimeDriverNotification(notification);
     _knownNotificationIds = {..._knownNotificationIds, notification.id};
     _realtimePrimed = true;
-
-    if (!applied) {
-      await _refreshFromSocketEvent();
-      return;
-    }
 
     if (!alreadyKnown) {
       _showDriverRealtimeSnackBar(notification);
     }
+
+    // Always reconcile from server after socket events so pull-up controls
+    // stay current even when payload shape/type changes.
+    await _refreshFromSocketEvent();
+  }
+
+  Future<void> _handleRealtimeOperationsChanged(
+    Map<String, dynamic> event,
+  ) async {
+    if (!mounted) {
+      return;
+    }
+
+    final now = DateTime.now();
+    final last = _lastRealtimeOpsRefreshAt;
+    if (last != null && now.difference(last) < const Duration(seconds: 1)) {
+      return;
+    }
+    _lastRealtimeOpsRefreshAt = now;
+    await _refreshFromSocketEvent();
+  }
+
+  NotificationModel? _extractRealtimeNotification(
+    Map<String, dynamic> event,
+  ) {
+    final direct = NotificationModel.fromJson(event);
+    if (direct.id.isNotEmpty) {
+      return direct;
+    }
+
+    Map<String, dynamic>? asMap(dynamic value) {
+      if (value is Map<String, dynamic>) {
+        return value;
+      }
+      if (value is Map) {
+        return value.map((key, item) => MapEntry(key.toString(), item));
+      }
+      return null;
+    }
+
+    final nestedCandidates = <dynamic>[
+      event['notification'],
+      event['data'],
+      event['payload'],
+    ];
+
+    for (final candidate in nestedCandidates) {
+      final normalized = asMap(candidate);
+      if (normalized == null) {
+        continue;
+      }
+      final nested = NotificationModel.fromJson(normalized);
+      if (nested.id.isNotEmpty) {
+        return nested;
+      }
+    }
+
+    return null;
   }
 
   Future<void> _refreshFromSocketEvent() async {
@@ -1010,7 +1072,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   ) async {
     if (routes.isEmpty) return null;
 
-    RouteSummaryModel selectedRoute = routes.first;
+    final sortedRoutes = List<RouteSummaryModel>.from(routes)
+      ..sort((a, b) => _routeChoiceLabel(a).compareTo(_routeChoiceLabel(b)));
+
+    RouteSummaryModel selectedRoute = sortedRoutes.first;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
@@ -1023,27 +1088,31 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Select the route you want to start for this trip.',
+                    'Select the route and direction you want to start for this trip.',
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    value: selectedRoute.id,
+                    initialValue: selectedRoute.id,
                     decoration: const InputDecoration(labelText: 'Route'),
                     items: [
-                      for (final route in routes)
+                      for (final route in sortedRoutes)
                         DropdownMenuItem(
                           value: route.id,
-                          child: Text(route.label),
+                          child: Text(_routeChoiceLabel(route)),
                         ),
                     ],
                     onChanged: (value) {
                       if (value == null || value.isEmpty) return;
-                      final match = routes.firstWhere(
+                      final match = sortedRoutes.firstWhere(
                         (route) => route.id == value,
                         orElse: () => selectedRoute,
                       );
                       setState(() => selectedRoute = match);
                     },
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Selected: ${_routeChoiceLabel(selectedRoute)}',
                   ),
                 ],
               ),
@@ -1067,6 +1136,27 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return null;
     }
     return selectedRoute;
+  }
+
+  String _routeChoiceLabel(RouteSummaryModel route) {
+    String endpointLabel = '';
+    if (route.stopPoints.length >= 2) {
+      final first = route.stopPoints.first.name.trim();
+      final last = route.stopPoints.last.name.trim();
+      if (first.isNotEmpty && last.isNotEmpty) {
+        endpointLabel = '$first to $last';
+      }
+    }
+
+    final direction = route.direction.trim();
+    final parts = <String>[route.label];
+    if (direction.isNotEmpty) {
+      parts.add(direction);
+    }
+    if (endpointLabel.isNotEmpty) {
+      parts.add(endpointLabel);
+    }
+    return parts.join(' | ');
   }
 
   Future<void> _endTrip(String tripId) async {
@@ -1773,6 +1863,42 @@ class _DriverStatusBanner extends StatelessWidget {
   }
 }
 
+class _DrivePanelLiveData {
+  const _DrivePanelLiveData({
+    required this.trip,
+    required this.routeLabel,
+    required this.isOnline,
+    required this.availabilityNote,
+    required this.requirementMessage,
+    required this.statusMessage,
+    required this.displayedOnboard,
+    required this.manualAdjustment,
+    required this.activePickupCount,
+    required this.activeDestinationAlerts,
+    required this.onIncrement,
+    required this.onDecrement,
+    required this.onStartTrip,
+    required this.onEndTrip,
+    required this.onTogglePickup,
+  });
+
+  final TripSession? trip;
+  final String routeLabel;
+  final bool isOnline;
+  final String availabilityNote;
+  final String? requirementMessage;
+  final String? statusMessage;
+  final int displayedOnboard;
+  final int manualAdjustment;
+  final int activePickupCount;
+  final List<StopAlertModel> activeDestinationAlerts;
+  final VoidCallback? onIncrement;
+  final VoidCallback? onDecrement;
+  final VoidCallback? onStartTrip;
+  final VoidCallback? onEndTrip;
+  final VoidCallback? onTogglePickup;
+}
+
 class _DriveMapPanel extends StatelessWidget {
   const _DriveMapPanel({
     required this.mapController,
@@ -1796,6 +1922,7 @@ class _DriveMapPanel extends StatelessWidget {
     required this.onEndTrip,
     required this.onTogglePickup,
     required this.onAcknowledgeAlert,
+    required this.readLiveData,
     this.height,
   });
 
@@ -1820,264 +1947,295 @@ class _DriveMapPanel extends StatelessWidget {
   final VoidCallback? onEndTrip;
   final VoidCallback? onTogglePickup;
   final VoidCallback? onAcknowledgeAlert;
+  final _DrivePanelLiveData Function() readLiveData;
   final double? height;
 
-  void _openControlSheet(
-      BuildContext context, bool hasTrip, bool isTripActive) {
+  void _openControlSheet(BuildContext context) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => DraggableScrollableSheet(
+      builder: (context) => DraggableScrollableSheet(
         initialChildSize: 0.45,
         minChildSize: 0.35,
         maxChildSize: 0.78,
         builder: (context, scrollController) {
-          return Container(
-            decoration: const BoxDecoration(
-              color: Color(0xFF132F2E),
-              borderRadius: BorderRadius.vertical(
-                top: Radius.circular(28),
-              ),
+          return StreamBuilder<int>(
+            stream: Stream<int>.periodic(
+              const Duration(milliseconds: 500),
+              (value) => value,
             ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
-              child: SingleChildScrollView(
-                controller: scrollController,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 48,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.4),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    _DriverOverviewHeader(
-                      name: driverName,
-                      routeLabel: trip == null
-                          ? 'Listening for route ride alerts'
-                          : routeLabel,
-                      isOnline: isOnline,
-                      availabilityNote: availabilityNote,
-                    ),
-                    if (requirementMessage != null) ...[
-                      const SizedBox(height: 12),
-                      _DriverStatusBanner(message: requirementMessage!),
-                    ],
-                    if (statusMessage != null) ...[
-                      const SizedBox(height: 12),
-                      _DriverStatusBanner(message: statusMessage!),
-                    ],
-                    const SizedBox(height: 12),
-                    Text(
-                      'Passengers onboard',
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                            color: Colors.white70,
-                            letterSpacing: 0.3,
-                          ),
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
+            builder: (context, _) {
+              final live = readLiveData();
+              final trip = live.trip;
+              final hasTrip = trip != null;
+              final isTripActive = trip?.status == 'active';
+              final routeLabel = live.routeLabel;
+              final isOnline = live.isOnline;
+              final availabilityNote = live.availabilityNote;
+              final requirementMessage = live.requirementMessage;
+              final statusMessage = live.statusMessage;
+              final displayedOnboard = live.displayedOnboard;
+              final manualAdjustment = live.manualAdjustment;
+              final activePickupCount = live.activePickupCount;
+              final activeDestinationAlerts = live.activeDestinationAlerts;
+              final onIncrement = live.onIncrement;
+              final onDecrement = live.onDecrement;
+              final onStartTrip = live.onStartTrip;
+              final onEndTrip = live.onEndTrip;
+              final onTogglePickup = live.onTogglePickup;
+
+              return Container(
+                decoration: const BoxDecoration(
+                  color: Color(0xFF132F2E),
+                  borderRadius: BorderRadius.vertical(
+                    top: Radius.circular(28),
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
+                  child: SingleChildScrollView(
+                    controller: scrollController,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          displayedOnboard.toString(),
-                          style: Theme.of(context)
-                              .textTheme
-                              .displaySmall
-                              ?.copyWith(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w800,
-                              ),
-                        ),
-                        const SizedBox(width: 12),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.08),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Text(
-                            manualAdjustment == 0
-                                ? 'manual 0'
-                                : manualAdjustment > 0
-                                    ? 'manual +$manualAdjustment'
-                                    : 'manual $manualAdjustment',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
+                        Center(
+                          child: Container(
+                            width: 48,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.4),
+                              borderRadius: BorderRadius.circular(4),
                             ),
                           ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.06),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.08),
+                        const SizedBox(height: 14),
+                        _DriverOverviewHeader(
+                          name: driverName,
+                          routeLabel: trip == null
+                              ? 'Listening for route ride alerts'
+                              : routeLabel,
+                          isOnline: isOnline,
+                          availabilityNote: availabilityNote,
                         ),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '$activePickupCount route ride alerts',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                          Container(
-                            width: 1,
-                            height: 18,
-                            color: Colors.white.withValues(alpha: 0.16),
-                          ),
-                          Expanded(
-                            child: Text(
-                              '${activeDestinationAlerts.length} unload alerts',
-                              textAlign: TextAlign.right,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
+                        if (requirementMessage != null) ...[
+                          const SizedBox(height: 12),
+                          _DriverStatusBanner(message: requirementMessage),
                         ],
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        _CounterButton(
-                          icon: Icons.remove,
-                          onTap: hasTrip ? onDecrement : null,
+                        if (statusMessage != null) ...[
+                          const SizedBox(height: 12),
+                          _DriverStatusBanner(message: statusMessage),
+                        ],
+                        const SizedBox(height: 12),
+                        Text(
+                          'Passengers onboard',
+                          style:
+                              Theme.of(context).textTheme.labelLarge?.copyWith(
+                                    color: Colors.white70,
+                                    letterSpacing: 0.3,
+                                  ),
                         ),
-                        _CounterButton(
-                          icon: Icons.add,
-                          onTap: hasTrip ? onIncrement : null,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        FilledButton.icon(
-                          onPressed: onStartTrip,
-                          icon: const Icon(Icons.play_arrow),
-                          label: const Text('Start trip'),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: onEndTrip,
-                          icon: const Icon(Icons.stop_circle_outlined),
-                          label: const Text('End trip'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            side: BorderSide(
-                              color: Colors.white.withValues(alpha: 0.4),
-                            ),
-                          ),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: onTogglePickup,
-                          icon: Icon(
-                            trip?.acceptRequests == false
-                                ? Icons.playlist_add_check_circle_outlined
-                                : Icons.pause_circle_outline,
-                          ),
-                          label: Text(
-                            trip?.acceptRequests == false
-                                ? 'Resume pickup'
-                                : 'Pause pickup',
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            side: BorderSide(
-                              color: Colors.white.withValues(alpha: 0.4),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (!hasTrip) ...[
-                      const SizedBox(height: 10),
-                      const Text(
-                        'No active trip selected yet. You can stay online and still share your jeepney location while on route.',
-                        style: TextStyle(color: Colors.white70),
-                      ),
-                    ] else if (!isTripActive) ...[
-                      const SizedBox(height: 10),
-                      const Text(
-                        'Start the trip when you are ready to receive ride alerts along your fixed route.',
-                        style: TextStyle(color: Colors.white70),
-                      ),
-                    ],
-                    const SizedBox(height: 16),
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        const SizedBox(height: 6),
+                        Row(
                           children: [
                             Text(
-                              'Focused trip snapshot',
-                              style: Theme.of(context).textTheme.titleLarge,
+                              displayedOnboard.toString(),
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .displaySmall
+                                  ?.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w800,
+                                  ),
                             ),
-                            const SizedBox(height: 8),
-                            Text(
-                              trip == null
-                                  ? 'This driver screen handles route-based ride alerts, not direct passenger pickups.'
-                                  : 'Passengers can alert along the route, and multiple riders can already be onboard.',
-                              style: Theme.of(context).textTheme.bodyMedium,
-                            ),
-                            const SizedBox(height: 14),
-                            _SummaryRow(
-                              label: 'Route',
-                              value:
-                                  trip == null ? 'No active route' : routeLabel,
-                            ),
-                            _SummaryRow(
-                              label: 'Trip status',
-                              value: trip == null
-                                  ? (isOnline ? 'Ready' : 'Offline')
-                                  : ParagoFormat.statusLabel(trip!.status),
-                            ),
-                            _SummaryRow(
-                              label: 'Route ride alerts',
-                              value: activePickupCount.toString(),
-                            ),
-                            _SummaryRow(
-                              label: 'Unload alerts',
-                              value: activeDestinationAlerts.length.toString(),
+                            const SizedBox(width: 12),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                manualAdjustment == 0
+                                    ? 'manual 0'
+                                    : manualAdjustment > 0
+                                        ? 'manual +$manualAdjustment'
+                                        : 'manual $manualAdjustment',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
                             ),
                           ],
                         ),
-                      ),
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.08),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '$activePickupCount route ride alerts',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                              Container(
+                                width: 1,
+                                height: 18,
+                                color: Colors.white.withValues(alpha: 0.16),
+                              ),
+                              Expanded(
+                                child: Text(
+                                  '${activeDestinationAlerts.length} unload alerts',
+                                  textAlign: TextAlign.right,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: [
+                            _CounterButton(
+                              icon: Icons.remove,
+                              onTap: hasTrip ? onDecrement : null,
+                            ),
+                            _CounterButton(
+                              icon: Icons.add,
+                              onTap: hasTrip ? onIncrement : null,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: [
+                            FilledButton.icon(
+                              onPressed: onStartTrip,
+                              icon: const Icon(Icons.play_arrow),
+                              label: const Text('Start trip'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: onEndTrip,
+                              icon: const Icon(Icons.stop_circle_outlined),
+                              label: const Text('End trip'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.white,
+                                side: BorderSide(
+                                  color: Colors.white.withValues(alpha: 0.4),
+                                ),
+                              ),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: onTogglePickup,
+                              icon: Icon(
+                                trip?.acceptRequests == false
+                                    ? Icons.playlist_add_check_circle_outlined
+                                    : Icons.pause_circle_outline,
+                              ),
+                              label: Text(
+                                trip?.acceptRequests == false
+                                    ? 'Resume pickup'
+                                    : 'Pause pickup',
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.white,
+                                side: BorderSide(
+                                  color: Colors.white.withValues(alpha: 0.4),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (!hasTrip) ...[
+                          const SizedBox(height: 10),
+                          const Text(
+                            'No active trip selected yet. You can stay online and still share your jeepney location while on route.',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ] else if (!isTripActive) ...[
+                          const SizedBox(height: 10),
+                          const Text(
+                            'Start the trip when you are ready to receive ride alerts along your fixed route.',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Focused trip snapshot',
+                                  style:
+                                      Theme.of(context).textTheme.titleLarge,
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  trip == null
+                                      ? 'This driver screen handles route-based ride alerts, not direct passenger pickups.'
+                                      : 'Passengers can alert along the route, and multiple riders can already be onboard.',
+                                  style: Theme.of(context).textTheme.bodyMedium,
+                                ),
+                                const SizedBox(height: 14),
+                                _SummaryRow(
+                                  label: 'Route',
+                                  value: trip == null
+                                      ? 'No active route'
+                                      : routeLabel,
+                                ),
+                                _SummaryRow(
+                                  label: 'Trip status',
+                                  value: trip == null
+                                      ? (isOnline ? 'Ready' : 'Offline')
+                                      : ParagoFormat.statusLabel(trip.status),
+                                ),
+                                _SummaryRow(
+                                  label: 'Route ride alerts',
+                                  value: activePickupCount.toString(),
+                                ),
+                                _SummaryRow(
+                                  label: 'Unload alerts',
+                                  value:
+                                      activeDestinationAlerts.length.toString(),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                      ],
                     ),
-                    const SizedBox(height: 24),
-                  ],
+                  ),
                 ),
-              ),
-            ),
+              );
+            },
           );
         },
       ),
@@ -2086,7 +2244,6 @@ class _DriveMapPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isTripActive = trip?.status == 'active';
     final hasTrip = trip != null;
 
     return Container(
@@ -2281,11 +2438,10 @@ class _DriveMapPanel extends StatelessWidget {
                   onVerticalDragEnd: (details) {
                     if (details.primaryVelocity != null &&
                         details.primaryVelocity! < -120) {
-                      _openControlSheet(context, hasTrip, isTripActive);
+                      _openControlSheet(context);
                     }
                   },
-                  onTap: () =>
-                      _openControlSheet(context, hasTrip, isTripActive),
+                  onTap: () => _openControlSheet(context),
                   child: Container(
                     padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
                     decoration: BoxDecoration(
