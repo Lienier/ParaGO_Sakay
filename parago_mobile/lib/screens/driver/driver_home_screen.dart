@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/utils/action_feedback.dart';
 import '../../core/utils/parago_format.dart';
@@ -26,7 +27,6 @@ import '../../services/realtime_socket_service.dart';
 import '../../services/session_controller.dart';
 import '../../services/stop_alert_service.dart';
 import '../../services/trip_service.dart';
-import 'driver_live_map_screen.dart';
 import '../../widgets/metric_card.dart';
 import '../../widgets/status_badge.dart';
 
@@ -43,6 +43,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     with WidgetsBindingObserver {
   static const _pickupStatuses = {'pending', 'acknowledged'};
   static const _activeAlertStatuses = {'sent', 'seen'};
+  static const _dismissedNotificationsStoragePrefix =
+      'driver.dismissed.notifications.v1';
 
   List<TripSession> _trips = [];
   List<RouteSummaryModel> _routes = [];
@@ -81,6 +83,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Set<String> _dismissedNotificationIds = <String>{};
   Set<String> _dismissedDriveAlertIds = <String>{};
   Set<String> _dismissedInfoMessages = <String>{};
+  bool _dismissedNotificationsLoaded = false;
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
   final MapController _driverMapController = MapController();
   LatLng? _lastDriverMapCenter;
@@ -480,6 +483,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Future<void> _load({bool silent = false}) async {
     final loadGeneration = ++_loadGeneration;
     final session = context.read<SessionController>();
+    await _ensureDismissedNotificationsLoaded(session);
     final tripService = TripService(session.apiClient);
     final notificationService = NotificationService(session.apiClient);
     final routeService = RouteService(session.apiClient);
@@ -1560,6 +1564,43 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     return _dismissedNotificationIds.contains(notificationId);
   }
 
+  String _dismissedNotificationsStorageKey(SessionController session) {
+    final userId = session.user?.userId?.trim() ?? '';
+    if (userId.isNotEmpty) {
+      return '$_dismissedNotificationsStoragePrefix.$userId';
+    }
+    return _dismissedNotificationsStoragePrefix;
+  }
+
+  Future<void> _ensureDismissedNotificationsLoaded(
+    SessionController session,
+  ) async {
+    if (_dismissedNotificationsLoaded) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final key = _dismissedNotificationsStorageKey(session);
+    final storedIds = prefs.getStringList(key) ?? const <String>[];
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _dismissedNotificationIds = storedIds.toSet();
+      _dismissedNotificationsLoaded = true;
+    });
+  }
+
+  Future<void> _persistDismissedNotificationIds() async {
+    if (!mounted) {
+      return;
+    }
+    final session = context.read<SessionController>();
+    final prefs = await SharedPreferences.getInstance();
+    final key = _dismissedNotificationsStorageKey(session);
+    final values = _dismissedNotificationIds.toList(growable: false)..sort();
+    await prefs.setStringList(key, values);
+  }
+
   bool _isDriveAlertDismissed(String alertId) {
     return _dismissedDriveAlertIds.contains(alertId);
   }
@@ -1574,6 +1615,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         notificationId,
       };
     });
+    unawaited(_persistDismissedNotificationIds());
   }
 
   void _dismissDriveAlert(String alertId) {
@@ -1679,17 +1721,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       appBar: AppBar(
         title: Text(_tabTitle()),
         actions: [
-          IconButton(
-            tooltip: 'Live map',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => const DriverLiveMapScreen(),
-                ),
-              );
-            },
-            icon: const Icon(Icons.map_outlined),
-          ),
           IconButton(
             tooltip: 'Refresh',
             onPressed: _loading ? null : _load,
@@ -2049,29 +2080,7 @@ class _DriveMapPanel extends StatelessWidget {
                                 spacing: 10,
                                 runSpacing: 10,
                                 children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 8,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(
-                                        alpha: 0.10,
-                                      ),
-                                      borderRadius: BorderRadius.circular(999),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        const Icon(
-                                          Icons.route,
-                                          size: 16,
-                                          color: Colors.white,
-                                        ),
-                                        const SizedBox(width: 6),
-                                      ],
-                                    ),
-                                  ),
+                                  
                                   Container(
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 12,
@@ -2610,6 +2619,7 @@ class _DriveMapPanel extends StatelessWidget {
                 right: 16,
                 bottom: 16,
                 child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
                   onVerticalDragEnd: (details) {
                     if (details.primaryVelocity != null &&
                         details.primaryVelocity! < -120) {
