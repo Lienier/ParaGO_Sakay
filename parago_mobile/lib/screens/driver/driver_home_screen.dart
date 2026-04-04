@@ -78,6 +78,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   DateTime? _lastRealtimeOpsRefreshAt;
   Set<String> _knownNotificationIds = <String>{};
   Set<String> _knownActiveStopAlertIds = <String>{};
+  Set<String> _dismissedNotificationIds = <String>{};
+  Set<String> _dismissedDriveAlertIds = <String>{};
+  Set<String> _dismissedInfoMessages = <String>{};
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
   final MapController _driverMapController = MapController();
   LatLng? _lastDriverMapCenter;
@@ -1025,8 +1028,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return;
     }
 
-    final jeepneyId =
-        _readProfileEntityId(_driverProfile['assignedJeepneyId']);
+    final jeepneyId = _readProfileEntityId(_driverProfile['assignedJeepneyId']);
     if (jeepneyId == null) {
       await _showDriverRequirementMessage(
         'Cannot start a trip yet. Assign a jeepney first.',
@@ -1449,6 +1451,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     return _readProfileEntityId(profile['assignedRouteId']);
   }
 
+  bool _isDriverOperationallyOnline() {
+    final driverStatus = _driverProfile['status']?.toString().toLowerCase();
+    if (driverStatus == 'active') {
+      return true;
+    }
+    // Profile status can lag briefly while automatic availability sync runs.
+    return _isOnline;
+  }
+
   List<String> _driverOperationalIssues({
     TripSession? trip,
     bool requireActiveTrip = false,
@@ -1467,9 +1478,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return issues;
     }
 
-    final driverStatus = _driverProfile['status']?.toString().toLowerCase();
-    if (driverStatus != 'active') {
-      issues.add('Driver account must be active.');
+    if (!_isDriverOperationallyOnline()) {
+      issues.add('Driver must be online.');
     }
 
     if (_driverProfile['isVerified'] != true) {
@@ -1544,6 +1554,73 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     final messenger = ScaffoldMessenger.maybeOf(context);
     messenger?.hideCurrentSnackBar();
     messenger?.showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  bool _isNotificationDismissed(String notificationId) {
+    return _dismissedNotificationIds.contains(notificationId);
+  }
+
+  bool _isDriveAlertDismissed(String alertId) {
+    return _dismissedDriveAlertIds.contains(alertId);
+  }
+
+  void _dismissNotification(String notificationId) {
+    if (!mounted || notificationId.isEmpty) {
+      return;
+    }
+    setState(() {
+      _dismissedNotificationIds = {
+        ..._dismissedNotificationIds,
+        notificationId,
+      };
+    });
+  }
+
+  void _dismissDriveAlert(String alertId) {
+    if (!mounted || alertId.isEmpty) {
+      return;
+    }
+    setState(() {
+      _dismissedDriveAlertIds = {
+        ..._dismissedDriveAlertIds,
+        alertId,
+      };
+    });
+  }
+
+  bool _isInfoMessageDismissed(String message) {
+    final normalized = message.trim();
+    if (normalized.isEmpty) {
+      return false;
+    }
+    return _dismissedInfoMessages.contains(normalized);
+  }
+
+  String? _visibleInfoMessage(String? message) {
+    final normalized = message?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return null;
+    }
+    if (_isInfoMessageDismissed(normalized)) {
+      return null;
+    }
+    return normalized;
+  }
+
+  void _dismissInfoMessage(String message) {
+    final normalized = message.trim();
+    if (!mounted || normalized.isEmpty) {
+      return;
+    }
+    setState(() {
+      _dismissedInfoMessages = {
+        ..._dismissedInfoMessages,
+        normalized,
+      };
+      if ((_statusMessage ?? '').trim() == normalized) {
+        _statusMessage = null;
+      }
+    });
   }
 
   void _changePassengerCount(String tripId, int delta) {
@@ -1692,148 +1769,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 }
 
-class _DriverOverviewHeader extends StatelessWidget {
-  const _DriverOverviewHeader({
-    required this.name,
-    required this.routeLabel,
-    required this.isOnline,
-    required this.availabilityNote,
-  });
 
-  final String name;
-  final String routeLabel;
-  final bool isOnline;
-  final String availabilityNote;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        name,
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.w800,
-                            ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        routeLabel,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: scheme.outline,
-                            ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF2EFE7),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: _DriverStatusChip(
-                      icon: Icons.autorenew_rounded,
-                      label: 'Automatic',
-                      selectedBackground: const Color(0xFFE2EDE7),
-                      selectedForeground: const Color(0xFF245245),
-                    ),
-                  ),
-                  Expanded(
-                    child: _DriverStatusChip(
-                      icon: isOnline ? Icons.wifi_tethering : Icons.cloud_off,
-                      label: isOnline ? 'Online' : 'Offline',
-                      selectedBackground: isOnline
-                          ? const Color(0xFFD8F3E6)
-                          : const Color(0xFFE9E2D4),
-                      selectedForeground: isOnline
-                          ? const Color(0xFF13623E)
-                          : const Color(0xFF7A4E16),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              availabilityNote,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: scheme.outline,
-                    fontWeight: FontWeight.w600,
-                  ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _DriverStatusChip extends StatelessWidget {
-  const _DriverStatusChip({
-    required this.icon,
-    required this.label,
-    required this.selectedBackground,
-    required this.selectedForeground,
-  });
-
-  final IconData icon;
-  final String label;
-  final Color selectedBackground;
-  final Color selectedForeground;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: selectedBackground,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            icon,
-            size: 18,
-            color: selectedForeground,
-          ),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: selectedForeground,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _DriverStatusBanner extends StatelessWidget {
-  const _DriverStatusBanner({required this.message});
+  const _DriverStatusBanner({
+    required this.message,
+    this.onClose,
+  });
 
   final String message;
+  final VoidCallback? onClose;
 
   @override
   Widget build(BuildContext context) {
@@ -1841,12 +1786,22 @@ class _DriverStatusBanner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: scheme.secondaryContainer,
+        color: scheme.secondaryContainer.withValues(alpha: 0.82),
         borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: scheme.secondary.withValues(alpha: 0.16)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.info_outline, color: scheme.onSecondaryContainer),
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: scheme.secondary.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(Icons.info_outline, color: scheme.onSecondaryContainer),
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
@@ -1856,6 +1811,11 @@ class _DriverStatusBanner extends StatelessWidget {
                 fontWeight: FontWeight.w600,
               ),
             ),
+          ),
+          IconButton(
+            tooltip: 'Close info',
+            onPressed: onClose,
+            icon: const Icon(Icons.close),
           ),
         ],
       ),
@@ -1880,6 +1840,9 @@ class _DrivePanelLiveData {
     required this.onStartTrip,
     required this.onEndTrip,
     required this.onTogglePickup,
+    required this.onDismissAlert,
+    required this.onDismissRequirementMessage,
+    required this.onDismissStatusMessage,
   });
 
   final TripSession? trip;
@@ -1897,6 +1860,9 @@ class _DrivePanelLiveData {
   final VoidCallback? onStartTrip;
   final VoidCallback? onEndTrip;
   final VoidCallback? onTogglePickup;
+  final VoidCallback? onDismissAlert;
+  final VoidCallback? onDismissRequirementMessage;
+  final VoidCallback? onDismissStatusMessage;
 }
 
 class _DriveMapPanel extends StatelessWidget {
@@ -1922,6 +1888,9 @@ class _DriveMapPanel extends StatelessWidget {
     required this.onEndTrip,
     required this.onTogglePickup,
     required this.onAcknowledgeAlert,
+    required this.onDismissAlert,
+    required this.onDismissRequirementMessage,
+    required this.onDismissStatusMessage,
     required this.readLiveData,
     this.height,
   });
@@ -1947,6 +1916,9 @@ class _DriveMapPanel extends StatelessWidget {
   final VoidCallback? onEndTrip;
   final VoidCallback? onTogglePickup;
   final VoidCallback? onAcknowledgeAlert;
+  final VoidCallback? onDismissAlert;
+  final VoidCallback? onDismissRequirementMessage;
+  final VoidCallback? onDismissStatusMessage;
   final _DrivePanelLiveData Function() readLiveData;
   final double? height;
 
@@ -1984,10 +1956,21 @@ class _DriveMapPanel extends StatelessWidget {
               final onStartTrip = live.onStartTrip;
               final onEndTrip = live.onEndTrip;
               final onTogglePickup = live.onTogglePickup;
+                final onDismissRequirementMessage =
+                  live.onDismissRequirementMessage;
+                final onDismissStatusMessage = live.onDismissStatusMessage;
+              final scheme = Theme.of(context).colorScheme;
 
               return Container(
                 decoration: const BoxDecoration(
-                  color: Color(0xFF132F2E),
+                  gradient: LinearGradient(
+                    colors: [
+                      Color(0xFF132F2E),
+                      Color(0xFF0F6A5F),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
                   borderRadius: BorderRadius.vertical(
                     top: Radius.circular(28),
                   ),
@@ -2010,23 +1993,112 @@ class _DriveMapPanel extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 14),
-                        _DriverOverviewHeader(
-                          name: driverName,
-                          routeLabel: trip == null
-                              ? 'Listening for route ride alerts'
-                              : routeLabel,
-                          isOnline: isOnline,
-                          availabilityNote: availabilityNote,
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.10),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          driverName,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleLarge
+                                              ?.copyWith(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          availabilityNote,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodyMedium
+                                              ?.copyWith(
+                                                color: Colors.white70,
+                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  StatusBadge(
+                                    status: isOnline
+                                        ? (trip?.status ?? 'ready')
+                                        : 'offline',
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 14),
+                              Wrap(
+                                spacing: 10,
+                                runSpacing: 10,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(
+                                        alpha: 0.10,
+                                      ),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(
+                                          Icons.route,
+                                          size: 16,
+                                          color: Colors.white,
+                                        ),
+                                        const SizedBox(width: 6),
+                                      ],
+                                    ),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: scheme.secondary.withValues(
+                                        alpha: 0.15,
+                                      ),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Text(
+                                      trip?.acceptRequests == false
+                                          ? 'Pickup paused'
+                                          : 'Pickup active',
+                                      style: TextStyle(
+                                        color: scheme.onSecondary,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
-                        if (requirementMessage != null) ...[
-                          const SizedBox(height: 12),
-                          _DriverStatusBanner(message: requirementMessage),
-                        ],
-                        if (statusMessage != null) ...[
-                          const SizedBox(height: 12),
-                          _DriverStatusBanner(message: statusMessage),
-                        ],
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 16),
                         Text(
                           'Passengers onboard',
                           style:
@@ -2115,20 +2187,20 @@ class _DriveMapPanel extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: [
-                            _CounterButton(
-                              icon: Icons.remove,
-                              onTap: hasTrip ? onDecrement : null,
-                            ),
-                            _CounterButton(
-                              icon: Icons.add,
-                              onTap: hasTrip ? onIncrement : null,
-                            ),
-                          ],
-                        ),
+                       Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              _CounterButton(
+                                icon: Icons.remove,
+                                onTap: hasTrip ? onDecrement : null,
+                              ),
+                              SizedBox(width: 10),
+                              _CounterButton(
+                                icon: Icons.add,
+                                onTap: hasTrip ? onIncrement : null,
+                              ),
+                            ],
+                          ),
                         const SizedBox(height: 16),
                         Wrap(
                           spacing: 10,
@@ -2193,8 +2265,7 @@ class _DriveMapPanel extends StatelessWidget {
                               children: [
                                 Text(
                                   'Focused trip snapshot',
-                                  style:
-                                      Theme.of(context).textTheme.titleLarge,
+                                  style: Theme.of(context).textTheme.titleLarge,
                                 ),
                                 const SizedBox(height: 8),
                                 Text(
@@ -2245,6 +2316,7 @@ class _DriveMapPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasTrip = trip != null;
+    final scheme = Theme.of(context).colorScheme;
 
     return Container(
       decoration: BoxDecoration(
@@ -2333,52 +2405,132 @@ class _DriveMapPanel extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF102725).withValues(alpha: 0.84),
+                        borderRadius: BorderRadius.circular(26),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.08),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.18),
+                            blurRadius: 24,
+                            offset: const Offset(0, 14),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              StatusBadge(
-                                status: isOnline
-                                    ? hasTrip
-                                        ? trip!.status
-                                        : 'ready'
-                                    : 'offline',
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      driverName,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium
+                                          ?.copyWith(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      availabilityNote,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
+                                            color: Colors.white70,
+                                          ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                              StatusBadge(
-                                status: trip?.acceptRequests == false
-                                    ? 'paused'
-                                    : 'on_road',
+                              const SizedBox(width: 10),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  StatusBadge(
+                                    status: isOnline
+                                        ? hasTrip
+                                            ? trip!.status
+                                            : 'ready'
+                                        : 'offline',
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(
+                                        alpha: 0.10,
+                                      ),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(
+                                          Icons.route,
+                                          size: 16,
+                                          color: Colors.white,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          routeLabel,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.92),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
+                          const SizedBox(height: 14),
+                          Row(
                             children: [
-                              const Icon(Icons.route, size: 18),
-                              const SizedBox(width: 6),
-                              Text(
-                                routeLabel,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
+                              Expanded(
+                                child: _MapStatTile(
+                                  label: 'On board',
+                                  value: displayedOnboard.toString(),
+                                  accent: scheme.primary,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: _MapStatTile(
+                                  label: 'Pickup alerts',
+                                  value: activePickupCount.toString(),
+                                  accent: const Color(0xFFE29B2D),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: _MapStatTile(
+                                  label: 'Unload alerts',
+                                  value:
+                                      activeDestinationAlerts.length.toString(),
+                                  accent: const Color(0xFFCC4B7A),
                                 ),
                               ),
                             ],
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                     if (activeDestinationAlerts.isNotEmpty) ...[
                       const SizedBox(height: 12),
@@ -2389,6 +2541,7 @@ class _DriveMapPanel extends StatelessWidget {
                             : '${activeDestinationAlerts.first.stopRef} plus ${activeDestinationAlerts.length - 1} more unloading alerts are active.',
                         actionLabel: 'Acknowledge',
                         onAction: onAcknowledgeAlert,
+                        onClose: onDismissAlert,
                       ),
                     ],
                     if (requirementMessage != null) ...[
@@ -2400,12 +2553,23 @@ class _DriveMapPanel extends StatelessWidget {
                           color: Colors.white.withValues(alpha: 0.95),
                           borderRadius: BorderRadius.circular(18),
                         ),
-                        child: Text(
-                          requirementMessage!,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12,
-                          ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                requirementMessage!,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Close info',
+                              onPressed: onDismissRequirementMessage,
+                              icon: const Icon(Icons.close),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -2418,12 +2582,23 @@ class _DriveMapPanel extends StatelessWidget {
                           color: Colors.white.withValues(alpha: 0.95),
                           borderRadius: BorderRadius.circular(18),
                         ),
-                        child: Text(
-                          statusMessage!,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12,
-                          ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                statusMessage!,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Close info',
+                              onPressed: onDismissStatusMessage,
+                              icon: const Icon(Icons.close),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -2443,27 +2618,62 @@ class _DriveMapPanel extends StatelessWidget {
                   },
                   onTap: () => _openControlSheet(context),
                   child: Container(
-                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF132F2E).withValues(alpha: 0.95),
+                      gradient: LinearGradient(
+                        colors: [
+                          scheme.primary.withValues(alpha: 0.94),
+                          const Color(0xFF0D4E47).withValues(alpha: 0.96),
+                        ],
+                        begin: Alignment.centerLeft,
+                        end: Alignment.centerRight,
+                      ),
                       borderRadius: BorderRadius.circular(28),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.18),
+                          blurRadius: 18,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
                     ),
                     child: Row(
                       children: [
-                        Expanded(
-                          child: Text(
-                            trip == null
-                                ? 'No trip selected - pull up for controls'
-                                : 'Trip control panel - pull up',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                            ),
+                        Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Icon(
+                            Icons.swipe_up,
+                            color: Colors.white.withValues(alpha: 0.95),
                           ),
                         ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                trip == null
+                                    ? 'No trip selected - pull up for controls'
+                                    : 'Trip control panel - pull up',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
                         Icon(
                           Icons.keyboard_arrow_up,
-                          color: Colors.white.withValues(alpha: 0.85),
+                          color: Colors.white.withValues(alpha: 0.9),
                         ),
                       ],
                     ),
@@ -2473,6 +2683,54 @@ class _DriveMapPanel extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _MapStatTile extends StatelessWidget {
+  const _MapStatTile({
+    required this.label,
+    required this.value,
+    required this.accent,
+  });
+
+  final String label;
+  final String value;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            value,
+            style: TextStyle(
+              color: accent,
+              fontWeight: FontWeight.w800,
+              fontSize: 20,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2570,9 +2828,13 @@ class _DriverActionCard extends StatelessWidget {
 }
 
 class _NotificationCard extends StatelessWidget {
-  const _NotificationCard({required this.notification});
+  const _NotificationCard({
+    required this.notification,
+    this.onClose,
+  });
 
   final NotificationModel notification;
+  final VoidCallback? onClose;
 
   @override
   Widget build(BuildContext context) {
@@ -2613,6 +2875,11 @@ class _NotificationCard extends StatelessWidget {
                         ),
                       ),
                       StatusBadge(status: notification.isRead ? 'read' : 'new'),
+                      IconButton(
+                        tooltip: 'Close notification',
+                        onPressed: onClose,
+                        icon: const Icon(Icons.close),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 6),
@@ -2775,27 +3042,37 @@ class _CounterButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isEnabled = onTap != null;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(18),
-      child: Ink(
-        width: 52,
-        height: 52,
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(
-            alpha: isEnabled ? 0.1 : 0.04,
-          ),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Ink(
+          width: 54,
+          height: 54,
+          decoration: BoxDecoration(
             color: Colors.white.withValues(
-              alpha: isEnabled ? 0.26 : 0.12,
+              alpha: isEnabled ? 0.12 : 0.05,
             ),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: Colors.white.withValues(
+                alpha: isEnabled ? 0.28 : 0.12,
+              ),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isEnabled ? 0.16 : 0.08),
+                blurRadius: 12,
+                offset: const Offset(0, 6),
+              ),
+            ],
           ),
-        ),
-        child: Icon(
-          icon,
-          color: Colors.white.withValues(
-            alpha: isEnabled ? 1 : 0.35,
+          child: Icon(
+            icon,
+            color: Colors.white.withValues(
+              alpha: isEnabled ? 1 : 0.38,
+            ),
           ),
         ),
       ),
@@ -2809,21 +3086,30 @@ class _DriverPopupAlert extends StatelessWidget {
     required this.message,
     required this.actionLabel,
     required this.onAction,
+    this.onClose,
   });
 
   final String title;
   final String message;
   final String actionLabel;
   final VoidCallback? onAction;
+  final VoidCallback? onClose;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF2EE).withValues(alpha: 0.95),
+        color: const Color(0xFFFFF2EE).withValues(alpha: 0.96),
         borderRadius: BorderRadius.circular(22),
         border: Border.all(color: const Color(0xFFFFC8BA)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.10),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2831,7 +3117,16 @@ class _DriverPopupAlert extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.notifications_active, color: Color(0xFFB24E34)),
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFB24E34).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.notifications_active,
+                    color: Color(0xFFB24E34)),
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -2842,18 +3137,27 @@ class _DriverPopupAlert extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.w800),
                     ),
                     const SizedBox(height: 4),
-                    Text(message),
+                    Text(
+                      message,
+                      style: const TextStyle(height: 1.35),
+                    ),
                   ],
                 ),
+              ),
+              IconButton(
+                tooltip: 'Close alert',
+                onPressed: onClose,
+                icon: const Icon(Icons.close),
               ),
             ],
           ),
           const SizedBox(height: 10),
           Align(
             alignment: Alignment.centerRight,
-            child: TextButton(
+            child: FilledButton.tonalIcon(
               onPressed: onAction,
-              child: Text(actionLabel),
+              icon: const Icon(Icons.check_circle_outline),
+              label: Text(actionLabel),
             ),
           ),
         ],

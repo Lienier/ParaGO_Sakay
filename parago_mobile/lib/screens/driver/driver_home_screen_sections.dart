@@ -351,11 +351,15 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     final pickupRequirementMessage = focusedTrip == null
         ? null
         : _driverPickupRequirementMessage(trip: focusedTrip);
+    final visibleOperationsMessage =
+      _visibleInfoMessage(_driverOperationsBannerMessage(focusedTrip));
+    final visibleStatusMessage = _visibleInfoMessage(_statusMessage);
     final displayedOnboard = _displayedOnboardCount(focusedTrip, focusedRides);
     final activeAlerts = focusedAlerts
         .where(
           (alert) => _DriverHomeScreenState._activeAlertStatuses
-              .contains(alert.status),
+              .contains(alert.status) &&
+              !_isDriveAlertDismissed(alert.id),
         )
         .toList();
     final assignedRoute = _assignedRouteSummary();
@@ -423,8 +427,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       cameraTarget: mapCenter,
       trip: focusedTrip,
       driverName: session.user?.fullName ?? 'Driver',
-      statusMessage: _statusMessage,
-      requirementMessage: _driverOperationsBannerMessage(focusedTrip),
+      statusMessage: visibleStatusMessage,
+      requirementMessage: visibleOperationsMessage,
       availabilityNote: _availabilityNote,
       isOnline: _isOnline,
       activePickupCount: focusedRequests
@@ -473,7 +477,16 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       onAcknowledgeAlert: activeAlerts.isEmpty
           ? null
           : () => _acknowledgeAlert(activeAlerts.first.id),
-        readLiveData: () {
+      onDismissAlert: activeAlerts.isEmpty
+          ? null
+          : () => _dismissDriveAlert(activeAlerts.first.id),
+      onDismissRequirementMessage: visibleOperationsMessage == null
+          ? null
+          : () => _dismissInfoMessage(visibleOperationsMessage),
+      onDismissStatusMessage: visibleStatusMessage == null
+          ? null
+          : () => _dismissInfoMessage(visibleStatusMessage),
+      readLiveData: () {
         final liveTrip = _focusedTrip;
         final liveRequests = liveTrip == null
           ? const <PickupRequestModel>[]
@@ -496,9 +509,14 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
             (alert) =>
               _DriverHomeScreenState._activeAlertStatuses.contains(
               alert.status,
-              ),
+              ) &&
+              !_isDriveAlertDismissed(alert.id),
           )
           .toList(growable: false);
+
+        final liveOperationsMessage =
+            _visibleInfoMessage(_driverOperationsBannerMessage(liveTrip));
+        final liveStatusMessage = _visibleInfoMessage(_statusMessage);
 
         return _DrivePanelLiveData(
           trip: liveTrip,
@@ -507,8 +525,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
             : _routeLabel(liveTrip),
           isOnline: _isOnline,
           availabilityNote: _availabilityNote,
-          requirementMessage: _driverOperationsBannerMessage(liveTrip),
-          statusMessage: _statusMessage,
+          requirementMessage: liveOperationsMessage,
+          statusMessage: liveStatusMessage,
           displayedOnboard: _displayedOnboardCount(liveTrip, liveRides),
           manualAdjustment:
             liveTrip == null ? 0 : (_manualOnboardAdjustments[liveTrip.id] ?? 0),
@@ -545,6 +563,15 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               liveTrip,
               !(liveTrip.acceptRequests ?? true),
               ),
+          onDismissAlert: liveActiveAlerts.isEmpty
+            ? null
+            : () => _dismissDriveAlert(liveActiveAlerts.first.id),
+          onDismissRequirementMessage: liveOperationsMessage == null
+            ? null
+            : () => _dismissInfoMessage(liveOperationsMessage),
+          onDismissStatusMessage: liveStatusMessage == null
+            ? null
+            : () => _dismissInfoMessage(liveStatusMessage),
         );
         },
       height: mapHeight,
@@ -558,6 +585,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     final pickupRequirementMessage = focusedTrip == null
         ? null
         : _driverPickupRequirementMessage(trip: focusedTrip);
+    final visiblePickupRequirementMessage =
+      _visibleInfoMessage(pickupRequirementMessage);
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
@@ -569,8 +598,11 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           accent: const Color(0xFFE29B2D),
         ),
         const SizedBox(height: 16),
-        if (pickupRequirementMessage != null) ...[
-          _DriverStatusBanner(message: pickupRequirementMessage),
+        if (visiblePickupRequirementMessage != null) ...[
+          _DriverStatusBanner(
+            message: visiblePickupRequirementMessage,
+            onClose: () => _dismissInfoMessage(visiblePickupRequirementMessage),
+          ),
           const SizedBox(height: 16),
         ],
         if (focusedTrip == null)
@@ -594,13 +626,13 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               status: request.status,
               primaryLabel: request.status == 'pending' ? 'Acknowledge' : null,
               onPrimary: request.status == 'pending' &&
-                      pickupRequirementMessage == null
+                      visiblePickupRequirementMessage == null
                   ? () => _acknowledgeRequest(focusedTrip, request.id)
                   : null,
               secondaryLabel:
                   request.status == 'acknowledged' ? 'Complete pickup' : null,
               onSecondary: request.status == 'acknowledged' &&
-                      pickupRequirementMessage == null
+                      visiblePickupRequirementMessage == null
                   ? () => _completeRequest(focusedTrip, request)
                   : null,
               icon: Icons.person_pin_circle_outlined,
@@ -616,7 +648,10 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     required List<StopAlertModel> alerts,
     required List<RideSessionModel> rides,
   }) {
-    final recentNotifications = _notifications.take(5).toList();
+    final recentNotifications = _notifications
+      .where((item) => !_isNotificationDismissed(item.id))
+      .take(5)
+      .toList();
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -698,7 +733,10 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           )
         else
           for (final notification in recentNotifications) ...[
-            _NotificationCard(notification: notification),
+            _NotificationCard(
+              notification: notification,
+              onClose: () => _dismissNotification(notification.id),
+            ),
             const SizedBox(height: 12),
           ],
       ],
