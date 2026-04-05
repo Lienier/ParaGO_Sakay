@@ -4,6 +4,16 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 import '../core/config/app_config.dart';
 
+class GoogleLoginTokens {
+  const GoogleLoginTokens({
+    required this.googleIdToken,
+    required this.firebaseIdToken,
+  });
+
+  final String googleIdToken;
+  final String firebaseIdToken;
+}
+
 class FirebaseAuthService {
   GoogleSignIn _googleSignIn() => GoogleSignIn(
         serverClientId: AppConfig.hasGoogleClientId
@@ -11,7 +21,7 @@ class FirebaseAuthService {
             : null,
       );
 
-  Future<String?> signInWithGoogle() async {
+  Future<GoogleLoginTokens?> signInWithGoogleTokens() async {
     if (Firebase.apps.isEmpty) {
       throw Exception(
         'Firebase is not initialized for this build. Run FlutterFire configure '
@@ -28,8 +38,9 @@ class FirebaseAuthService {
     }
 
     final googleAuth = await account.authentication;
-    if ((googleAuth.idToken ?? '').isEmpty &&
-        (googleAuth.accessToken ?? '').isEmpty) {
+    final googleIdToken = googleAuth.idToken ?? '';
+    final googleAccessToken = googleAuth.accessToken ?? '';
+    if (googleIdToken.isEmpty && googleAccessToken.isEmpty) {
       throw Exception(
         'Google sign-in did not return usable credentials. Check that Google '
         'Auth is enabled in Firebase and the Android app SHA-1 is registered.',
@@ -49,7 +60,15 @@ class FirebaseAuthService {
           'Firebase did not return an authenticated session token.');
     }
 
-    return firebaseIdToken;
+    return GoogleLoginTokens(
+      googleIdToken: googleIdToken,
+      firebaseIdToken: firebaseIdToken!,
+    );
+  }
+
+  Future<String?> signInWithGoogle() async {
+    final tokens = await signInWithGoogleTokens();
+    return tokens?.firebaseIdToken;
   }
 
   Future<void> signOut() async {

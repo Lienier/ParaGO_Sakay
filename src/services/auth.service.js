@@ -401,33 +401,41 @@ const verifyGoogleToken = async (idToken) => {
 };
 
 const verifyFirebaseGoogleToken = async (idToken) => {
+  if (isFirebaseAdminConfigured()) {
+    try {
+      const auth = getFirebaseAuth();
+      const decoded = await auth.verifyIdToken(idToken);
+      if (!decoded?.uid || !decoded?.email) {
+        throw new ApiError(401, 'Invalid Firebase login token');
+      }
+
+      const provider = decoded.firebase?.sign_in_provider;
+      if (provider !== 'google.com') {
+        throw new ApiError(401, 'Firebase token is not a Google login session');
+      }
+
+      return {
+        providerId: decoded.uid,
+        email: decoded.email.toLowerCase(),
+        fullName: decoded.name || decoded.email.split('@')[0],
+      };
+    } catch (error) {
+      if (error instanceof ApiError) {
+        throw error;
+      }
+    }
+  }
+
+  const googleProfile = await verifyGoogleToken(idToken);
+  if (googleProfile) {
+    return googleProfile;
+  }
+
   if (!isFirebaseAdminConfigured()) {
     throw new ApiError(503, 'Firebase login is not configured on the server');
   }
 
-  try {
-    const auth = getFirebaseAuth();
-    const decoded = await auth.verifyIdToken(idToken);
-    if (!decoded?.uid || !decoded?.email) {
-      throw new ApiError(401, 'Invalid Firebase login token');
-    }
-
-    const provider = decoded.firebase?.sign_in_provider;
-    if (provider !== 'google.com') {
-      throw new ApiError(401, 'Firebase token is not a Google login session');
-    }
-
-    return {
-      providerId: decoded.uid,
-      email: decoded.email.toLowerCase(),
-      fullName: decoded.name || decoded.email.split('@')[0],
-    };
-  } catch (error) {
-    if (error instanceof ApiError) {
-      throw error;
-    }
-    throw new ApiError(401, 'Invalid Firebase login token');
-  }
+  throw new ApiError(401, 'Invalid Firebase login token');
 };
 
 const verifyFacebookToken = async (accessToken) => {
