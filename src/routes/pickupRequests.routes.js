@@ -27,6 +27,7 @@ const {
   pickupCurrentLocationMaxDistanceMeters,
   unloadRoadProximityMeters,
   tomtomApiKey,
+  jeepPassByReassignMeters,
 } = require('../config/env');
 const { ensureObjectId, ensureLatLng } = require('../utils/validators');
 const {
@@ -41,6 +42,7 @@ const {
   ensureDriverAssignedToTrip,
   ensurePassengerOwnsPickupRequest,
 } = require('../services/routeContext.service');
+const { checkAndReassignPassedRequests } = require('../services/pickupReassignment.service');
 
 const router = express.Router();
 
@@ -106,11 +108,13 @@ const reverseGeocodeLabel = async ({ latitude, longitude }) => {
 const resolveEligibleTripForRoute = async ({
   routeId,
   pickupLocation,
+  excludeTripIds = [],
 }) => {
   const trips = await TripSession.find({
     routeId,
     status: 'active',
     acceptRequests: true,
+    ...(excludeTripIds.length > 0 ? { _id: { $nin: excludeTripIds } } : {}),
   })
     .populate('driverId', 'userId isVerified status')
     .populate('jeepneyId', 'capacity status lastKnownLocation plateNumber jeepneyName')
@@ -197,6 +201,9 @@ router.post(
     const passenger = await requireCurrentPassenger(req.user, {
       notFoundMessage: 'Passenger profile not found',
     });
+
+    // Check and expire any requests where jeep has passed by
+    await checkAndReassignPassedRequests();
 
     if (!payload.routeId) {
       throw new ApiError(400, 'routeId is required');
@@ -289,29 +296,11 @@ router.post(
     }
 
     let trip;
-    if (payload.tripSessionId) {
-      ensureObjectId(payload.tripSessionId, 'tripSessionId');
-      trip = await requireTrip(payload.tripSessionId, {
-        populate: [
-          { path: 'driverId', select: 'userId isVerified status' },
-          {
-            path: 'jeepneyId',
-            select: 'capacity status lastKnownLocation plateNumber jeepneyName',
-          },
-        ],
-      });
-      if (trip.status !== 'active' || !trip.acceptRequests) {
-        throw new ApiError(409, 'Trip not active or not accepting requests');
-      }
-      if (String(trip.routeId) !== String(route._id)) {
-        throw new ApiError(400, 'Route does not match selected trip');
-      }
-    } else {
-      trip = await resolveEligibleTripForRoute({
-        routeId: route._id,
-        pickupLocation,
-      });
-    }
+    // Always use auto-assignment to find nearest available jeepney
+    trip = await resolveEligibleTripForRoute({
+      routeId: route._id,
+      pickupLocation,
+    });
 
     const pendingCount = await PickupRequest.countDocuments({
       tripSessionId: trip._id,

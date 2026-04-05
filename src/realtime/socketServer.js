@@ -7,6 +7,8 @@ let ioInstance = null;
 
 const toUserRoom = (userId) => `user:${String(userId)}`;
 const toRoleRoom = (role) => `role:${String(role || '').trim().toLowerCase()}`;
+const toRouteRoom = (routeId) => `route:${String(routeId)}`;
+const toTripRoom = (tripId) => `trip:${String(tripId)}`;
 
 const normalizeBaseOrigin = (origin) => {
   const raw = String(origin || '').trim();
@@ -113,6 +115,31 @@ const attachSocketServer = (httpServer, { corsOrigin = '*' } = {}) => {
         connectedAt: new Date().toISOString(),
       });
     }
+
+    // Allow clients to subscribe to route/trip updates
+    socket.on('subscribe.route', (routeId) => {
+      if (routeId) {
+        socket.join(toRouteRoom(routeId));
+      }
+    });
+
+    socket.on('subscribe.trip', (tripId) => {
+      if (tripId) {
+        socket.join(toTripRoom(tripId));
+      }
+    });
+
+    socket.on('unsubscribe.route', (routeId) => {
+      if (routeId) {
+        socket.leave(toRouteRoom(routeId));
+      }
+    });
+
+    socket.on('unsubscribe.trip', (tripId) => {
+      if (tripId) {
+        socket.leave(toTripRoom(tripId));
+      }
+    });
   });
 
   ioInstance = io;
@@ -140,11 +167,72 @@ const emitOperationsChanged = (payload = {}) => {
   emitToRole('admin', 'ops.changed', payload);
 };
 
+const toRouteRoom = (routeId) => `route:${String(routeId)}`;
+const toTripRoom = (tripId) => `trip:${String(tripId)}`;
+
+const joinRouteRoom = (socket, routeId) => {
+  if (!socket || !routeId) return;
+  socket.join(toRouteRoom(routeId));
+};
+
+const joinTripRoom = (socket, tripId) => {
+  if (!socket || !tripId) return;
+  socket.join(toTripRoom(tripId));
+};
+
+const emitToRoute = (routeId, eventName, payload) => {
+  if (!ioInstance || !routeId || !eventName) return;
+  ioInstance.to(toRouteRoom(routeId)).emit(eventName, payload);
+};
+
+const emitToTrip = (tripId, eventName, payload) => {
+  if (!ioInstance || !tripId || !eventName) return;
+  ioInstance.to(toTripRoom(tripId)).emit(eventName, payload);
+};
+
+const emitJeepneyLocationUpdate = ({
+  tripId,
+  routeId,
+  jeepneyId,
+  latitude,
+  longitude,
+  timestamp,
+}) => {
+  if (!ioInstance) return;
+  
+  const payload = {
+    tripId: String(tripId || ''),
+    routeId: String(routeId || ''),
+    jeepneyId: String(jeepneyId || ''),
+    latitude: Number(latitude),
+    longitude: Number(longitude),
+    timestamp: timestamp || new Date().toISOString(),
+  };
+
+  // Broadcast to all passengers watching this route
+  if (routeId) {
+    emitToRoute(routeId, 'jeepney.location.updated', payload);
+  }
+  
+  // Broadcast to all passengers/drivers on this specific trip
+  if (tripId) {
+    emitToTrip(tripId, 'jeepney.location.updated', payload);
+  }
+  
+  // Broadcast to all passengers (for active trips view)
+  emitToRole('passenger', 'jeepney.location.updated', payload);
+};
+
 module.exports = {
   attachSocketServer,
   emitNotificationCreated,
   emitOperationsChanged,
+  emitJeepneyLocationUpdate,
   emitToRole,
   emitToUser,
+  emitToRoute,
+  emitToTrip,
+  joinRouteRoom,
+  joinTripRoom,
   getSocketServer: () => ioInstance,
 };

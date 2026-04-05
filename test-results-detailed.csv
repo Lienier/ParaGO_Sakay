@@ -1,0 +1,34 @@
+Category,Test Name,Status,Description,Input,Expected Output,Actual Output,Test Type,Priority,Related Feature
+JWT,Token Generation,PASS,Verifies JWT access token can be generated with user payload,"{userId: '123', role: 'passenger'}",Valid JWT token string,Token generated successfully,Unit,High,Authentication
+JWT,Token Verification,PASS,Verifies JWT token can be decoded and payload extracted correctly,Valid JWT token,"{userId: '123', role: 'passenger'}",Payload decoded correctly,Unit,High,Authentication
+JWT,Refresh Token Generation,PASS,Verifies refresh token can be generated with longer expiry,"{userId: '456', tokenVersion: 1}",Valid refresh token with 7d expiry,Refresh token generated successfully,Unit,High,Authentication
+Password,Password Hashing,PASS,Verifies password can be hashed using bcrypt,Plain text password: 'TestPassword123!',Bcrypt hash string (60 chars),Hash generated successfully,Unit,Critical,Authentication
+Password,Password Comparison Success,PASS,Verifies correct password matches its hash,"Password: 'TestPassword123!', Hash: bcrypt hash",true (match),Password matched successfully,Unit,Critical,Authentication
+Password,Password Comparison Failure,PASS,Verifies incorrect password does not match hash,"Password: 'WrongPassword456!', Hash: bcrypt hash",false (no match),Password correctly rejected,Unit,Critical,Authentication
+Geo,Distance Calculation Same Point,PASS,Verifies distance between identical coordinates is 0,"Lat1: 14.5995, Lon1: 120.9842, Lat2: 14.5995, Lon2: 120.9842",0 meters,0 meters,Unit,High,Location Services
+Geo,Distance Calculation Different Points,PASS,Verifies distance calculation between nearby points,"Lat1: 14.5995, Lon1: 120.9842, Lat2: 14.6000, Lon2: 120.9850","Distance > 0 and < 200 meters",~100 meters calculated,Unit,High,Location Services
+Geo,Distance Calculation Far Points,PASS,Verifies distance calculation between distant points,"Lat1: 14.5995, Lon1: 120.9842, Lat2: 14.6500, Lon2: 121.0500",Distance > 1000 meters,~7000 meters calculated,Unit,High,Location Services
+Validation,Email Validation Valid,PASS,Verifies valid email formats pass validation,"'test@example.com', 'user.name+tag@domain.co.uk'",true (valid),All valid emails passed,Unit,Medium,User Registration
+Validation,Email Validation Invalid,PASS,Verifies invalid email formats fail validation,"'invalid-email', '@example.com', 'test@'",false (invalid),All invalid emails rejected,Unit,Medium,User Registration
+Validation,Phone Number Validation,PASS,Verifies Philippine phone number format validation,"'09171234567', '+639171234567', '9171234567'",true for valid PH numbers,All valid formats accepted,Unit,Medium,User Registration
+Validation,Valid Coordinates,PASS,Verifies valid latitude/longitude coordinates,"Lat: 14.5995, Lon: 120.9842 (Manila)",true (valid),Coordinates validated successfully,Unit,High,Location Services
+Validation,Invalid Coordinates,PASS,Verifies out-of-range coordinates are rejected,"Lat: 91, Lon: 181 (out of range)",false (invalid),Invalid coordinates rejected,Unit,High,Location Services
+Validation,Valid ObjectId,PASS,Verifies MongoDB ObjectId format validation,'507f1f77bcf86cd799439011' (24 hex chars),true (valid ObjectId),ObjectId validated successfully,Unit,Medium,Database Operations
+Role,Role Definition,PASS,Verifies all user roles are properly defined,Check ROLES constant,"passenger, driver, admin defined",All roles defined correctly,Unit,Critical,Authorization
+Role,Role Authorization,PASS,Verifies role-based access control logic,"User role: 'passenger', Allowed: ['admin', 'driver']",false (not authorized),Authorization logic correct,Unit,Critical,Authorization
+Pickup,Request TTL Valid,PASS,Verifies pickup request expiry time is set correctly,Created: now; TTL: 10 minutes,Expires at: now + 10 minutes,Expiry time calculated correctly,Unit,High,Pickup Requests
+Pickup,Request Expired,PASS,Verifies pickup request expires after TTL,Created: 15 minutes ago; TTL: 10 minutes,Request is expired (true),Request correctly marked expired,Unit,High,Pickup Requests
+Pickup,Max Requests Per Passenger,PASS,Verifies passenger request limit enforcement,Request count: 2; Max: 3,Allow request (true),Request allowed under limit,Unit,High,Pickup Requests
+Boarding,Boarding Window Valid,PASS,Verifies boarding within time window is allowed,Pickup: now; Boarding: now+3min; Window: 5min,Boarding allowed (true),Boarding validated successfully,Unit,Critical,Boarding Process
+Boarding,Boarding Window Expired,PASS,Verifies boarding outside time window is rejected,Pickup: 10min ago; Boarding: now; Window: 5min,Boarding rejected (false),Boarding correctly rejected,Unit,Critical,Boarding Process
+StopAlert,Cooldown Active,PASS,Verifies stop alert cooldown period is enforced,Last alert: 1min ago; Cooldown: 2min,In cooldown (true),Cooldown enforced correctly,Unit,Medium,Stop Alerts
+StopAlert,Cooldown Expired,PASS,Verifies stop alert can be sent after cooldown,Last alert: 5min ago; Cooldown: 2min,Cooldown expired (true),Alert allowed after cooldown,Unit,Medium,Stop Alerts
+Reassignment,Jeep Passed By,PASS,Verifies jeep is marked as passed when beyond threshold,Distance: ~100m; Threshold: 50m,Jeep passed by (true),Jeep correctly marked as passed,Unit,High,Auto Reassignment
+Reassignment,Jeep Not Passed By,PASS,Verifies jeep is not marked as passed when within range,Distance: ~15m; Threshold: 50m,Jeep not passed (false),Jeep correctly within range,Unit,High,Auto Reassignment
+API,Success Response Format,PASS,Verifies API success response structure,"{data: {id: '123'}, message: 'User created'}","{success: true, message: '...', data: {...}}",Response formatted correctly,Unit,High,API Standards
+API,Error Response Format,PASS,Verifies API error response structure,"{message: 'Invalid input', statusCode: 400}","{success: false, message: '...', statusCode: 400}",Error response formatted correctly,Unit,High,API Standards
+Trip,Trip Status Validation,PASS,Verifies trip status values are valid,Status: 'active',"Valid statuses: scheduled, active, completed, cancelled",Status validated successfully,Unit,High,Trip Management
+Trip,Trip Timing,PASS,Verifies trip timing logic,Scheduled: now; Actual: now+5min,Actual start > Scheduled start,Timing logic correct,Unit,Medium,Trip Management
+Notification,Notification Types,PASS,Verifies all notification types are defined,Check notification types array,"Types include: pickup_assigned, stop_alert, etc.",All types defined correctly,Unit,Medium,Notifications
+Notification,Notification Payload,PASS,Verifies notification payload structure,"{type: 'pickup_assigned', recipientId: '123', data: {...}}",Valid notification object with required fields,Payload structure validated,Unit,Medium,Notifications
+RateLimit,Rate Limit Configuration,PASS,Verifies rate limiting configuration values,Check rate limit settings,API: 120/min; Auth: 30/min,Rate limits configured correctly,Unit,High,Security

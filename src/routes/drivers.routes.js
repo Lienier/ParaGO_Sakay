@@ -12,6 +12,7 @@ const { ensureLatLng } = require('../utils/validators');
 const { hasOwn } = require('../utils/object');
 const validateObjectId = require('../middlewares/validateObjectId');
 const { requireCurrentDriver } = require('../services/routeContext.service');
+const { emitJeepneyLocationUpdate } = require('../realtime/socketServer');
 
 const router = express.Router();
 
@@ -141,6 +142,24 @@ const updateDriverJeepneyLocation = async (req, res) => {
   );
   if (!jeepney) {
     throw new ApiError(404, 'Jeepney location target not found');
+  }
+
+  // Find active trip for this jeepney to broadcast location
+  const activeTrip = await TripSession.findOne({
+    jeepneyId: jeepneyId,
+    status: 'active',
+  }).select('_id routeId');
+
+  // Broadcast location update via WebSocket
+  if (activeTrip) {
+    emitJeepneyLocationUpdate({
+      tripId: activeTrip._id.toString(),
+      routeId: activeTrip.routeId?.toString() || '',
+      jeepneyId: jeepneyId.toString(),
+      latitude: Number(body.lat),
+      longitude: Number(body.lng),
+      timestamp: new Date().toISOString(),
+    });
   }
 
   return ok(res, jeepney, 'Location updated');

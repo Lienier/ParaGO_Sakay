@@ -58,6 +58,7 @@ It implements a modular backend for passenger/driver/admin roles with:
 - `STOP_ALERT_COOLDOWN_MINUTES`
 - `PICKUP_REQUEST_TTL_MINUTES`
 - `MAX_REQUESTS_PER_PASSENGER_PER_TRIP`
+- `JEEP_PASS_BY_REASSIGN_METERS`
 - `GOOGLE_CLIENT_IDS`
 - `FACEBOOK_APP_TOKEN`
 - `FIREBASE_PROJECT_ID`
@@ -105,5 +106,12 @@ It implements a modular backend for passenger/driver/admin roles with:
   - pending/acknowledged request state
   - pickup request expiry
   - optional proximity check when coordinates are provided
+- Automatic jeep reassignment:
+  - Passengers always see all active jeeps on the road via `/api/v1/trips/active`
+  - Pickup requests are automatically assigned to the nearest available jeepney
+  - Manual trip selection has been removed - system always auto-assigns
+  - Background job runs every 15 seconds to check if assigned jeeps have passed by pickup locations
+  - If jeep passes by more than `JEEP_PASS_BY_REASSIGN_METERS` (default 50m), request is auto-expired
+  - Passenger is notified and can create a new request which will be assigned to the next nearest jeep
 - This scaffold is intentionally kept minimal to support iterative thesis development.
 - In development mode, `forgot-password` returns a temporary reset token in response so thesis testing can proceed without SMTP setup.

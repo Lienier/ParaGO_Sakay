@@ -69,6 +69,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   String? _syncMessage;
   Timer? _liveRefreshTimer;
   StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
+  StreamSubscription<Map<String, dynamic>>? _realtimeLocationSubscription;
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
   bool _locatingPassenger = false;
@@ -91,6 +92,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   final DraggableScrollableController _sheetController =
       DraggableScrollableController();
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   OverlayEntry? _mapPromptOverlayEntry;
   Timer? _mapPromptOverlayTimer;
 
@@ -335,7 +337,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   void _startLiveRefreshLoop() {
     _liveRefreshTimer?.cancel();
-    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
       if (!mounted || _silentRefreshActive) {
         return;
       }
@@ -1933,13 +1935,39 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       for (var index = 0; index < stops.length; index += 1)
         Marker(
           point: stops[index].position,
-          width: 172,
-          height: 76,
-          alignment: Alignment.topCenter,
-          child: _PassengerMapPin(
-            label: '${index + 1}. ${stops[index].name}',
-            icon: Icons.place,
-            color: const Color(0xFF8A3B5D),
+          width: 32,
+          height: 32,
+          alignment: Alignment.center,
+          child: GestureDetector(
+            onTap: () {
+              _showLandmarkDetails(stops[index], index + 1);
+            },
+            child: Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: const Color(0xFF8A3B5D),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 3),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.20),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Center(
+                child: Text(
+                  '${index + 1}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
     ];
@@ -1958,6 +1986,149 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       default:
         return ParagoFormat.statusLabel(request.status);
     }
+  }
+
+  Future<void> _showLandmarkDetails(RouteStopPoint stop, int stopNumber) async {
+    final selectedRoute = _selectedRoute;
+    if (selectedRoute == null) return;
+
+    final canSetAsUnload = _draftPickupPoint != null &&
+        _isUnloadAfterPickup(selectedRoute, _draftPickupPoint!, stop.position);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: Colors.white,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF8A3B5D),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 3),
+                      ),
+                      child: Center(
+                        child: Text(
+                          '$stopNumber',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            stop.name,
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleLarge
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Stop #$stopNumber on ${selectedRoute.name}',
+                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  color: const Color(0xFF67726E),
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF6F7F2),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _DetailRow(
+                        label: 'Coordinates',
+                        value:
+                            '${stop.position.latitude.toStringAsFixed(5)}, ${stop.position.longitude.toStringAsFixed(5)}',
+                      ),
+                      _DetailRow(
+                        label: 'Stop order',
+                        value: '${stop.order}',
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+                if (canSetAsUnload)
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        setState(() {
+                          _draftUnloadPoint = stop.position;
+                          _draftUnloadLabel = stop.name;
+                          _mapSelectionMode = _PassengerMapSelectionMode.unload;
+                          _statusMessage =
+                              'Unload point set to ${stop.name}. You can now book this route.';
+                        });
+                      },
+                      icon: const Icon(Icons.flag_circle),
+                      label: const Text('Set as unload point'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFFD84315),
+                      ),
+                    ),
+                  )
+                else
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFDF7E8),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: const Color(0xFFFFE1A6)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.info_outline,
+                          color: Color(0xFFE29B2D),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            _draftPickupPoint == null
+                                ? 'Set your pickup point first before selecting an unload stop.'
+                                : 'This stop comes before your pickup point. Choose a stop further along the route.',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   bool _canCancelRequest(PickupRequestModel request) {
@@ -2008,19 +2179,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           ),
     ];
 
-    if (_currentPassengerLocation != null) {
-      tripMarkers.add(
-        Marker(
-          point: _currentPassengerLocation!,
-          width: 180,
-          height: 42,
-          alignment: Alignment.topCenter,
-          child: const _PassengerMapLabel(
-            label: 'Your location',
-          ),
-        ),
-      );
-    }
+
 
     if (_draftPickupPoint != null) {
       tripMarkers.add(
@@ -2148,19 +2307,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           ),
     ];
 
-    if (_currentPassengerLocation != null) {
-      tripMarkers.add(
-        Marker(
-          point: _currentPassengerLocation!,
-          width: 180,
-          height: 42,
-          alignment: Alignment.topCenter,
-          child: const _PassengerMapLabel(
-            label: 'Your current location',
-          ),
-        ),
-      );
-    }
+
 
     if (_draftPickupPoint != null) {
       tripMarkers.add(
@@ -2428,6 +2575,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   void dispose() {
     _liveRefreshTimer?.cancel();
     _realtimeNotificationSubscription?.cancel();
+    _realtimeLocationSubscription?.cancel();
     _dismissMapPromptNotification();
     _realtimeSocketService.dispose();
     super.dispose();
@@ -2441,14 +2589,27 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
 
     _realtimeNotificationSubscription?.cancel();
+    _realtimeLocationSubscription?.cancel();
+    
     _realtimeNotificationSubscription =
         _realtimeSocketService.notificationCreatedStream.listen(
       _handleRealtimeSocketNotification,
     );
+    
+    _realtimeLocationSubscription =
+        _realtimeSocketService.jeepneyLocationStream.listen(
+      _handleRealtimeLocationUpdate,
+    );
+    
     _realtimeSocketService.connect(
       apiBaseUrl: session.apiClient.baseUrl,
       token: token,
     );
+    
+    // Subscribe to selected route for location updates
+    if (_selectedRouteId != null && _selectedRouteId!.isNotEmpty) {
+      _realtimeSocketService.subscribeToRoute(_selectedRouteId!);
+    }
   }
 
   Future<void> _handleRealtimeSocketNotification(
@@ -2477,6 +2638,44 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     if (!alreadyKnown) {
       _showPassengerRealtimeSnackBar(notification);
     }
+  }
+
+  Future<void> _handleRealtimeLocationUpdate(
+    Map<String, dynamic> event,
+  ) async {
+    if (!mounted) {
+      return;
+    }
+
+    final tripId = event['tripId']?.toString() ?? '';
+    final latitude = _parseDouble(event['latitude']);
+    final longitude = _parseDouble(event['longitude']);
+
+    if (tripId.isEmpty || latitude == null || longitude == null) {
+      return;
+    }
+
+    // Update trip location in memory
+    setState(() {
+      final tripIndex = _trips.indexWhere((trip) => trip.id == tripId);
+      if (tripIndex >= 0) {
+        final updatedTrip = _trips[tripIndex].copyWith(
+          jeepneyLatitude: latitude,
+          jeepneyLongitude: longitude,
+        );
+        _trips = [
+          ..._trips.sublist(0, tripIndex),
+          updatedTrip,
+          ..._trips.sublist(tripIndex + 1),
+        ];
+      }
+    });
+  }
+
+  double? _parseDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value);
+    return null;
   }
 
   Future<void> _refreshFromSocketEvent() async {
@@ -2549,6 +2748,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         await _refreshPassengerData();
         return;
     }
+  }
+
+  void _openSideDrawer() {
+    _scaffoldKey.currentState?.openDrawer();
   }
 
   Future<void> _refreshPassengerData() async {
@@ -2866,6 +3069,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   void _selectPassengerRoute(String routeId) {
     final nextRoute = _routeById(routeId);
+    
+    // Unsubscribe from previous route
+    if (_selectedRouteId != null && _selectedRouteId != routeId) {
+      _realtimeSocketService.unsubscribeFromRoute(_selectedRouteId!);
+    }
+    
     setState(() {
       _selectedRouteId = routeId;
       _selectedTripId = _preferredTripIdForRoute(
@@ -2882,6 +3091,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           ? _statusMessage
           : 'Map updated for ${nextRoute.label}. Pin your pickup point first.';
     });
+    
+    // Subscribe to new route for real-time location updates
+    _realtimeSocketService.subscribeToRoute(routeId);
 
     final center = _routeCenter(nextRoute);
     if (center != null) {
@@ -3164,6 +3376,590 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       return 'Sync pending';
     }
     return 'Last synced ${ParagoFormat.relative(_lastPassengerSyncAt!.toIso8601String())}';
+  }
+
+  Widget _buildSideDrawer({required SessionController session}) {
+    return Drawer(
+      backgroundColor: const Color(0xFFFFFEFB),
+      child: SafeArea(
+        child: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    Theme.of(context).colorScheme.primary,
+                    const Color(0xFF2157A5),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CircleAvatar(
+                    radius: 32,
+                    backgroundColor: Colors.white.withValues(alpha: 0.25),
+                    child: Icon(
+                      Icons.person,
+                      size: 36,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    session.user?.fullName ?? 'Passenger',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                        ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    session.user?.email ?? '',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Colors.white.withValues(alpha: 0.90),
+                        ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                children: [
+                  ListTile(
+                    leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEAF5F2),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.history_rounded,
+                        color: Color(0xFF0F6A5F),
+                      ),
+                    ),
+                    title: const Text(
+                      'History',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      '${_requests.length} booking${_requests.length == 1 ? '' : 's'}, ${_rides.length} ride${_rides.length == 1 ? '' : 's'}',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showHistoryBottomSheet();
+                    },
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF1D6),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.bookmark_rounded,
+                        color: Color(0xFFE29B2D),
+                      ),
+                    ),
+                    title: const Text(
+                      'Saved Places',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: const Text('Manage favorite locations'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showSavedPlacesBottomSheet();
+                    },
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE8F0FF),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.support_agent_rounded,
+                        color: Color(0xFF2157A5),
+                      ),
+                    ),
+                    title: const Text(
+                      'Support',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: const Text('Help & contact information'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showSupportBottomSheet();
+                    },
+                  ),
+                  const Divider(height: 1),
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      'ACCOUNT',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: const Color(0xFF8A928F),
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ListTile(
+                    leading: const Icon(Icons.settings_outlined),
+                    title: const Text('Profile & Settings'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      unawaited(_openProfileSettings(session));
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.refresh_outlined),
+                    title: const Text('Refresh Data'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      unawaited(_refreshPassengerData());
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.logout_outlined),
+                    title: const Text('Log Out'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      session.logout();
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showHistoryBottomSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: Colors.white,
+      builder: (context) {
+        return SafeArea(
+          child: DraggableScrollableSheet(
+            initialChildSize: 0.85,
+            minChildSize: 0.5,
+            maxChildSize: 0.95,
+            expand: false,
+            builder: (context, scrollController) {
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Ride History',
+                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Your recent bookings and completed rides',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: const Color(0xFF67726E),
+                          ),
+                    ),
+                    const SizedBox(height: 20),
+                    Expanded(
+                      child: ListView(
+                        controller: scrollController,
+                        children: [
+                          if (_requests.isEmpty && _rides.isEmpty)
+                            Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(40),
+                                child: Column(
+                                  children: [
+                                    Icon(
+                                      Icons.history_rounded,
+                                      size: 64,
+                                      color: const Color(0xFFD9DDD7),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Text(
+                                      'No history yet',
+                                      style: Theme.of(context).textTheme.titleMedium,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'Your bookings and rides will appear here',
+                                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                            color: const Color(0xFF67726E),
+                                          ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          if (_requests.isNotEmpty || _rides.isNotEmpty) ...[
+                            Text(
+                              'BOOKINGS',
+                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: const Color(0xFF8A928F),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                            const SizedBox(height: 12),
+                            for (final request in _requests) ...[
+                              Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF8F8F5),
+                                  borderRadius: BorderRadius.circular(18),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            request.stopRef ?? 'Booking request',
+                                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                          ),
+                                        ),
+                                        StatusBadge(status: request.status),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      _bookingStateText(request),
+                                      style: Theme.of(context).textTheme.bodyMedium,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      ParagoFormat.relative(request.createdAt),
+                                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                            color: const Color(0xFF67726E),
+                                          ),
+                                    ),
+                                    if (_canCancelRequest(request)) ...[
+                                      const SizedBox(height: 12),
+                                      TextButton.icon(
+                                        onPressed: () {
+                                          Navigator.of(context).pop();
+                                          unawaited(_cancelRequest(request.id));
+                                        },
+                                        icon: const Icon(Icons.close),
+                                        label: const Text('Cancel booking'),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 20),
+                            Text(
+                              'RIDES',
+                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: const Color(0xFF8A928F),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                            const SizedBox(height: 12),
+                            for (final ride in _rides) ...[
+                              Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF8F8F5),
+                                  borderRadius: BorderRadius.circular(18),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            ride.destinationStopRef ?? 'Ride session',
+                                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                          ),
+                                        ),
+                                        StatusBadge(status: ride.status),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      _rideStatusMessage(ride),
+                                      style: Theme.of(context).textTheme.bodyMedium,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'Boarded ${ParagoFormat.relative(ride.boardedAt)}',
+                                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                            color: const Color(0xFF67726E),
+                                          ),
+                                    ),
+                                    if (ride.estimatedFare != null) ...[
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        'Fare: ${_formatFareAmount(ride.estimatedFare)}',
+                                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showSavedPlacesBottomSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: Colors.white,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Saved Places',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Quick access to your favorite locations',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: const Color(0xFF67726E),
+                      ),
+                ),
+                const SizedBox(height: 24),
+                Center(
+                  child: Column(
+                    children: [
+                      Icon(
+                        Icons.bookmark_border_rounded,
+                        size: 64,
+                        color: const Color(0xFFD9DDD7),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'No saved places yet',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Save your home, work, and frequently visited locations for faster booking',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: const Color(0xFF67726E),
+                            ),
+                      ),
+                      const SizedBox(height: 24),
+                      FilledButton.icon(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Saved places feature coming soon'),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.add_location_alt_outlined),
+                        label: const Text('Add a place'),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 40),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showSupportBottomSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: Colors.white,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Support',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Get help with your ParaGO experience',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: const Color(0xFF67726E),
+                      ),
+                ),
+                const SizedBox(height: 24),
+                Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEAF5F2),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0F6A5F),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: const Icon(
+                              Icons.support_agent_rounded,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Need assistance?',
+                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'We\'re here to help',
+                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                        color: const Color(0xFF4E5A56),
+                                      ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      _SupportTile(
+                        icon: Icons.email_outlined,
+                        title: 'Email Support',
+                        subtitle: 'support@parago.com',
+                        onTap: () {},
+                      ),
+                      const SizedBox(height: 12),
+                      _SupportTile(
+                        icon: Icons.phone_outlined,
+                        title: 'Hotline',
+                        subtitle: '+63 XXX XXX XXXX',
+                        onTap: () {},
+                      ),
+                      const SizedBox(height: 12),
+                      _SupportTile(
+                        icon: Icons.help_outline_rounded,
+                        title: 'FAQs',
+                        subtitle: 'Common questions answered',
+                        onTap: () {},
+                      ),
+                      const SizedBox(height: 12),
+                      _SupportTile(
+                        icon: Icons.info_outline_rounded,
+                        title: 'About ParaGO',
+                        subtitle: 'Version 1.0.0 (Thesis)',
+                        onTap: () {},
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFDF7E8),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: const Color(0xFFFFE1A6)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.info_outline,
+                        color: Color(0xFFE29B2D),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'This is a thesis project for transportation support system research.',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   String _routeQuickMeta(RouteSummaryModel route) {
@@ -3888,121 +4684,20 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                           ] else ...[
                             const SizedBox(height: 8),
                             if (_statusMessage != null) ...[
-                              _InfoBanner(message: _statusMessage!),
+                              _InfoBanner(
+                                message: _statusMessage!,
+                                onClose: () {
+                                  setState(() => _statusMessage = null);
+                                },
+                              ),
                               const SizedBox(height: 16),
                             ],
-                            if (_syncMessage != null &&
-                                _syncMessage != _statusMessage) ...[
-                              _InfoBanner(message: _syncMessage!),
-                              const SizedBox(height: 16),
-                            ],
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 10,
-                              children: [
-                                _buildSummaryChip(
-                                  label: 'Live jeeps',
-                                  value: '${routeTrips.length}',
-                                  icon: Icons.directions_bus_filled_outlined,
-                                ),
-                                _buildSummaryChip(
-                                  label: 'Bookings',
-                                  value: '$pendingCount',
-                                  icon: Icons.event_seat_outlined,
-                                ),
-                                _buildSummaryChip(
-                                  label: 'Onboard',
-                                  value: '$onboardCount',
-                                  icon: Icons.pin_drop_outlined,
-                                ),
-                                _buildSummaryChip(
-                                  label: 'Alerts',
-                                  value: '$unreadCount',
-                                  icon: Icons.notifications_active_outlined,
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 20),
-                            _buildSelectedRouteCard(
-                              selectedRoute: selectedRoute,
-                              selectedTrip: selectedTrip,
-                              selectedBooking: selectedBooking,
-                              routeTrips: routeTrips,
-                            ),
-                            const SizedBox(height: 16),
-                            _buildLiveTrackingCard(
-                              selectedRoute: selectedRoute,
-                              selectedTrip: selectedTrip,
-                              activeRide: activeRide,
-                              selectedBooking: selectedBooking,
-                            ),
-                            const SizedBox(height: 16),
                             PassengerPrimaryButton(
                               label: 'Request pickup',
                               icon: Icons.near_me_rounded,
                               onPressed: _loading ? null : _sendPickup,
                             ),
-                            const SizedBox(height: 22),
-                            PassengerSectionHeading(
-                              title: 'Quick routes',
-                              actionLabel: 'SEE ALL',
-                              onActionPressed: () {
-                                unawaited(_openRoutePicker());
-                              },
-                            ),
-                            const SizedBox(height: 10),
-                            if (quickRoutes.isEmpty)
-                              Container(
-                                padding: const EdgeInsets.all(18),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF8F8F5),
-                                  borderRadius: BorderRadius.circular(24),
-                                ),
-                                child: const Text(
-                                  'Quick routes will appear here once route data is available.',
-                                ),
-                              )
-                            else
-                              GridView.builder(
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                itemCount: quickRoutes.length,
-                                gridDelegate:
-                                    const SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: 2,
-                                  crossAxisSpacing: 12,
-                                  mainAxisSpacing: 12,
-                                  childAspectRatio: 1.02,
-                                ),
-                                itemBuilder: (context, index) {
-                                  final route = quickRoutes[index];
-                                  final colors = <Color>[
-                                    const Color(0xFF0F6A5F),
-                                    const Color(0xFF2157A5),
-                                    const Color(0xFFE29B2D),
-                                    const Color(0xFF8C5E12),
-                                  ];
-                                  final icons = <IconData>[
-                                    Icons.home_rounded,
-                                    Icons.work_rounded,
-                                    Icons.route_rounded,
-                                    Icons.place_rounded,
-                                  ];
-                                  return PassengerQuickRouteCard(
-                                    title: route.name,
-                                    subtitle: route.code,
-                                    meta: _routeQuickMeta(route),
-                                    icon: icons[index % icons.length],
-                                    color: colors[index % colors.length],
-                                    selected: route.id == selectedRoute?.id,
-                                    onTap: () =>
-                                        _selectPassengerRoute(route.id),
-                                  );
-                                },
-                              ),
-                            const SizedBox(height: 22),
-                            PassengerSectionHeading(title: 'Ride actions'),
-                            const SizedBox(height: 10),
+                            const SizedBox(height: 12),
                             PassengerSecondaryActionCard(
                               icon: Icons.fact_check_outlined,
                               title: 'I boarded',
@@ -4042,77 +4737,45 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                               const SizedBox(height: 14),
                               const LinearProgressIndicator(),
                             ],
-                            const SizedBox(height: 22),
-                            _buildRideSnapshotCard(displayRide),
-                            const SizedBox(height: 22),
-                            PassengerSectionHeading(title: 'Recent trips'),
-                            const SizedBox(height: 10),
-                            if (recentRequests.isEmpty)
+                            if (displayRide != null) ...[
+                              const SizedBox(height: 20),
                               Container(
                                 padding: const EdgeInsets.all(18),
                                 decoration: BoxDecoration(
                                   color: const Color(0xFFF8F8F5),
                                   borderRadius: BorderRadius.circular(24),
                                 ),
-                                child: const Text(
-                                  'Your recent bookings and ride history will show up here.',
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            'Current Ride',
+                                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                          ),
+                                        ),
+                                        StatusBadge(status: displayRide.status),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      displayRide.destinationStopRef ?? 'Ride in progress',
+                                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      _rideStatusMessage(displayRide),
+                                      style: Theme.of(context).textTheme.bodyMedium,
+                                    ),
+                                  ],
                                 ),
-                              )
-                            else
-                              for (final request in recentRequests.take(3)) ...[
-                                PassengerActivityTile(
-                                  icon: Icons.history_rounded,
-                                  title: request.destinationStopRef ??
-                                      request.stopRef ??
-                                      'Recent booking',
-                                  subtitle:
-                                      '${_bookingStateText(request)} · ${ParagoFormat.relative(request.createdAt)}',
-                                  trailing: _canCancelRequest(request)
-                                      ? TextButton(
-                                          onPressed: _loading
-                                              ? null
-                                              : () =>
-                                                  _cancelRequest(request.id),
-                                          child: const Text('Cancel'),
-                                        )
-                                      : StatusBadge(status: request.status),
-                                ),
-                                const SizedBox(height: 12),
-                              ],
-                            if (_notifications.isNotEmpty) ...[
-                              const SizedBox(height: 10),
-                              PassengerSectionHeading(
-                                title: 'Alerts',
-                                actionLabel:
-                                    unreadCount == 0 ? null : 'MARK ALL',
-                                onActionPressed: unreadCount == 0
-                                    ? null
-                                    : () {
-                                        unawaited(_markAllRead());
-                                      },
                               ),
-                              const SizedBox(height: 10),
-                              for (final notification
-                                  in _notifications.take(2)) ...[
-                                PassengerActivityTile(
-                                  icon: notification.isRead
-                                      ? Icons.mark_email_read_outlined
-                                      : Icons.notifications_active_outlined,
-                                  title: notification.title,
-                                  subtitle:
-                                      '${notification.body} · ${ParagoFormat.relative(notification.createdAt)}',
-                                  trailing: Icon(
-                                    notification.isRead
-                                        ? Icons.done_all_rounded
-                                        : Icons.circle,
-                                    size: notification.isRead ? 20 : 10,
-                                    color: notification.isRead
-                                        ? const Color(0xFF95A09B)
-                                        : const Color(0xFF0F6A5F),
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                              ],
                             ],
                           ],
                         ],
@@ -4159,7 +4822,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
     if (showDashboardRedesign) {
       return Scaffold(
+        key: _scaffoldKey,
         backgroundColor: const Color(0xFFEAF1ED),
+        drawer: _buildSideDrawer(session: session),
         body: Stack(
           children: [
             Positioned.fill(
@@ -4195,7 +4860,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                   children: [
                     PassengerDashboardTopBar(
                       unreadCount: unreadCount,
-                      onMenuPressed: _expandPassengerSheet,
+                      onMenuPressed: _openSideDrawer,
                       onRefreshPressed: () {
                         _showMapPromptNotification(route: selectedRoute);
                         unawaited(_refreshPassengerData());
@@ -4350,11 +5015,21 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
             ),
             if (_statusMessage != null) ...[
               const SizedBox(height: 16),
-              _InfoBanner(message: _statusMessage!),
+              _InfoBanner(
+                message: _statusMessage!,
+                onClose: () {
+                  setState(() => _statusMessage = null);
+                },
+              ),
             ],
             if (_syncMessage != null && _syncMessage != _statusMessage) ...[
               const SizedBox(height: 16),
-              _InfoBanner(message: _syncMessage!),
+              _InfoBanner(
+                message: _syncMessage!,
+                onClose: () {
+                  setState(() => _syncMessage = null);
+                },
+              ),
             ],
             const SizedBox(height: 18),
             LayoutBuilder(
@@ -5057,9 +5732,10 @@ class _RoleHero extends StatelessWidget {
 }
 
 class _InfoBanner extends StatelessWidget {
-  const _InfoBanner({required this.message});
+  const _InfoBanner({required this.message, this.onClose});
 
   final String message;
+  final VoidCallback? onClose;
 
   @override
   Widget build(BuildContext context) {
@@ -5083,6 +5759,19 @@ class _InfoBanner extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
+          if (onClose != null) ...[
+            const SizedBox(width: 8),
+            IconButton(
+              icon: const Icon(Icons.close, size: 20),
+              onPressed: onClose,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(
+                minWidth: 32,
+                minHeight: 32,
+              ),
+              tooltip: 'Dismiss',
+            ),
+          ],
         ],
       ),
     );
@@ -5204,6 +5893,65 @@ class _SectionHeader extends StatelessWidget {
         ),
         if (trailing != null) trailing!,
       ],
+    );
+  }
+}
+
+class _SupportTile extends StatelessWidget {
+  const _SupportTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: const Color(0xFF0F6A5F)),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF67726E),
+                        ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.chevron_right,
+              color: Color(0xFF8A928F),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

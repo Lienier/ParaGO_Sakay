@@ -207,7 +207,7 @@ router.patch(
 router.get(
   '/',
   authenticate,
-  authorize(ADMIN, DRIVER, PASSENGER),
+  authorize(ADMIN, DRIVER),
   asyncHandler(async (_req, res) => {
     const trips = await TripSession.find().sort({ createdAt: -1 });
     return ok(res, trips, 'All trips');

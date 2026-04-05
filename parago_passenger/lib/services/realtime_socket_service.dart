@@ -8,14 +8,20 @@ import '../core/config/app_config.dart';
 class RealtimeSocketService {
   final StreamController<Map<String, dynamic>> _notificationController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _locationController =
+      StreamController<Map<String, dynamic>>.broadcast();
 
   io.Socket? _socket;
   String? _currentSocketBaseUrl;
   String? _currentToken;
   bool _networkFailureReported = false;
+  final Set<String> _subscribedRoutes = {};
+  final Set<String> _subscribedTrips = {};
 
   Stream<Map<String, dynamic>> get notificationCreatedStream =>
       _notificationController.stream;
+  Stream<Map<String, dynamic>> get jeepneyLocationStream =>
+      _locationController.stream;
   bool get isConnected => _socket?.connected == true;
   bool get hasActiveSocket => _socket != null;
 
@@ -108,6 +114,12 @@ class RealtimeSocketService {
         _notificationController.add(normalized);
       }
     });
+    socket.on('jeepney.location.updated', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) {
+        _locationController.add(normalized);
+      }
+    });
 
     _socket = socket;
     socket.connect();
@@ -119,6 +131,8 @@ class RealtimeSocketService {
     _currentSocketBaseUrl = null;
     _currentToken = null;
     _networkFailureReported = false;
+    _subscribedRoutes.clear();
+    _subscribedTrips.clear();
     socket?.disconnect();
     socket?.dispose();
   }
@@ -126,6 +140,43 @@ class RealtimeSocketService {
   void dispose() {
     disconnect();
     _notificationController.close();
+    _locationController.close();
+  }
+
+  void subscribeToRoute(String routeId) {
+    if (_socket == null || !_socket!.connected || routeId.isEmpty) return;
+    if (_subscribedRoutes.contains(routeId)) return;
+    
+    _socket!.emit('subscribe.route', routeId);
+    _subscribedRoutes.add(routeId);
+    debugPrint('Subscribed to route updates: $routeId');
+  }
+
+  void unsubscribeFromRoute(String routeId) {
+    if (_socket == null || routeId.isEmpty) return;
+    if (!_subscribedRoutes.contains(routeId)) return;
+    
+    _socket!.emit('unsubscribe.route', routeId);
+    _subscribedRoutes.remove(routeId);
+    debugPrint('Unsubscribed from route updates: $routeId');
+  }
+
+  void subscribeToTrip(String tripId) {
+    if (_socket == null || !_socket!.connected || tripId.isEmpty) return;
+    if (_subscribedTrips.contains(tripId)) return;
+    
+    _socket!.emit('subscribe.trip', tripId);
+    _subscribedTrips.add(tripId);
+    debugPrint('Subscribed to trip updates: $tripId');
+  }
+
+  void unsubscribeFromTrip(String tripId) {
+    if (_socket == null || tripId.isEmpty) return;
+    if (!_subscribedTrips.contains(tripId)) return;
+    
+    _socket!.emit('unsubscribe.trip', tripId);
+    _subscribedTrips.remove(tripId);
+    debugPrint('Unsubscribed from trip updates: $tripId');
   }
 
   Map<String, dynamic> _normalizePayload(dynamic payload) {

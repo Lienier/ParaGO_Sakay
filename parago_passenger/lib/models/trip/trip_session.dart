@@ -96,6 +96,53 @@ class TripSession {
     if ((jeepneyName ?? '').isNotEmpty) return jeepneyName!;
     return jeepneyId;
   }
+
+  TripSession copyWith({
+    String? id,
+    String? jeepneyId,
+    String? driverId,
+    String? routeId,
+    String? status,
+    String? routeName,
+    String? routeCode,
+    List<LatLng>? routePathSnapshotPoints,
+    String? jeepneyPlateNumber,
+    String? jeepneyName,
+    int? jeepneyCapacity,
+    String? driverName,
+    double? jeepneyLatitude,
+    double? jeepneyLongitude,
+    String? startedAt,
+    String? endedAt,
+    bool? acceptRequests,
+    int? occupancyCount,
+    bool? active,
+    String? notes,
+  }) {
+    return TripSession(
+      id: id ?? this.id,
+      jeepneyId: jeepneyId ?? this.jeepneyId,
+      driverId: driverId ?? this.driverId,
+      routeId: routeId ?? this.routeId,
+      status: status ?? this.status,
+      routeName: routeName ?? this.routeName,
+      routeCode: routeCode ?? this.routeCode,
+      routePathSnapshotPoints:
+          routePathSnapshotPoints ?? this.routePathSnapshotPoints,
+      jeepneyPlateNumber: jeepneyPlateNumber ?? this.jeepneyPlateNumber,
+      jeepneyName: jeepneyName ?? this.jeepneyName,
+      jeepneyCapacity: jeepneyCapacity ?? this.jeepneyCapacity,
+      driverName: driverName ?? this.driverName,
+      jeepneyLatitude: jeepneyLatitude ?? this.jeepneyLatitude,
+      jeepneyLongitude: jeepneyLongitude ?? this.jeepneyLongitude,
+      startedAt: startedAt ?? this.startedAt,
+      endedAt: endedAt ?? this.endedAt,
+      acceptRequests: acceptRequests ?? this.acceptRequests,
+      occupancyCount: occupancyCount ?? this.occupancyCount,
+      active: active ?? this.active,
+      notes: notes ?? this.notes,
+    );
+  }
 }
 
 String _readId(dynamic value) {
