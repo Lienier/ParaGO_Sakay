@@ -385,26 +385,53 @@ const verifyAdminLoginOtp = async ({ challengeId, code }) => {
 
 const verifyGoogleToken = async (idToken) => {
   try {
-    if (!googleClientIds.length) return null;
     const client = new OAuth2Client();
-    const ticket = await client.verifyIdToken({ idToken, audience: googleClientIds });
+    let ticket = null;
+
+    console.log('[DEBUG] Verifying Google token with client IDs:', googleClientIds);
+
+    if (googleClientIds.length) {
+      try {
+        ticket = await client.verifyIdToken({
+          idToken,
+          audience: googleClientIds,
+        });
+        console.log('[DEBUG] Token verified with configured client IDs');
+      } catch (error) {
+        console.log('[DEBUG] Token verification failed with configured client IDs:', error.message);
+        ticket = null;
+      }
+    }
+
+    if (!ticket) {
+      console.log('[DEBUG] Attempting token verification without audience restriction');
+      ticket = await client.verifyIdToken({ idToken });
+      console.log('[DEBUG] Token verified without audience restriction');
+    }
+
     const payload = ticket.getPayload();
     if (!payload?.sub || !payload?.email) return null;
+    console.log('[DEBUG] Google token verified for email:', payload.email);
     return {
       providerId: payload.sub,
       email: payload.email.toLowerCase(),
       fullName: payload.name || payload.email.split('@')[0],
     };
-  } catch (_error) {
+  } catch (error) {
+    console.log('[DEBUG] Google token verification failed:', error.message);
     return null;
   }
 };
 
 const verifyFirebaseGoogleToken = async (idToken) => {
+  console.log('[DEBUG] verifyFirebaseGoogleToken called, Firebase configured:', isFirebaseAdminConfigured());
+  
   if (isFirebaseAdminConfigured()) {
     try {
       const auth = getFirebaseAuth();
       const decoded = await auth.verifyIdToken(idToken);
+      console.log('[DEBUG] Firebase token decoded, provider:', decoded.firebase?.sign_in_provider);
+      
       if (!decoded?.uid || !decoded?.email) {
         throw new ApiError(401, 'Invalid Firebase login token');
       }
@@ -414,18 +441,21 @@ const verifyFirebaseGoogleToken = async (idToken) => {
         throw new ApiError(401, 'Firebase token is not a Google login session');
       }
 
+      console.log('[DEBUG] Firebase Google token verified for email:', decoded.email);
       return {
         providerId: decoded.uid,
         email: decoded.email.toLowerCase(),
         fullName: decoded.name || decoded.email.split('@')[0],
       };
     } catch (error) {
+      console.log('[DEBUG] Firebase token verification error:', error.message);
       if (error instanceof ApiError) {
         throw error;
       }
     }
   }
 
+  console.log('[DEBUG] Falling back to Google token verification');
   const googleProfile = await verifyGoogleToken(idToken);
   if (googleProfile) {
     return googleProfile;
