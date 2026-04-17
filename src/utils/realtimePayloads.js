@@ -45,9 +45,12 @@ const serializePickupRequest = (request) => {
     tripSessionId: request.tripSessionId?.toString() || '',
     routeId: request.routeId?.toString() || '',
     status: request.status?.toString() || '',
+    pickupType: request.pickupType?.toString() || 'roadside',
     stopRef: request.stopRef?.toString() || null,
+    terminalStopRef: request.terminalStopRef?.toString() || null,
     sourceNote: request.sourceNote?.toString() || null,
     pickupLocation: normalizePoint(request.pickupLocation, 'pickupLocation'),
+    terminalLocation: normalizePoint(request.terminalLocation, 'terminalLocation'),
     fareSnapshot: normalizeFareSnapshot(request.fareSnapshot),
     destinationStopRef: request.destinationStopRef?.toString() || null,
     destinationLocation: normalizePoint(
@@ -67,6 +70,7 @@ const serializeRideSession = (session) => {
     passengerId: session.passengerId?.toString() || '',
     tripSessionId: session.tripSessionId?.toString() || '',
     pickupRequestId: session.pickupRequestId?.toString() || '',
+    pickupType: session.pickupType?.toString() || 'roadside',
     fareSnapshot: normalizeFareSnapshot(session.fareSnapshot),
     destinationStopRef: session.destinationStopRef?.toString() || null,
     destinationLocation: normalizePoint(

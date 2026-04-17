@@ -21,6 +21,12 @@ class TripSession {
     this.occupancyCount,
     this.active,
     this.notes,
+    this.operatingMode,
+    this.terminalQueueStatus,
+    this.terminalQueueNumber,
+    this.terminalStopRef,
+    this.terminalLatitude,
+    this.terminalLongitude,
   });
 
   final String id;
@@ -42,6 +48,12 @@ class TripSession {
   final int? occupancyCount;
   final bool? active;
   final String? notes;
+  final String? operatingMode;
+  final String? terminalQueueStatus;
+  final int? terminalQueueNumber;
+  final String? terminalStopRef;
+  final double? terminalLatitude;
+  final double? terminalLongitude;
 
   factory TripSession.fromJson(Map<String, dynamic> json) {
     final route = json['routeId'];
@@ -72,6 +84,13 @@ class TripSession {
       occupancyCount: json['occupancyCount'] as int?,
       active: json['active'] as bool?,
       notes: json['notes']?.toString(),
+      operatingMode: json['operatingMode']?.toString(),
+      terminalQueueStatus: json['terminalQueueStatus']?.toString(),
+      terminalQueueNumber:
+          int.tryParse(json['terminalQueueNumber']?.toString() ?? ''),
+      terminalStopRef: json['terminalStopRef']?.toString(),
+      terminalLatitude: _readLatitudeFromPoint(json['terminalLocation']),
+      terminalLongitude: _readLongitudeFromPoint(json['terminalLocation']),
     );
   }
 
@@ -133,6 +152,22 @@ String? _readMapString(dynamic value, List<String> keys) {
   final second = _toDouble(coordinates[1]);
   if (first == null || second == null) return null;
   return (first, second);
+}
+
+double? _readLatitudeFromPoint(dynamic value) {
+  final coordinates = value is Map<String, dynamic>
+      ? value['coordinates']
+      : (value is Map ? value['coordinates'] : null);
+  if (coordinates is! List || coordinates.length < 2) return null;
+  return _toDouble(coordinates[1]);
+}
+
+double? _readLongitudeFromPoint(dynamic value) {
+  final coordinates = value is Map<String, dynamic>
+      ? value['coordinates']
+      : (value is Map ? value['coordinates'] : null);
+  if (coordinates is! List || coordinates.length < 2) return null;
+  return _toDouble(coordinates[0]);
 }
 
 double? _toDouble(dynamic value) {

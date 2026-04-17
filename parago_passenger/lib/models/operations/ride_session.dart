@@ -7,6 +7,7 @@ class RideSessionModel {
     required this.tripSessionId,
     required this.pickupRequestId,
     required this.status,
+    required this.pickupType,
     this.destinationStopRef,
     this.destinationLatitude,
     this.destinationLongitude,
@@ -21,6 +22,7 @@ class RideSessionModel {
   final String tripSessionId;
   final String pickupRequestId;
   final String status;
+  final String pickupType;
   final String? destinationStopRef;
   final double? destinationLatitude;
   final double? destinationLongitude;
@@ -39,6 +41,7 @@ class RideSessionModel {
       passengerId: json['passengerId']?.toString() ?? '',
       tripSessionId: json['tripSessionId']?.toString() ?? '',
       pickupRequestId: json['pickupRequestId']?.toString() ?? '',
+      pickupType: json['pickupType']?.toString() ?? 'roadside',
       destinationStopRef: json['destinationStopRef']?.toString(),
       destinationLatitude: _readLatitude(json['destinationLocation']),
       destinationLongitude: _readLongitude(json['destinationLocation']),

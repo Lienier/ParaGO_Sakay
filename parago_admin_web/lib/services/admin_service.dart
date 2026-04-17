@@ -1,4 +1,5 @@
 import '../core/network/api_client.dart';
+import '../core/exceptions/api_exception.dart';
 import 'package:latlong2/latlong.dart';
 import '../models/transport/route_summary.dart';
 import '../models/trip/trip_session.dart';
@@ -15,6 +16,29 @@ class AdminService {
       useCache: true,
     );
     return response['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> hybridDispatchBoard() async {
+    try {
+      final response = await _client.request(
+        method: 'GET',
+        path: '/admin/hybrid-dispatch',
+        useCache: true,
+      );
+      return response['data'] as Map<String, dynamic>;
+    } on ApiException catch (error) {
+      final normalizedMessage = error.message.toLowerCase();
+      final routeMissing = error.statusCode == 404 &&
+          normalizedMessage.contains('/admin/hybrid-dispatch');
+      if (routeMissing) {
+        return const <String, dynamic>{
+          'terminalQueue': <dynamic>[],
+          'waitingTerminalPassengers': <dynamic>[],
+          'routeDrivers': <dynamic>[],
+        };
+      }
+      rethrow;
+    }
   }
 
   Future<List<dynamic>> recentActivity({int limit = 40}) async {
@@ -251,6 +275,7 @@ class AdminService {
     String? driverId,
     required String jeepneyId,
     required String routeId,
+    String operatingMode = 'route',
     String status = 'scheduled',
     String? notes,
   }) async {
@@ -262,6 +287,7 @@ class AdminService {
           'driverId': driverId,
         'jeepneyId': jeepneyId,
         'routeId': routeId,
+        'operatingMode': operatingMode,
         'status': status,
         if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
       },

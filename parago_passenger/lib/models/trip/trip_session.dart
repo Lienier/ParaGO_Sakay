@@ -22,6 +22,12 @@ class TripSession {
     this.occupancyCount,
     this.active,
     this.notes,
+    this.operatingMode,
+    this.terminalQueueStatus,
+    this.terminalQueueNumber,
+    this.terminalStopRef,
+    this.terminalLatitude,
+    this.terminalLongitude,
   });
 
   final String id;
@@ -44,6 +50,12 @@ class TripSession {
   final int? occupancyCount;
   final bool? active;
   final String? notes;
+  final String? operatingMode;
+  final String? terminalQueueStatus;
+  final int? terminalQueueNumber;
+  final String? terminalStopRef;
+  final double? terminalLatitude;
+  final double? terminalLongitude;
 
   factory TripSession.fromJson(Map<String, dynamic> json) {
     final route = json['routeId'];
@@ -77,6 +89,12 @@ class TripSession {
       occupancyCount: _toInt(json['occupancyCount']),
       active: json['active'] as bool?,
       notes: json['notes']?.toString(),
+      operatingMode: json['operatingMode']?.toString(),
+      terminalQueueStatus: json['terminalQueueStatus']?.toString(),
+      terminalQueueNumber: _toInt(json['terminalQueueNumber']),
+      terminalStopRef: json['terminalStopRef']?.toString(),
+      terminalLatitude: _readLatitudeFromPoint(json['terminalLocation']),
+      terminalLongitude: _readLongitudeFromPoint(json['terminalLocation']),
     );
   }
 
@@ -118,6 +136,12 @@ class TripSession {
     int? occupancyCount,
     bool? active,
     String? notes,
+    String? operatingMode,
+    String? terminalQueueStatus,
+    int? terminalQueueNumber,
+    String? terminalStopRef,
+    double? terminalLatitude,
+    double? terminalLongitude,
   }) {
     return TripSession(
       id: id ?? this.id,
@@ -141,6 +165,12 @@ class TripSession {
       occupancyCount: occupancyCount ?? this.occupancyCount,
       active: active ?? this.active,
       notes: notes ?? this.notes,
+      operatingMode: operatingMode ?? this.operatingMode,
+      terminalQueueStatus: terminalQueueStatus ?? this.terminalQueueStatus,
+      terminalQueueNumber: terminalQueueNumber ?? this.terminalQueueNumber,
+      terminalStopRef: terminalStopRef ?? this.terminalStopRef,
+      terminalLatitude: terminalLatitude ?? this.terminalLatitude,
+      terminalLongitude: terminalLongitude ?? this.terminalLongitude,
     );
   }
 }
@@ -190,6 +220,26 @@ List<LatLng> _readLinePoints(dynamic value) {
   final second = _toDouble(coordinates[1]);
   if (first == null || second == null) return null;
   return (first, second);
+}
+
+double? _readLatitudeFromPoint(dynamic value) {
+  final coordinates = value is Map<String, dynamic>
+      ? value['coordinates']
+      : (value is Map ? value['coordinates'] : null);
+  if (coordinates is! List || coordinates.length < 2) {
+    return null;
+  }
+  return _toDouble(coordinates[1]);
+}
+
+double? _readLongitudeFromPoint(dynamic value) {
+  final coordinates = value is Map<String, dynamic>
+      ? value['coordinates']
+      : (value is Map ? value['coordinates'] : null);
+  if (coordinates is! List || coordinates.length < 2) {
+    return null;
+  }
+  return _toDouble(coordinates[0]);
 }
 
 double? _toDouble(dynamic value) {

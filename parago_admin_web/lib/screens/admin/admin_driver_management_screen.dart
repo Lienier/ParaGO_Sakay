@@ -126,6 +126,10 @@ class _AdminDriverManagementScreenState
     return _routes.any((route) => route.id == routeId);
   }
 
+  bool _routeHasTerminalStop(RouteSummaryModel route) {
+    return route.stopPoints.isNotEmpty;
+  }
+
   Map<String, dynamic> _driverRoute(Map<String, dynamic> driver) {
     final route = driver['assignedRouteId'];
     if (route is Map<String, dynamic>) {
@@ -294,7 +298,9 @@ class _AdminDriverManagementScreenState
     }
 
     final defaultRoute = _driverRoute(driver);
-    String selectedRouteId = _nullableIdOf(defaultRoute) ?? activeRoutes.first.id;
+    String selectedRouteId =
+        _nullableIdOf(defaultRoute) ?? activeRoutes.first.id;
+    String operatingMode = 'route';
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -303,6 +309,7 @@ class _AdminDriverManagementScreenState
           (route) => route.id == selectedRouteId,
           orElse: () => activeRoutes.first,
         );
+        final terminalAvailable = _routeHasTerminalStop(selectedRoute);
         final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
         return AlertDialog(
           title: const Text('Schedule trip'),
@@ -316,7 +323,8 @@ class _AdminDriverManagementScreenState
               ),
               const SizedBox(height: 16),
               StatefulBuilder(
-                builder: (context, setInnerState) => DropdownButtonFormField<String>(
+                builder: (context, setInnerState) =>
+                    DropdownButtonFormField<String>(
                   initialValue: selectedRouteId,
                   decoration: const InputDecoration(labelText: 'Route'),
                   items: [
@@ -328,7 +336,17 @@ class _AdminDriverManagementScreenState
                   ],
                   onChanged: (value) {
                     if (value == null || value.isEmpty) return;
-                    setInnerState(() => selectedRouteId = value);
+                    final match = activeRoutes.firstWhere(
+                      (route) => route.id == value,
+                      orElse: () => activeRoutes.first,
+                    );
+                    setInnerState(() {
+                      selectedRouteId = value;
+                      if (!_routeHasTerminalStop(match) &&
+                          operatingMode == 'terminal_queue') {
+                        operatingMode = 'route';
+                      }
+                    });
                   },
                 ),
               ),
@@ -336,6 +354,36 @@ class _AdminDriverManagementScreenState
               Text(
                 'Selected route: ${selectedRoute.code} - ${selectedRoute.name}',
               ),
+              const SizedBox(height: 12),
+              StatefulBuilder(
+                builder: (context, setInnerState) =>
+                    DropdownButtonFormField<String>(
+                  initialValue: operatingMode,
+                  decoration:
+                      const InputDecoration(labelText: 'Operating mode'),
+                  items: [
+                    DropdownMenuItem(
+                      value: 'route',
+                      child: Text('Direct to route'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'terminal_queue',
+                      enabled: terminalAvailable,
+                      child: Text('Join terminal queue'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null || value.isEmpty) return;
+                    setInnerState(() => operatingMode = value);
+                  },
+                ),
+              ),
+              if (!terminalAvailable) ...[
+                const SizedBox(height: 8),
+                const Text(
+                  'Terminal queue is unavailable for this route until a terminal stop is configured.',
+                ),
+              ],
             ],
           ),
           actions: [
@@ -376,11 +424,12 @@ class _AdminDriverManagementScreenState
         context: context,
         loadingMessage: 'Scheduling trip...',
         successMessage:
-          'Trip scheduled for ${_driverDisplayName(driver)} (${selectedRoute.code} - ${selectedRoute.name}).',
+            'Trip scheduled for ${_driverDisplayName(driver)} (${selectedRoute.code} - ${selectedRoute.name}) in ${operatingMode == 'terminal_queue' ? 'terminal queue' : 'route'} mode.',
         action: () => admin.createTrip(
           driverId: driverId,
           jeepneyId: jeepneyId,
           routeId: routeId,
+          operatingMode: operatingMode,
         ),
         onSuccess: (_) async {
           if (!mounted) return;

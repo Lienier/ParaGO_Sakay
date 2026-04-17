@@ -13,6 +13,10 @@ const {
 const {
   canPassengerBoardPickupRequest,
 } = require('./pickupFlow.service');
+const {
+  isTerminalPickupType,
+  normalizeTerminalQueueStatus,
+} = require('./hybridDispatch.service');
 
 const validateBoardingAttempt = async ({
   passengerId,
@@ -32,15 +36,19 @@ const validateBoardingAttempt = async ({
   if (!pickupRequest) {
     throw new ApiError(404, 'No matching pickup request found');
   }
-  if (!canPassengerBoardPickupRequest(pickupRequest.status)) {
+  const pickupType = pickupRequest.pickupType || 'roadside';
+  if (!canPassengerBoardPickupRequest(pickupRequest.status, { pickupType })) {
     throw new ApiError(
       409,
       'Pickup request must be acknowledged by the driver before boarding'
     );
   }
 
-  if (!pickupRequest.pickupLocation?.coordinates?.length) {
-    throw new ApiError(409, 'Pickup request is missing roadside reference');
+  const pickupReference = isTerminalPickupType(pickupType)
+    ? pickupRequest.terminalLocation || pickupRequest.pickupLocation
+    : pickupRequest.pickupLocation;
+  if (!pickupReference?.coordinates?.length) {
+    throw new ApiError(409, 'Pickup request is missing a valid boarding reference');
   }
 
   const now = new Date();
@@ -62,7 +70,7 @@ const validateBoardingAttempt = async ({
     throw new ApiError(409, 'Boarding attempt outside allowed time window');
   }
 
-  const [lngPickup, latPickup] = pickupRequest.pickupLocation.coordinates;
+  const [lngPickup, latPickup] = pickupReference.coordinates;
   const hasClientLocation = lat != null && lng != null;
   const compareLat = hasClientLocation ? Number(lat) : latPickup;
   const compareLng = hasClientLocation ? Number(lng) : lngPickup;
@@ -118,6 +126,7 @@ const validateBoardingAttempt = async ({
     passengerId,
     tripSessionId,
     pickupRequestId: pickupRequest._id,
+    pickupType,
     destinationStopRef: normalizedDestinationStopRef,
     destinationLocation: {
       type: 'Point',
@@ -134,6 +143,32 @@ const validateBoardingAttempt = async ({
   await TripSession.findByIdAndUpdate(tripSessionId, {
     $inc: { occupancyCount: 1 },
   });
+  if (isTerminalPickupType(pickupType) && trip.operatingMode === 'terminal_queue') {
+    const terminalRequests = await PickupRequest.find({
+      tripSessionId,
+      pickupType: 'terminal',
+      status: { $in: ['pending', 'acknowledged'] },
+    }).select('status');
+    const hasAcknowledged = terminalRequests.some(
+      (request) => request.status === 'acknowledged'
+    );
+    trip.terminalQueueStatus = normalizeTerminalQueueStatus(
+      hasAcknowledged ? 'loading' : 'waiting',
+      { operatingMode: trip.operatingMode }
+    );
+    await trip.save();
+    if (trip.driverId) {
+      await Driver.findByIdAndUpdate(trip.driverId, {
+        $set: {
+          operatingMode: trip.operatingMode,
+          terminalQueueStatus: trip.terminalQueueStatus,
+          terminalCheckedInAt: trip.terminalCheckedInAt || trip.startedAt || now,
+          terminalQueueNumber: trip.terminalQueueNumber,
+          terminalStopRef: trip.terminalStopRef,
+        },
+      });
+    }
+  }
 
   const tripDriver = trip.driverId
     ? await Driver.findById(trip.driverId).select('userId')
@@ -142,7 +177,11 @@ const validateBoardingAttempt = async ({
     userId: tripDriver?.userId,
     type: 'passenger_boarded',
     title: 'Passenger boarded',
-    body: `Passenger boarded near ${pickupRequest.stopRef || 'the selected pickup point'}.`,
+    body: `Passenger boarded near ${
+      pickupRequest.terminalStopRef ||
+      pickupRequest.stopRef ||
+      'the selected pickup point'
+    }.`,
     payload: {
       requestId: pickupRequest._id.toString(),
       tripSessionId: trip._id.toString(),

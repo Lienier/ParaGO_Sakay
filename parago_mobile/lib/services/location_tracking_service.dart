@@ -6,9 +6,15 @@ import 'package:geolocator/geolocator.dart';
 import 'driver_service.dart';
 
 class LocationTrackingService {
-  LocationTrackingService(this._driverService);
+  LocationTrackingService(
+    this._driverService, {
+    this.onPosition,
+    this.onError,
+  });
 
   final DriverService _driverService;
+  final ValueChanged<Position>? onPosition;
+  final ValueChanged<Object>? onError;
   StreamSubscription<Position>? _positionSubscription;
   Timer? _fallbackTimer;
   Position? _lastPosition;
@@ -56,39 +62,35 @@ class LocationTrackingService {
     debugPrint('Starting real-time location tracking (5s interval)');
 
     _positionSubscription = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 5,
-        timeLimit: Duration(seconds: 30),
-      ),
+      locationSettings: _streamLocationSettings(),
     ).listen(
       _handlePositionUpdate,
       onError: (error) {
         debugPrint('Location stream error: $error');
         _updatesFailed++;
+        onError?.call(error);
       },
       cancelOnError: false,
     );
 
     _fallbackTimer = Timer.periodic(_fallbackInterval, (_) async {
       if (!_isTracking) return;
-      
+
       final now = DateTime.now();
       final lastUpdate = _lastUpdateSentAt;
-      
-      if (lastUpdate == null || now.difference(lastUpdate) >= _fallbackInterval) {
+
+      if (lastUpdate == null ||
+          now.difference(lastUpdate) >= _fallbackInterval) {
         debugPrint('Fallback: forcing location update');
         try {
           final position = await Geolocator.getCurrentPosition(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.high,
-              timeLimit: Duration(seconds: 8),
-            ),
+            locationSettings: _singleFixLocationSettings(),
           );
           await _handlePositionUpdate(position);
         } catch (error) {
           debugPrint('Fallback location update failed: $error');
           _updatesFailed++;
+          onError?.call(error);
         }
       }
     });
@@ -103,6 +105,8 @@ class LocationTrackingService {
     if (_looksLikeNoisyFix(position, previousSample ?? _lastSentPosition)) {
       return;
     }
+
+    onPosition?.call(position);
 
     final now = DateTime.now();
     final lastSent = _lastUpdateSentAt;
@@ -119,7 +123,7 @@ class LocationTrackingService {
         position.latitude,
         position.longitude,
       );
-      
+
       if (distance < _minimumDistanceMeters &&
           now.difference(lastSent) < _fallbackInterval) {
         return;
@@ -131,11 +135,11 @@ class LocationTrackingService {
         lat: position.latitude,
         lng: position.longitude,
       );
-      
+
       _lastSentPosition = position;
       _lastUpdateSentAt = now;
       _updatesSent++;
-      
+
       debugPrint(
         'Location sent: ${position.latitude.toStringAsFixed(6)}, '
         '${position.longitude.toStringAsFixed(6)} '
@@ -153,8 +157,9 @@ class LocationTrackingService {
       return;
     }
 
-    debugPrint('Stopping location tracking (sent: $_updatesSent, failed: $_updatesFailed)');
-    
+    debugPrint(
+        'Stopping location tracking (sent: $_updatesSent, failed: $_updatesFailed)');
+
     _isTracking = false;
     await _positionSubscription?.cancel();
     _positionSubscription = null;
@@ -164,6 +169,85 @@ class LocationTrackingService {
 
   void dispose() {
     stopTracking();
+  }
+
+  LocationSettings _streamLocationSettings() {
+    if (kIsWeb) {
+      return const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 4,
+      );
+    }
+
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        return AndroidSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 4,
+          intervalDuration: const Duration(seconds: 3),
+          foregroundNotificationConfig: const ForegroundNotificationConfig(
+            notificationTitle: 'ParaGO driver tracking active',
+            notificationText:
+                'Sharing your live jeep location with passengers.',
+            enableWakeLock: true,
+          ),
+        );
+      case TargetPlatform.iOS:
+      case TargetPlatform.macOS:
+        return AppleSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 4,
+          activityType: ActivityType.automotiveNavigation,
+          pauseLocationUpdatesAutomatically: false,
+          showBackgroundLocationIndicator: false,
+        );
+      case TargetPlatform.windows:
+      case TargetPlatform.linux:
+      case TargetPlatform.fuchsia:
+        return const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 4,
+        );
+    }
+  }
+
+  LocationSettings _singleFixLocationSettings() {
+    if (kIsWeb) {
+      return const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        timeLimit: Duration(seconds: 8),
+      );
+    }
+
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        return AndroidSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          intervalDuration: const Duration(seconds: 3),
+          timeLimit: const Duration(seconds: 8),
+          foregroundNotificationConfig: const ForegroundNotificationConfig(
+            notificationTitle: 'ParaGO driver tracking active',
+            notificationText:
+                'Refreshing your live jeep location for passengers.',
+            enableWakeLock: true,
+          ),
+        );
+      case TargetPlatform.iOS:
+      case TargetPlatform.macOS:
+        return AppleSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          activityType: ActivityType.automotiveNavigation,
+          pauseLocationUpdatesAutomatically: false,
+          showBackgroundLocationIndicator: false,
+        );
+      case TargetPlatform.windows:
+      case TargetPlatform.linux:
+      case TargetPlatform.fuchsia:
+        return const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 8),
+        );
+    }
   }
 
   bool _looksLikeNoisyFix(Position position, Position? reference) {

@@ -21,6 +21,10 @@ class TripSession {
     this.occupancyCount,
     this.active,
     this.notes,
+    this.operatingMode,
+    this.terminalQueueStatus,
+    this.terminalQueueNumber,
+    this.terminalStopRef,
   });
 
   final String id;
@@ -42,6 +46,10 @@ class TripSession {
   final int? occupancyCount;
   final bool? active;
   final String? notes;
+  final String? operatingMode;
+  final String? terminalQueueStatus;
+  final int? terminalQueueNumber;
+  final String? terminalStopRef;
 
   factory TripSession.fromJson(Map<String, dynamic> json) {
     final route = json['routeId'];
@@ -72,6 +80,11 @@ class TripSession {
       occupancyCount: json['occupancyCount'] as int?,
       active: json['active'] as bool?,
       notes: json['notes']?.toString(),
+      operatingMode: json['operatingMode']?.toString(),
+      terminalQueueStatus: json['terminalQueueStatus']?.toString(),
+      terminalQueueNumber:
+          int.tryParse(json['terminalQueueNumber']?.toString() ?? ''),
+      terminalStopRef: json['terminalStopRef']?.toString(),
     );
   }
 

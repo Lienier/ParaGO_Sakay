@@ -5,10 +5,14 @@ class PickupRequestModel {
     required this.tripSessionId,
     required this.routeId,
     required this.status,
+    required this.pickupType,
     this.stopRef,
+    this.terminalStopRef,
     this.sourceNote,
     this.pickupLatitude,
     this.pickupLongitude,
+    this.terminalLatitude,
+    this.terminalLongitude,
     this.fareSnapshot,
     this.expiresAt,
     this.createdAt,
@@ -20,10 +24,14 @@ class PickupRequestModel {
   final String tripSessionId;
   final String routeId;
   final String status;
+  final String pickupType;
   final String? stopRef;
+  final String? terminalStopRef;
   final String? sourceNote;
   final double? pickupLatitude;
   final double? pickupLongitude;
+  final double? terminalLatitude;
+  final double? terminalLongitude;
   final FareSnapshotModel? fareSnapshot;
   final String? expiresAt;
   final String? createdAt;
@@ -38,10 +46,14 @@ class PickupRequestModel {
       tripSessionId: json['tripSessionId']?.toString() ?? '',
       routeId: json['routeId']?.toString() ?? '',
       status: json['status']?.toString() ?? '',
+      pickupType: json['pickupType']?.toString() ?? 'roadside',
       stopRef: json['stopRef']?.toString(),
+      terminalStopRef: json['terminalStopRef']?.toString(),
       sourceNote: json['sourceNote']?.toString(),
       pickupLatitude: _readLatitude(json['pickupLocation']),
       pickupLongitude: _readLongitude(json['pickupLocation']),
+      terminalLatitude: _readLatitude(json['terminalLocation']),
+      terminalLongitude: _readLongitude(json['terminalLocation']),
       fareSnapshot: FareSnapshotModel.fromJson(json['fareSnapshot']),
       expiresAt: json['expiresAt']?.toString(),
       createdAt: json['createdAt']?.toString(),

@@ -38,6 +38,7 @@ class _AdminOverviewPage extends StatelessWidget {
     required this.error,
     required this.dashboard,
     required this.passengerFlowReport,
+    required this.hybridDispatchBoard,
     required this.lastSyncedAt,
     required this.showingCachedSnapshot,
     required this.onRefresh,
@@ -47,6 +48,7 @@ class _AdminOverviewPage extends StatelessWidget {
   final String? error;
   final Map<String, dynamic>? dashboard;
   final Map<String, dynamic>? passengerFlowReport;
+  final Map<String, dynamic>? hybridDispatchBoard;
   final DateTime? lastSyncedAt;
   final bool showingCachedSnapshot;
   final Future<void> Function({bool silent}) onRefresh;
@@ -55,6 +57,7 @@ class _AdminOverviewPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final metrics = dashboard ?? const <String, dynamic>{};
     final passengerFlow = passengerFlowReport ?? const <String, dynamic>{};
+    final hybridBoard = hybridDispatchBoard ?? const <String, dynamic>{};
     final summary = _readDynamicMap(passengerFlow['summary']);
     final dailyFlow = _parsePassengerFlowSeries(passengerFlow['daily']);
     final topBoardingLocations = _parsePassengerFlowLocations(
@@ -69,6 +72,10 @@ class _AdminOverviewPage extends StatelessWidget {
     final topUnloadLocation = _parsePassengerFlowLocation(
       summary['topUnloadLocation'],
     );
+    final terminalQueue = _readDynamicList(hybridBoard['terminalQueue']);
+    final waitingTerminalPassengers =
+        _readDynamicList(hybridBoard['waitingTerminalPassengers']);
+    final routeDrivers = _readDynamicList(hybridBoard['routeDrivers']);
 
     return RefreshIndicator(
       onRefresh: () => onRefresh(silent: false),
@@ -131,7 +138,116 @@ class _AdminOverviewPage extends StatelessWidget {
                   caption: 'Passengers currently onboard active trips',
                 ),
               ),
+              SizedBox(
+                width: 260,
+                child: MetricCard(
+                  label: 'Terminal queue trips',
+                  value: metrics['terminalQueueTrips']?.toString() ?? '0',
+                  icon: Icons.queue_outlined,
+                  accent: const Color(0xFF8A3B5D),
+                  caption: 'Active trips currently operating from the terminal',
+                ),
+              ),
+              SizedBox(
+                width: 260,
+                child: MetricCard(
+                  label: 'Route-mode trips',
+                  value: metrics['routeModeTrips']?.toString() ?? '0',
+                  icon: Icons.alt_route_outlined,
+                  accent: const Color(0xFF4E6B2B),
+                  caption: 'Active trips already running on the route',
+                ),
+              ),
             ],
+          ),
+          const SizedBox(height: 18),
+          _SectionCard(
+            title: 'Hybrid dispatch board',
+            subtitle:
+                'Separates terminal queue operations from direct route operations so dispatch can manage both at the same time.',
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final stacked = constraints.maxWidth < 1050;
+                final terminalCard = _HybridDispatchColumn(
+                  title: 'Terminal queue',
+                  accent: const Color(0xFF8A3B5D),
+                  emptyMessage: 'No active terminal queue trips yet.',
+                  children: [
+                    if (terminalQueue.isEmpty)
+                      const Text('No active terminal queue trips yet.')
+                    else
+                      for (final trip in terminalQueue)
+                        _HybridDispatchTile(
+                          title:
+                              '#${trip['terminalQueueNumber'] ?? '-'} ${_dispatchTripLabel(trip)}',
+                          subtitle:
+                              '${_dispatchTripMode(trip)} · ${_dispatchTerminalLabel(trip)}',
+                          caption:
+                              '${trip['occupancyCount'] ?? 0} onboard · ${ParagoFormat.statusLabel(trip['terminalQueueStatus']?.toString() ?? 'waiting')}',
+                        ),
+                  ],
+                );
+                final waitingCard = _HybridDispatchColumn(
+                  title: 'Waiting terminal passengers',
+                  accent: const Color(0xFFE29B2D),
+                  emptyMessage: 'No terminal passengers waiting right now.',
+                  children: [
+                    if (waitingTerminalPassengers.isEmpty)
+                      const Text('No terminal passengers waiting right now.')
+                    else
+                      for (final request in waitingTerminalPassengers)
+                        _HybridDispatchTile(
+                          title:
+                              '${request['terminalStopRef'] ?? request['stopRef'] ?? 'Terminal passenger'} to ${request['destinationStopRef'] ?? 'Destination pending'}',
+                          subtitle:
+                              'Trip ${request['tripSessionId'] ?? '-'} · ${ParagoFormat.statusLabel(request['status']?.toString() ?? 'pending')}',
+                          caption: request['sourceNote']?.toString() ??
+                              'Passenger is waiting at the terminal.',
+                        ),
+                  ],
+                );
+                final routeCard = _HybridDispatchColumn(
+                  title: 'Route-mode drivers',
+                  accent: const Color(0xFF2157A5),
+                  emptyMessage: 'No active route-mode trips yet.',
+                  children: [
+                    if (routeDrivers.isEmpty)
+                      const Text('No active route-mode trips yet.')
+                    else
+                      for (final trip in routeDrivers)
+                        _HybridDispatchTile(
+                          title: _dispatchTripLabel(trip),
+                          subtitle: _dispatchTripMode(trip),
+                          caption:
+                              '${trip['occupancyCount'] ?? 0} onboard · ${ParagoFormat.statusLabel(trip['status']?.toString() ?? 'active')}',
+                        ),
+                  ],
+                );
+
+                if (stacked) {
+                  return Column(
+                    children: [
+                      terminalCard,
+                      const SizedBox(height: 12),
+                      waitingCard,
+                      const SizedBox(height: 12),
+                      routeCard,
+                    ],
+                  );
+                }
+
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: terminalCard),
+                    const SizedBox(width: 12),
+                    Expanded(child: waitingCard),
+                    const SizedBox(width: 12),
+                    Expanded(child: routeCard),
+                  ],
+                );
+              },
+            ),
           ),
           const SizedBox(height: 18),
           _SectionCard(
@@ -174,7 +290,8 @@ class _AdminOverviewPage extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 18),
-                if (topBoardingLocations.isNotEmpty || topUnloadLocations.isNotEmpty)
+                if (topBoardingLocations.isNotEmpty ||
+                    topUnloadLocations.isNotEmpty)
                   _PassengerFlowHotspotMap(
                     boardingLocations: topBoardingLocations,
                     unloadLocations: topUnloadLocations,
@@ -225,6 +342,130 @@ class _AdminOverviewPage extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+List<dynamic> _readDynamicList(dynamic value) {
+  return value is List<dynamic> ? value : const <dynamic>[];
+}
+
+String _dispatchTripLabel(dynamic value) {
+  final map = _readDynamicMap(value);
+  final route = _readDynamicMap(map['routeId']);
+  final jeepney = _readDynamicMap(map['jeepneyId']);
+  final routeCode = route['code']?.toString();
+  final routeName = route['name']?.toString();
+  final plateNumber = jeepney['plateNumber']?.toString();
+  final parts = <String>[
+    if (routeCode != null && routeCode.isNotEmpty) routeCode,
+    if (routeName != null && routeName.isNotEmpty) routeName,
+    if (plateNumber != null && plateNumber.isNotEmpty) plateNumber,
+  ];
+  return parts.isEmpty ? 'Trip ${map['_id'] ?? '-'}' : parts.join(' · ');
+}
+
+String _dispatchTripMode(dynamic value) {
+  final map = _readDynamicMap(value);
+  return map['operatingMode']?.toString() == 'terminal_queue'
+      ? 'Terminal queue mode'
+      : 'Route mode';
+}
+
+String _dispatchTerminalLabel(dynamic value) {
+  final map = _readDynamicMap(value);
+  final terminal = map['terminalStopRef']?.toString();
+  if (terminal == null || terminal.isEmpty) {
+    return 'Terminal pending';
+  }
+  return terminal;
+}
+
+class _HybridDispatchColumn extends StatelessWidget {
+  const _HybridDispatchColumn({
+    required this.title,
+    required this.accent,
+    required this.emptyMessage,
+    required this.children,
+  });
+
+  final String title;
+  final Color accent;
+  final String emptyMessage;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: accent,
+                ),
+          ),
+          const SizedBox(height: 12),
+          if (children.isEmpty)
+            Text(emptyMessage)
+          else
+            ...children
+                .expand((child) => [child, const SizedBox(height: 10)])
+                .toList()
+              ..removeLast(),
+        ],
+      ),
+    );
+  }
+}
+
+class _HybridDispatchTile extends StatelessWidget {
+  const _HybridDispatchTile({
+    required this.title,
+    required this.subtitle,
+    required this.caption,
+  });
+
+  final String title;
+  final String subtitle;
+  final String caption;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+          ),
+          const SizedBox(height: 4),
+          Text(subtitle),
+          const SizedBox(height: 6),
+          Text(
+            caption,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: const Color(0xFF67726E),
+                ),
           ),
         ],
       ),
@@ -911,14 +1152,14 @@ List<_PassengerFlowLocation> _parsePassengerFlowLocations(dynamic value) {
   }
   return value
       .map((entry) {
-    final map = _readDynamicMap(entry);
+        final map = _readDynamicMap(entry);
         final location = _parseLatLngMap(map['location']);
         if (location == null) {
           return null;
         }
         return _PassengerFlowLocation(
-      label: map['label']?.toString() ?? 'Unknown location',
-      count: _readCount(map['count']),
+          label: map['label']?.toString() ?? 'Unknown location',
+          count: _readCount(map['count']),
           position: location,
         );
       })

@@ -128,8 +128,8 @@ class _AdminRouteFareSettingsScreenState
     if (baseAmountError != null ||
         baseDistanceError != null ||
         additionalAmountError != null) {
-      setState(() =>
-          _message = baseAmountError ?? baseDistanceError ?? additionalAmountError);
+      setState(() => _message =
+          baseAmountError ?? baseDistanceError ?? additionalAmountError);
       return;
     }
 
@@ -144,7 +144,8 @@ class _AdminRouteFareSettingsScreenState
 
     setState(() {
       _saving = true;
-      _message = 'Updating universal fare settings for ${_routes.length} routes...';
+      _message =
+          'Updating universal fare settings for ${_routes.length} routes...';
     });
 
     try {
@@ -216,8 +217,7 @@ class _AdminRouteFareSettingsScreenState
                         final fields = [
                           TextFormField(
                             controller: _fareBaseAmountCtrl,
-                            keyboardType:
-                                const TextInputType.numberWithOptions(
+                            keyboardType: const TextInputType.numberWithOptions(
                               decimal: true,
                             ),
                             decoration: const InputDecoration(
@@ -231,8 +231,7 @@ class _AdminRouteFareSettingsScreenState
                           ),
                           TextFormField(
                             controller: _fareBaseDistanceCtrl,
-                            keyboardType:
-                                const TextInputType.numberWithOptions(
+                            keyboardType: const TextInputType.numberWithOptions(
                               decimal: true,
                             ),
                             decoration: const InputDecoration(
@@ -246,8 +245,7 @@ class _AdminRouteFareSettingsScreenState
                           ),
                           TextFormField(
                             controller: _fareAdditionalPerKmCtrl,
-                            keyboardType:
-                                const TextInputType.numberWithOptions(
+                            keyboardType: const TextInputType.numberWithOptions(
                               decimal: true,
                             ),
                             decoration: const InputDecoration(

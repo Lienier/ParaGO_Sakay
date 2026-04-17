@@ -37,6 +37,7 @@ class AdminHomeScreen extends StatefulWidget {
 class _AdminHomeScreenState extends State<AdminHomeScreen> {
   Map<String, dynamic>? _dashboard;
   Map<String, dynamic>? _passengerFlowReport;
+  Map<String, dynamic>? _hybridDispatchBoard;
   bool _loading = false;
   String? _error;
   DateTime? _lastSyncedAt;
@@ -64,6 +65,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           fromIso: from.toIso8601String(),
           toIso: now.toIso8601String(),
         ),
+        admin.hybridDispatchBoard(),
       ]);
 
       final usedStaleCache = session.apiClient.recentTelemetry.any(
@@ -75,6 +77,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       setState(() {
         _dashboard = results[0] as Map<String, dynamic>;
         _passengerFlowReport = results[1] as Map<String, dynamic>;
+        _hybridDispatchBoard = results[2] as Map<String, dynamic>;
         _error = null;
         _lastSyncedAt = DateTime.now();
         _showingCachedSnapshot = usedStaleCache;
@@ -271,6 +274,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           error: _error,
           dashboard: _dashboard,
           passengerFlowReport: _passengerFlowReport,
+          hybridDispatchBoard: _hybridDispatchBoard,
           lastSyncedAt: _lastSyncedAt,
           showingCachedSnapshot: _showingCachedSnapshot,
           onRefresh: _load,

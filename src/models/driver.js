@@ -16,11 +16,25 @@ const driverSchema = new Schema(
       enum: ['active', 'inactive'],
       default: 'inactive',
     },
+    operatingMode: {
+      type: String,
+      enum: ['route', 'terminal_queue'],
+      default: 'route',
+    },
+    terminalQueueStatus: {
+      type: String,
+      enum: ['off_queue', 'waiting', 'loading', 'departed'],
+      default: 'off_queue',
+    },
+    terminalCheckedInAt: { type: Date },
+    terminalQueueNumber: { type: Number, min: 1 },
+    terminalStopRef: { type: String, trim: true },
   },
   { timestamps: true }
 );
 
 driverSchema.index({ assignedRouteId: 1, status: 1 });
 driverSchema.index({ assignedJeepneyId: 1, isVerified: 1 });
+driverSchema.index({ assignedRouteId: 1, operatingMode: 1, terminalQueueStatus: 1 });
 
 module.exports = mongoose.model('Driver', driverSchema);

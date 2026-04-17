@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter/services.dart';
@@ -19,6 +18,7 @@ import '../../models/operations/stop_alert.dart';
 import '../../models/transport/route_summary.dart';
 import '../../models/trip/trip_session.dart';
 import '../../services/driver_service.dart';
+import '../../services/location_tracking_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/ride_session_service.dart';
 import '../../services/route_preview_cache.dart';
@@ -37,6 +37,16 @@ class DriverHomeScreen extends StatefulWidget {
 
   @override
   State<DriverHomeScreen> createState() => _DriverHomeScreenState();
+}
+
+class _DriverTripLaunchChoice {
+  const _DriverTripLaunchChoice({
+    required this.route,
+    required this.operatingMode,
+  });
+
+  final RouteSummaryModel route;
+  final String operatingMode;
 }
 
 class _DriverHomeScreenState extends State<DriverHomeScreen>
@@ -66,13 +76,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   String? _statusMessage;
   String _availabilityNote = 'Checking driver availability...';
   LatLng? _vehicleLocation;
-  Timer? _vehicleLocationTimer;
+  LocationTrackingService? _locationTrackingService;
   Timer? _liveRefreshTimer;
   Timer? _availabilityTimer;
   StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
   StreamSubscription<Map<String, dynamic>>? _realtimeOperationsSubscription;
-  bool _locationPluginUnavailable = false;
-  bool _locationLoopActive = true;
+  bool _locationTrackingSyncInFlight = false;
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
   bool _availabilitySyncInFlight = false;
@@ -97,6 +106,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     return _trips.isEmpty ? null : _trips.first;
   }
 
+  bool _routeHasTerminalStop(RouteSummaryModel route) {
+    return route.stopPoints.isNotEmpty;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -104,7 +117,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _load();
       if (mounted) {
-        _startVehicleLocationHeartbeat();
         unawaited(
           _refreshAutomaticAvailability(
             probeNetwork: false,
@@ -120,7 +132,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _vehicleLocationTimer?.cancel();
+    _locationTrackingService?.dispose();
     _liveRefreshTimer?.cancel();
     _availabilityTimer?.cancel();
     _realtimeNotificationSubscription?.cancel();
@@ -199,7 +211,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return 'Driver is offline because the app session has ended.';
     }
     if (!_isAppForeground) {
-      return 'Driver stays online in the background, but live syncing can pause until the app returns to the foreground.';
+      return 'Driver stays online in the background and keeps sharing location whenever background tracking is available.';
     }
     if (!hasInternet) {
       return 'Driver is offline because the device cannot reach the ParaGO server.';
@@ -308,12 +320,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (!session.isAuthenticated) {
       _applyAutomaticAvailabilityState(session);
       _syncRealtimeSocket(session);
+      await _syncDriverLocationTracking(session);
       return;
     }
 
     if (!_isAppForeground) {
       _applyAutomaticAvailabilityState(session, hasInternet: _hasInternet);
       _syncRealtimeSocket(session);
+      await _syncAutomaticAvailability(session, forcePush: forcePush);
+      await _syncDriverLocationTracking(session);
       return;
     }
 
@@ -332,6 +347,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       forceReconnect: forcePush || (!previousHasInternet && _hasInternet),
     );
     await _syncAutomaticAvailability(session, forcePush: forcePush);
+    await _syncDriverLocationTracking(session);
   }
 
   void _startAutomaticAvailabilityLoop() {
@@ -347,6 +363,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Future<void> _logoutDriver() async {
     final session = context.read<SessionController>();
     _realtimeSocketService.disconnect();
+    await _locationTrackingService?.stopTracking();
     try {
       await DriverService(session.apiClient).setStatus(active: false);
       _lastPublishedOnline = false;
@@ -1058,24 +1075,26 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return;
     }
 
-    final chosenRoute = await _chooseRouteForNewTrip(activeRoutes);
-    if (chosenRoute == null || !mounted) {
+    final tripLaunch = await _chooseRouteForNewTrip(activeRoutes);
+    if (tripLaunch == null || !mounted) {
       return;
     }
 
     await _runDriverAction(
       loadingMessage: 'Creating trip...',
-      successMessage:
-          'Trip started. The driver map is now ready for live pickup handling.',
+      successMessage: tripLaunch.operatingMode == 'terminal_queue'
+          ? 'Terminal queue trip started. You are now available for terminal boarding requests.'
+          : 'Route trip started. The driver map is now ready for live pickup handling.',
       action: () => tripService.createTrip(
         jeepneyId: jeepneyId,
-        routeId: chosenRoute.id,
+        routeId: tripLaunch.route.id,
+        operatingMode: tripLaunch.operatingMode,
         status: 'active',
       ),
     );
   }
 
-  Future<RouteSummaryModel?> _chooseRouteForNewTrip(
+  Future<_DriverTripLaunchChoice?> _chooseRouteForNewTrip(
     List<RouteSummaryModel> routes,
   ) async {
     if (routes.isEmpty) return null;
@@ -1084,11 +1103,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       ..sort((a, b) => _routeChoiceLabel(a).compareTo(_routeChoiceLabel(b)));
 
     RouteSummaryModel selectedRoute = sortedRoutes.first;
+    var operatingMode = 'route';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setState) {
+            final terminalAvailable = _routeHasTerminalStop(selectedRoute);
             return AlertDialog(
               title: const Text('Choose route'),
               content: Column(
@@ -1115,13 +1136,52 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                         (route) => route.id == value,
                         orElse: () => selectedRoute,
                       );
-                      setState(() => selectedRoute = match);
+                      setState(() {
+                        selectedRoute = match;
+                        if (!_routeHasTerminalStop(match) &&
+                            operatingMode == 'terminal_queue') {
+                          operatingMode = 'route';
+                        }
+                      });
                     },
                   ),
                   const SizedBox(height: 8),
                   Text(
                     'Selected: ${_routeChoiceLabel(selectedRoute)}',
                   ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: operatingMode,
+                    decoration:
+                        const InputDecoration(labelText: 'Operating mode'),
+                    items: [
+                      DropdownMenuItem(
+                        value: 'route',
+                        child: Text('Direct to route'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'terminal_queue',
+                        enabled: terminalAvailable,
+                        child: Text('Join terminal queue'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value == null || value.isEmpty) return;
+                      setState(() => operatingMode = value);
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    operatingMode == 'terminal_queue'
+                        ? 'This trip will take terminal boarding requests first.'
+                        : 'This trip will take roadside requests while already on the route.',
+                  ),
+                  if (!terminalAvailable) ...[
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Terminal queue is unavailable for this route until a terminal stop is configured.',
+                    ),
+                  ],
                 ],
               ),
               actions: [
@@ -1143,7 +1203,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (confirmed != true) {
       return null;
     }
-    return selectedRoute;
+    return _DriverTripLaunchChoice(
+      route: selectedRoute,
+      operatingMode: operatingMode,
+    );
   }
 
   String _routeChoiceLabel(RouteSummaryModel route) {
@@ -1239,151 +1302,123 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     );
   }
 
-  void _startVehicleLocationHeartbeat() {
-    _vehicleLocationTimer?.cancel();
-    _vehicleLocationTimer = Timer.periodic(
-      const Duration(seconds: 20),
-      (_) {
-        if (!mounted) return;
-        if (!_locationLoopActive) return;
-        _publishVehicleLocation().catchError((error, _) {
-          _setStatusMessage('Location loop stopped due to unexpected error.');
-          _locationLoopActive = false;
-          debugPrint('Location loop error: $error');
-        });
-      },
-    );
-    unawaited(
-      Future<void>.delayed(
-        const Duration(milliseconds: 450),
-        () => _publishVehicleLocation(),
-      ),
+  LocationTrackingService _driverLocationTrackingService(
+    SessionController session,
+  ) {
+    return _locationTrackingService ??= LocationTrackingService(
+      DriverService(session.apiClient),
+      onPosition: _handleTrackedDriverPosition,
+      onError: _handleTrackedDriverPositionError,
     );
   }
 
-  Future<void> _publishVehicleLocation() async {
-    if (!mounted) {
+  Future<void> _syncDriverLocationTracking(SessionController session) async {
+    if (_locationTrackingSyncInFlight) {
       return;
     }
 
-    if (!_isAppForeground) {
+    final shouldTrack = _shouldBeOnline(session);
+    final trackingService = _locationTrackingService;
+    if (!shouldTrack && trackingService == null) {
       return;
     }
 
-    if (_locationPluginUnavailable) {
-      _setStatusMessage(
-        'Location sync is not available in this build. Rebuild with mobile platform support.',
-      );
-      return;
-    }
-
-    if (!(kIsWeb ||
-        defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.iOS)) {
-      _setStatusMessage(
-        'Location sync is currently available only on web, Android, and iOS builds.',
-      );
-      return;
-    }
-
+    _locationTrackingSyncInFlight = true;
     try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        _setStatusMessage(
-            'Enable device location service to share jeepney location.');
+      final service = _driverLocationTrackingService(session);
+      if (!shouldTrack) {
+        await service.stopTracking();
         return;
       }
-
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        _setStatusMessage(
-          'Location permission denied. Enable it in system settings.',
-        );
+      if (service.isTracking) {
         return;
       }
-
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 8),
-        ),
-      );
-      final previousLocation = _vehicleLocation;
-      final rawNext = LatLng(position.latitude, position.longitude);
-      final reportedAccuracy = position.accuracy;
-      final driftMeters = previousLocation == null
-          ? null
-          : Geolocator.distanceBetween(
-              previousLocation.latitude,
-              previousLocation.longitude,
-              rawNext.latitude,
-              rawNext.longitude,
-            );
-
-      if (previousLocation != null &&
-          reportedAccuracy.isFinite &&
-          reportedAccuracy > _maxVehicleGpsAccuracyMeters &&
-          driftMeters != null &&
-          driftMeters <= reportedAccuracy * 1.5) {
-        debugPrint(
-          'Ignoring noisy vehicle GPS fix '
-          '(accuracy: ${reportedAccuracy.toStringAsFixed(1)}m, '
-          'drift: ${driftMeters.toStringAsFixed(1)}m)',
-        );
-        return;
-      }
-
-      final next = previousLocation != null &&
-              driftMeters != null &&
-              driftMeters < _vehicleGpsJitterMeters
-          ? previousLocation
-          : rawNext;
-
-      if (!mounted) return;
-      if (_vehicleLocation == null ||
-          (next.latitude - _vehicleLocation!.latitude).abs() > 0.00008 ||
-          (next.longitude - _vehicleLocation!.longitude).abs() > 0.00008) {
-        setState(() {
-          _vehicleLocation = next;
-        });
-      }
-
-      if (!_isOnline) {
-        _setStatusMessage(
-          'You are offline. Location is shown locally but not shared to passengers yet.',
-        );
-        return;
-      }
-
-      final session = context.read<SessionController>();
-      final driverService = DriverService(session.apiClient);
-      await driverService.updateLocation(
-          lat: next.latitude, lng: next.longitude);
-      if (!_hasInternet) {
-        _applyAutomaticAvailabilityState(session, hasInternet: true);
-        unawaited(_syncAutomaticAvailability(session, forcePush: true));
-      }
+      await service.startTracking();
       if (_statusMessage != null &&
           _statusMessage!.toLowerCase().contains('location')) {
         _setStatusMessage(null);
       }
     } on MissingPluginException {
-      _locationPluginUnavailable = true;
-      _locationLoopActive = false;
       _setStatusMessage(
-        'Location plugin is not wired in this build. Run flutter clean, then flutter pub get, then rebuild.',
+        'Location tracking is not available in this build. Rebuild with mobile platform support.',
       );
     } catch (error) {
-      _setStatusMessage(
-        'Location loop disabled due unexpected error. Open app logs for details.',
-      );
-      _locationLoopActive = false;
-      debugPrint('Location publish error: $error');
+      _handleTrackedDriverPositionError(error);
+    } finally {
+      _locationTrackingSyncInFlight = false;
     }
+  }
+
+  void _handleTrackedDriverPosition(Position position) {
+    if (!mounted) {
+      return;
+    }
+
+    final next = _smoothedVehicleLocation(position);
+    if (next == null) {
+      return;
+    }
+
+    if (_vehicleLocation == null ||
+        (next.latitude - _vehicleLocation!.latitude).abs() > 0.00008 ||
+        (next.longitude - _vehicleLocation!.longitude).abs() > 0.00008) {
+      setState(() {
+        _vehicleLocation = next;
+      });
+    }
+
+    if (_statusMessage != null &&
+        _statusMessage!.toLowerCase().contains('location')) {
+      _setStatusMessage(null);
+    }
+  }
+
+  LatLng? _smoothedVehicleLocation(Position position) {
+    final previousLocation = _vehicleLocation;
+    final rawNext = LatLng(position.latitude, position.longitude);
+    final reportedAccuracy = position.accuracy;
+    final driftMeters = previousLocation == null
+        ? null
+        : Geolocator.distanceBetween(
+            previousLocation.latitude,
+            previousLocation.longitude,
+            rawNext.latitude,
+            rawNext.longitude,
+          );
+
+    if (previousLocation != null &&
+        reportedAccuracy.isFinite &&
+        reportedAccuracy > _maxVehicleGpsAccuracyMeters &&
+        driftMeters != null &&
+        driftMeters <= reportedAccuracy * 1.5) {
+      debugPrint(
+        'Ignoring noisy vehicle GPS fix '
+        '(accuracy: ${reportedAccuracy.toStringAsFixed(1)}m, '
+        'drift: ${driftMeters.toStringAsFixed(1)}m)',
+      );
+      return null;
+    }
+
+    if (previousLocation != null &&
+        driftMeters != null &&
+        driftMeters < _vehicleGpsJitterMeters) {
+      return previousLocation;
+    }
+
+    return rawNext;
+  }
+
+  void _handleTrackedDriverPositionError(Object error) {
+    if (_looksLikeConnectivityIssue(error)) {
+      final session = context.read<SessionController>();
+      _applyAutomaticAvailabilityState(session, hasInternet: false);
+      return;
+    }
+
+    _setStatusMessage(
+      'Location tracking needs attention. Check location permission and device location settings.',
+    );
+    debugPrint('Driver tracking error: $error');
   }
 
   void _setStatusMessage(String? message) {
@@ -1666,10 +1701,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   String _routeLabel(TripSession trip) {
     final effectiveRoute = _effectiveRouteSummaryForTrip(trip);
     if (effectiveRoute != null) {
-      return effectiveRoute.label;
+      final baseLabel = effectiveRoute.label;
+      final modeLabel = trip.operatingMode == 'terminal_queue'
+          ? 'Terminal queue'
+          : 'Route mode';
+      return '$baseLabel | $modeLabel';
     }
     if (trip.routeName != null && trip.routeName!.isNotEmpty) {
-      return trip.routeLabel;
+      final modeLabel = trip.operatingMode == 'terminal_queue'
+          ? 'Terminal queue'
+          : 'Route mode';
+      return '${trip.routeLabel} | $modeLabel';
     }
     for (final route in _routes) {
       if (route.id == trip.routeId) return route.label;
@@ -1780,8 +1822,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     );
   }
 }
-
-
 
 class _DriverStatusBanner extends StatelessWidget {
   const _DriverStatusBanner({
@@ -2056,7 +2096,6 @@ class _DriveMapPanel extends StatelessWidget {
                                 spacing: 10,
                                 runSpacing: 10,
                                 children: [
-                                  
                                   Container(
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 12,
@@ -2172,20 +2211,20 @@ class _DriveMapPanel extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 10),
-                       Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              _CounterButton(
-                                icon: Icons.remove,
-                                onTap: hasTrip ? onDecrement : null,
-                              ),
-                              SizedBox(width: 10),
-                              _CounterButton(
-                                icon: Icons.add,
-                                onTap: hasTrip ? onIncrement : null,
-                              ),
-                            ],
-                          ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            _CounterButton(
+                              icon: Icons.remove,
+                              onTap: hasTrip ? onDecrement : null,
+                            ),
+                            SizedBox(width: 10),
+                            _CounterButton(
+                              icon: Icons.add,
+                              onTap: hasTrip ? onIncrement : null,
+                            ),
+                          ],
+                        ),
                         const SizedBox(height: 16),
                         Wrap(
                           spacing: 10,

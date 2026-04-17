@@ -42,10 +42,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const double _pickupFromCurrentLocationMeters = 50;
   static const double _passengerGpsJitterMeters = 12;
   static const double _maxPassengerGpsAccuracyMeters = 35;
+  static const double _tripMarkerJitterMeters = 10;
+  static const double _tripMarkerSnapThresholdMeters = 220;
   static const double _autoUnloadDistanceMeters = 120;
   static const int _autoUnloadConsecutiveOutsideChecks = 3;
   static const Duration _autoUnloadSustainedSeparation = Duration(seconds: 60);
   static const Duration _autoUnloadForceAfterPrompt = Duration(minutes: 2);
+  static const Duration _tripMarkerAnimationTick = Duration(milliseconds: 50);
+  static const Duration _tripMarkerAnimationMinDuration =
+      Duration(milliseconds: 450);
+  static const Duration _tripMarkerAnimationMaxDuration =
+      Duration(milliseconds: 1200);
   static const double _sheetCollapsedSize = 0.09;
   static const double _sheetPeekSize = 0.38;
   static const double _sheetExpandedSize = 0.90;
@@ -70,6 +77,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   String? _statusMessage;
   String? _syncMessage;
   Timer? _liveRefreshTimer;
+  Timer? _tripMarkerAnimationTimer;
   StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
   StreamSubscription<Map<String, dynamic>>? _realtimeLocationSubscription;
   bool _silentRefreshActive = false;
@@ -78,6 +86,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   bool _autoUnloadInFlight = false;
   bool _passengerSheetCollapsed = false;
   bool _showingCachedPassengerSnapshot = false;
+  _PassengerBookingMode _bookingMode = _PassengerBookingMode.roadside;
   int _outsideAutoUnloadWindowCount = 0;
   DateTime? _outsideAutoUnloadSince;
   DateTime? _autoUnloadPromptedAt;
@@ -95,6 +104,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       DraggableScrollableController();
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final Map<String, _TripMarkerAnimation> _tripMarkerAnimations =
+      <String, _TripMarkerAnimation>{};
   OverlayEntry? _mapPromptOverlayEntry;
   Timer? _mapPromptOverlayTimer;
 
@@ -317,6 +328,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
             ? 'Showing cached trip data while reconnecting.'
             : null;
       });
+      _pruneTripMarkerAnimations();
       _syncRealtimeRouteSubscription(
         previousRouteId: previousRouteId,
         nextRouteId: nextRouteId,
@@ -578,14 +590,32 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       return;
     }
 
-    if (_draftPickupPoint == null || _draftUnloadPoint == null) {
-      setState(() => _statusMessage =
-          'Pin both your pickup and unload locations on the map before booking.');
+    final terminalStop = _routeTerminalStop(selectedRoute);
+    final isTerminalBooking = _bookingMode == _PassengerBookingMode.terminal;
+
+    if ((isTerminalBooking && _draftUnloadPoint == null) ||
+        (!isTerminalBooking &&
+            (_draftPickupPoint == null || _draftUnloadPoint == null))) {
+      setState(() => _statusMessage = isTerminalBooking
+          ? 'Choose your unload location before booking from the terminal.'
+          : 'Pin both your pickup and unload locations on the map before booking.');
       await ActionFeedback.showInfoDialog(
         context,
         title: 'Pins required',
+        message: isTerminalBooking
+            ? 'Choose your unload location before booking from the terminal.'
+            : 'Pin both your pickup and unload locations on the map before booking.',
+      );
+      return;
+    }
+    if (isTerminalBooking && terminalStop == null) {
+      setState(() =>
+          _statusMessage = 'This route has no terminal stop configured yet.');
+      await ActionFeedback.showInfoDialog(
+        context,
+        title: 'Terminal unavailable',
         message:
-            'Pin both your pickup and unload locations on the map before booking.',
+            'This route has no terminal stop configured yet. Use roadside booking for now.',
       );
       return;
     }
@@ -605,22 +635,34 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       return;
     }
     setState(() {
+      _draftPickupPoint = payload.bookingMode == _PassengerBookingMode.terminal
+          ? terminalStop?.position
+          : _draftPickupPoint;
       _draftPickupLabel = payload.pickupStopRef;
       _draftUnloadLabel = payload.destinationStopRef;
+      _bookingMode = payload.bookingMode;
     });
 
     final session = context.read<SessionController>();
     final passengerService = PassengerService(session.apiClient);
     await _runPassengerAction(
-      loadingMessage: 'Sending pickup request...',
-      successMessage:
-          'Booking request sent. The nearest eligible jeep on ${selectedRoute.label} has been notified.',
+      loadingMessage: payload.bookingMode == _PassengerBookingMode.terminal
+          ? 'Sending terminal boarding request...'
+          : 'Sending pickup request...',
+      successMessage: payload.bookingMode == _PassengerBookingMode.terminal
+          ? 'Terminal boarding request sent. A terminal-queue jeep on ${selectedRoute.label} has been notified.'
+          : 'Booking request sent. The nearest eligible jeep on ${selectedRoute.label} has been notified.',
       action: () => passengerService.createPickupRequest(
         routeId: _selectedRouteId!,
         currentLat: currentLocation.latitude,
         currentLng: currentLocation.longitude,
-        pickupLat: _draftPickupPoint!.latitude,
-        pickupLng: _draftPickupPoint!.longitude,
+        pickupType: payload.bookingMode.apiValue,
+        pickupLat: payload.bookingMode == _PassengerBookingMode.terminal
+            ? null
+            : _draftPickupPoint!.latitude,
+        pickupLng: payload.bookingMode == _PassengerBookingMode.terminal
+            ? null
+            : _draftPickupPoint!.longitude,
         destinationStopRef: payload.destinationStopRef,
         destinationLat: _draftUnloadPoint!.latitude,
         destinationLng: _draftUnloadPoint!.longitude,
@@ -1026,13 +1068,19 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 
   Future<_PassengerBookingDetails?> _showPickupDialog() async {
+    final terminalStop = _routeTerminalStop(_selectedRoute);
+    var selectedBookingMode = _bookingMode;
     final farePreview = _estimateFarePreview(
       _selectedRoute,
-      _draftPickupPoint,
+      _bookingMode == _PassengerBookingMode.terminal
+          ? terminalStop?.position
+          : _draftPickupPoint,
       _draftUnloadPoint,
     );
     final pickupStopCtrl = TextEditingController(
-      text: _draftPickupLabel ?? 'Nearest loading point',
+      text: _bookingMode == _PassengerBookingMode.terminal
+          ? (terminalStop?.name ?? 'Route terminal')
+          : (_draftPickupLabel ?? 'Nearest loading point'),
     );
     final unloadStopCtrl = TextEditingController(
       text: _draftUnloadLabel ?? 'Selected unload location',
@@ -1045,8 +1093,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           FocusManager.instance.primaryFocus?.unfocus();
           Navigator.of(context).pop(
             _PassengerBookingDetails(
+              bookingMode: selectedBookingMode,
               pickupStopRef: pickupStopCtrl.text.trim().isEmpty
-                  ? 'Nearest loading point'
+                  ? (selectedBookingMode == _PassengerBookingMode.terminal
+                      ? (terminalStop?.name ?? 'Route terminal')
+                      : 'Nearest loading point')
                   : pickupStopCtrl.text.trim(),
               destinationStopRef: unloadStopCtrl.text.trim().isEmpty
                   ? 'Selected unload location'
@@ -1062,6 +1113,47 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              StatefulBuilder(
+                builder: (context, setInnerState) {
+                  return Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Roadside pickup'),
+                        selected: selectedBookingMode ==
+                            _PassengerBookingMode.roadside,
+                        onSelected: (_) {
+                          setInnerState(() {
+                            selectedBookingMode =
+                                _PassengerBookingMode.roadside;
+                            pickupStopCtrl.text =
+                                _draftPickupLabel ?? 'Nearest loading point';
+                          });
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('Board from terminal'),
+                        selected: selectedBookingMode ==
+                            _PassengerBookingMode.terminal,
+                        onSelected: terminalStop == null
+                            ? null
+                            : (_) {
+                                setInnerState(() {
+                                  selectedBookingMode =
+                                      _PassengerBookingMode.terminal;
+                                  pickupStopCtrl.text =
+                                      terminalStop.name.isEmpty
+                                          ? 'Route terminal'
+                                          : terminalStop.name;
+                                });
+                              },
+                      ),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 12),
               if (farePreview != null) ...[
                 Container(
                   width: double.infinity,
@@ -1092,6 +1184,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
               TextField(
                 controller: pickupStopCtrl,
                 textInputAction: TextInputAction.next,
+                readOnly: selectedBookingMode == _PassengerBookingMode.terminal,
                 onTapOutside: (_) =>
                     FocusManager.instance.primaryFocus?.unfocus(),
                 onSubmitted: (_) => FocusScope.of(context).nextFocus(),
@@ -2011,11 +2104,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 
   String _bookingStateText(PickupRequestModel request) {
+    final boardingLabel =
+        request.pickupType == 'terminal' ? 'terminal boarding' : 'pickup';
     switch (request.status) {
       case 'pending':
-        return 'Waiting for driver acknowledgement';
+        return request.pickupType == 'terminal'
+            ? 'Waiting for terminal queue acknowledgement'
+            : 'Waiting for driver acknowledgement';
       case 'acknowledged':
-        return 'Driver acknowledged your booking';
+        return 'Driver acknowledged your $boardingLabel';
       case 'completed':
         return 'Boarding confirmed and ride is active';
       case 'cancelled':
@@ -2173,6 +2270,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   bool _canCancelRequest(PickupRequestModel request) {
     return request.status == 'pending' || request.status == 'acknowledged';
+  }
+
+  RouteStopPoint? _routeTerminalStop(RouteSummaryModel? route) {
+    if (route == null || route.stopPoints.isEmpty) {
+      return null;
+    }
+    final stops = List<RouteStopPoint>.from(route.stopPoints)
+      ..sort((left, right) => left.order.compareTo(right.order));
+    return stops.first;
   }
 
   String _rideStatusMessage(RideSessionModel ride) {
@@ -2612,6 +2718,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   @override
   void dispose() {
     _liveRefreshTimer?.cancel();
+    _tripMarkerAnimationTimer?.cancel();
     _realtimeNotificationSubscription?.cancel();
     _realtimeLocationSubscription?.cancel();
     _dismissMapPromptNotification();
@@ -2709,37 +2816,200 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       return;
     }
 
-    var updated = false;
-    setState(() {
-      var tripIndex = -1;
-      if (tripId.isNotEmpty) {
-        tripIndex = _trips.indexWhere((trip) => trip.id == tripId);
-      }
-      if (tripIndex < 0 && jeepneyId.isNotEmpty) {
-        tripIndex = _trips.indexWhere((trip) => trip.jeepneyId == jeepneyId);
-      }
-      if (tripIndex < 0 && routeId.isNotEmpty) {
-        tripIndex = _trips.indexWhere(
-          (trip) => _tripIsLive(trip) && trip.routeId == routeId,
-        );
-      }
-      if (tripIndex >= 0) {
-        final updatedTrip = _trips[tripIndex].copyWith(
-          jeepneyLatitude: latitude,
-          jeepneyLongitude: longitude,
-        );
-        _trips = [
-          ..._trips.sublist(0, tripIndex),
-          updatedTrip,
-          ..._trips.sublist(tripIndex + 1),
-        ];
-        updated = true;
-      }
-    });
-
-    if (!updated) {
+    final tripIndex = _findRealtimeTripIndex(
+      tripId: tripId,
+      jeepneyId: jeepneyId,
+      routeId: routeId,
+    );
+    if (tripIndex < 0) {
       await _refreshFromSocketEvent();
+      return;
     }
+
+    final trip = _trips[tripIndex];
+    final nextPoint = LatLng(latitude, longitude);
+    final currentLatitude = trip.jeepneyLatitude;
+    final currentLongitude = trip.jeepneyLongitude;
+    if (currentLatitude == null || currentLongitude == null) {
+      _setTripMarkerPosition(tripIndex, nextPoint);
+      return;
+    }
+
+    final currentPoint = LatLng(currentLatitude, currentLongitude);
+    final distanceMeters = Geolocator.distanceBetween(
+      currentPoint.latitude,
+      currentPoint.longitude,
+      nextPoint.latitude,
+      nextPoint.longitude,
+    );
+
+    if (distanceMeters < _tripMarkerJitterMeters) {
+      return;
+    }
+
+    if (distanceMeters >= _tripMarkerSnapThresholdMeters) {
+      _setTripMarkerPosition(tripIndex, nextPoint);
+      return;
+    }
+
+    _tripMarkerAnimations[trip.id] = _TripMarkerAnimation(
+      from: currentPoint,
+      to: nextPoint,
+      startedAt: DateTime.now(),
+      duration: _tripMarkerAnimationDuration(distanceMeters),
+    );
+    _ensureTripMarkerAnimationLoop();
+  }
+
+  int _findRealtimeTripIndex({
+    required String tripId,
+    required String jeepneyId,
+    required String routeId,
+  }) {
+    if (tripId.isNotEmpty) {
+      final match = _trips.indexWhere((trip) => trip.id == tripId);
+      if (match >= 0) {
+        return match;
+      }
+    }
+    if (jeepneyId.isNotEmpty) {
+      final match = _trips.indexWhere((trip) => trip.jeepneyId == jeepneyId);
+      if (match >= 0) {
+        return match;
+      }
+    }
+    if (routeId.isNotEmpty) {
+      return _trips.indexWhere(
+        (trip) => _tripIsLive(trip) && trip.routeId == routeId,
+      );
+    }
+    return -1;
+  }
+
+  void _setTripMarkerPosition(int tripIndex, LatLng point) {
+    if (tripIndex < 0 || tripIndex >= _trips.length || !mounted) {
+      return;
+    }
+
+    final trip = _trips[tripIndex];
+    _tripMarkerAnimations.remove(trip.id);
+    setState(() {
+      _trips = [
+        ..._trips.sublist(0, tripIndex),
+        trip.copyWith(
+          jeepneyLatitude: point.latitude,
+          jeepneyLongitude: point.longitude,
+        ),
+        ..._trips.sublist(tripIndex + 1),
+      ];
+    });
+    _stopTripMarkerAnimationLoopIfIdle();
+  }
+
+  void _ensureTripMarkerAnimationLoop() {
+    if (_tripMarkerAnimationTimer != null) {
+      return;
+    }
+
+    _tripMarkerAnimationTimer = Timer.periodic(_tripMarkerAnimationTick, (_) {
+      if (!mounted) {
+        _tripMarkerAnimationTimer?.cancel();
+        _tripMarkerAnimationTimer = null;
+        return;
+      }
+      _advanceTripMarkerAnimations();
+    });
+  }
+
+  void _advanceTripMarkerAnimations() {
+    if (_tripMarkerAnimations.isEmpty) {
+      _stopTripMarkerAnimationLoopIfIdle();
+      return;
+    }
+
+    final now = DateTime.now();
+    final updatedTrips = List<TripSession>.from(_trips);
+    final completedTripIds = <String>[];
+    var changed = false;
+
+    for (var index = 0; index < updatedTrips.length; index++) {
+      final trip = updatedTrips[index];
+      final animation = _tripMarkerAnimations[trip.id];
+      if (animation == null) {
+        continue;
+      }
+
+      final elapsedMicros = now.difference(animation.startedAt).inMicroseconds;
+      final durationMicros = animation.duration.inMicroseconds;
+      final progress = durationMicros <= 0
+          ? 1.0
+          : (elapsedMicros / durationMicros).clamp(0.0, 1.0).toDouble();
+      final easedProgress = Curves.easeOutCubic.transform(progress);
+      final interpolatedPoint = _lerpLatLng(
+        animation.from,
+        animation.to,
+        easedProgress,
+      );
+
+      if (trip.jeepneyLatitude != interpolatedPoint.latitude ||
+          trip.jeepneyLongitude != interpolatedPoint.longitude) {
+        updatedTrips[index] = trip.copyWith(
+          jeepneyLatitude: interpolatedPoint.latitude,
+          jeepneyLongitude: interpolatedPoint.longitude,
+        );
+        changed = true;
+      }
+
+      if (progress >= 1.0) {
+        completedTripIds.add(trip.id);
+      }
+    }
+
+    if (completedTripIds.isNotEmpty) {
+      for (final tripId in completedTripIds) {
+        _tripMarkerAnimations.remove(tripId);
+      }
+    }
+
+    if (changed && mounted) {
+      setState(() {
+        _trips = updatedTrips;
+      });
+    }
+
+    _stopTripMarkerAnimationLoopIfIdle();
+  }
+
+  void _pruneTripMarkerAnimations() {
+    final activeTripIds = _trips.map((trip) => trip.id).toSet();
+    _tripMarkerAnimations.removeWhere(
+      (tripId, _) => !activeTripIds.contains(tripId),
+    );
+    _stopTripMarkerAnimationLoopIfIdle();
+  }
+
+  void _stopTripMarkerAnimationLoopIfIdle() {
+    if (_tripMarkerAnimations.isNotEmpty) {
+      return;
+    }
+    _tripMarkerAnimationTimer?.cancel();
+    _tripMarkerAnimationTimer = null;
+  }
+
+  Duration _tripMarkerAnimationDuration(double distanceMeters) {
+    final scaledMilliseconds = (distanceMeters * 6).round();
+    final clampedMilliseconds = scaledMilliseconds.clamp(
+      _tripMarkerAnimationMinDuration.inMilliseconds,
+      _tripMarkerAnimationMaxDuration.inMilliseconds,
+    );
+    return Duration(milliseconds: clampedMilliseconds);
+  }
+
+  LatLng _lerpLatLng(LatLng from, LatLng to, double t) {
+    return LatLng(
+      from.latitude + ((to.latitude - from.latitude) * t),
+      from.longitude + ((to.longitude - from.longitude) * t),
+    );
   }
 
   double? _parseDouble(dynamic value) {
@@ -5724,6 +5994,29 @@ class _PassengerProfileSettingsSheetState
   }
 }
 
+class _TripMarkerAnimation {
+  const _TripMarkerAnimation({
+    required this.from,
+    required this.to,
+    required this.startedAt,
+    required this.duration,
+  });
+
+  final LatLng from;
+  final LatLng to;
+  final DateTime startedAt;
+  final Duration duration;
+}
+
+enum _PassengerBookingMode {
+  roadside('roadside'),
+  terminal('terminal');
+
+  const _PassengerBookingMode(this.apiValue);
+
+  final String apiValue;
+}
+
 enum _PassengerMapSelectionMode {
   pickup,
   unload,
@@ -5741,11 +6034,13 @@ class _PassengerInput {
 
 class _PassengerBookingDetails {
   const _PassengerBookingDetails({
+    required this.bookingMode,
     required this.pickupStopRef,
     required this.destinationStopRef,
     this.note,
   });
 
+  final _PassengerBookingMode bookingMode;
   final String pickupStopRef;
   final String destinationStopRef;
   final String? note;

@@ -557,7 +557,8 @@ class _AdminRouteLandmarkEditorScreenState
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('Placement tools', style: theme.textTheme.titleLarge),
+                            Text('Placement tools',
+                                style: theme.textTheme.titleLarge),
                             const SizedBox(height: 12),
                             Wrap(
                               spacing: 10,
@@ -585,7 +586,8 @@ class _AdminRouteLandmarkEditorScreenState
                                   onPressed: selectedLandmark == null
                                       ? null
                                       : () => _editLandmark(selectedLandmark),
-                                  icon: const Icon(Icons.edit_location_alt_outlined),
+                                  icon: const Icon(
+                                      Icons.edit_location_alt_outlined),
                                   label: const Text('Edit selected'),
                                 ),
                               ],
@@ -595,7 +597,8 @@ class _AdminRouteLandmarkEditorScreenState
                               width: double.infinity,
                               padding: const EdgeInsets.all(14),
                               decoration: BoxDecoration(
-                                color: const Color(0xFF0F6A5F).withValues(alpha: 0.08),
+                                color: const Color(0xFF0F6A5F)
+                                    .withValues(alpha: 0.08),
                                 borderRadius: BorderRadius.circular(18),
                               ),
                               child: Text(
@@ -618,7 +621,8 @@ class _AdminRouteLandmarkEditorScreenState
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('Landmarks', style: theme.textTheme.titleLarge),
+                            Text('Landmarks',
+                                style: theme.textTheme.titleLarge),
                             const SizedBox(height: 12),
                             ConstrainedBox(
                               constraints: const BoxConstraints(minHeight: 160),
@@ -655,21 +659,25 @@ class _AdminRouteLandmarkEditorScreenState
                                           _LandmarkListTile(
                                             order: index + 1,
                                             landmark: _landmarks[index],
-                                            fareLabel:
-                                                _formatFare(_landmarkFare(_landmarks[index])),
-                                            selected:
-                                                _landmarks[index].id == _selectedLandmarkId,
-                                            coordinateLabel:
-                                                _formatCoordinate(_landmarks[index].position),
+                                            fareLabel: _formatFare(
+                                                _landmarkFare(
+                                                    _landmarks[index])),
+                                            selected: _landmarks[index].id ==
+                                                _selectedLandmarkId,
+                                            coordinateLabel: _formatCoordinate(
+                                                _landmarks[index].position),
                                             onTap: () {
                                               setState(() {
-                                                _selectedLandmarkId = _landmarks[index].id;
+                                                _selectedLandmarkId =
+                                                    _landmarks[index].id;
                                                 _message =
                                                     '${_landmarks[index].name} selected.';
                                               });
                                             },
-                                            onEdit: () => _editLandmark(_landmarks[index]),
-                                            onDelete: () => _deleteLandmark(_landmarks[index]),
+                                            onEdit: () => _editLandmark(
+                                                _landmarks[index]),
+                                            onDelete: () => _deleteLandmark(
+                                                _landmarks[index]),
                                           ),
                                       ],
                                     ),
@@ -769,7 +777,8 @@ class _AdminRouteLandmarkEditorScreenState
                                             order: index + 1,
                                             name: _landmarks[index].name,
                                             fareLabel: _formatFare(
-                                                _landmarkFare(_landmarks[index])),
+                                                _landmarkFare(
+                                                    _landmarks[index])),
                                             selected: _landmarks[index].id ==
                                                 _selectedLandmarkId,
                                           ),

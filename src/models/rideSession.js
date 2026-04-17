@@ -20,6 +20,11 @@ const rideSessionSchema = new Schema(
     passengerId: { type: Schema.Types.ObjectId, ref: 'Passenger', required: true },
     tripSessionId: { type: Schema.Types.ObjectId, ref: 'TripSession', required: true },
     pickupRequestId: { type: Schema.Types.ObjectId, ref: 'PickupRequest', required: true },
+    pickupType: {
+      type: String,
+      enum: ['roadside', 'terminal'],
+      default: 'roadside',
+    },
     // Enforced at boarding validation time so legacy ride sessions can still be updated safely.
     destinationStopRef: { type: String, trim: true },
     destinationLocation: {

@@ -30,6 +30,16 @@ const pickupRequestSchema = new Schema(
       type: { type: String, enum: ['Point'], default: 'Point' },
       coordinates: { type: [Number] },
     },
+    pickupType: {
+      type: String,
+      enum: ['roadside', 'terminal'],
+      default: 'roadside',
+    },
+    terminalStopRef: { type: String, trim: true },
+    terminalLocation: {
+      type: { type: String, enum: ['Point'], default: 'Point' },
+      coordinates: { type: [Number] },
+    },
     fareSnapshot: fareSnapshotSchema,
     status: {
       type: String,
@@ -48,5 +58,6 @@ pickupRequestSchema.index({ passengerId: 1, status: 1, createdAt: -1 });
 pickupRequestSchema.index({ tripSessionId: 1, status: 1 });
 pickupRequestSchema.index({ status: 1, expiresAt: 1 });
 pickupRequestSchema.index({ destinationLocation: '2dsphere' });
+pickupRequestSchema.index({ pickupType: 1, routeId: 1, status: 1 });
 
 module.exports = mongoose.model('PickupRequest', pickupRequestSchema);

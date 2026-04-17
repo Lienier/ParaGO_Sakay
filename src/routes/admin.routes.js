@@ -24,6 +24,13 @@ const {
   buildJeepneyCreatePayload,
   buildJeepneyUpdatePayload,
 } = require('../utils/transportPayloads');
+const {
+  compareTerminalQueueTrips,
+  nextTerminalQueueNumber,
+  normalizeTerminalQueueStatus,
+  normalizeTripOperatingMode,
+  resolveRouteTerminalStop,
+} = require('../services/hybridDispatch.service');
 
 const router = express.Router();
 
@@ -59,6 +66,15 @@ const buildDriverProfile = async (driver) => {
     { path: 'assignedJeepneyId', select: 'plateNumber capacity status' },
     { path: 'assignedRouteId', select: 'name code status' },
   ]);
+};
+
+const ensureTerminalQueueRouteSupported = (route, operatingMode) => {
+  if (
+    normalizeTripOperatingMode(operatingMode) === 'terminal_queue' &&
+    !resolveRouteTerminalStop(route)
+  ) {
+    throw new ApiError(409, 'Selected route has no terminal stop configured');
+  }
 };
 
 const syncJeepneyAssignment = async (driver, newJeepneyId) => {
@@ -137,12 +153,29 @@ router.use(authenticate, authorize(ADMIN));
 router.get(
   '/dashboard',
   asyncHandler(async (_req, res) => {
-    const [activeTrips, pendingRequests, ongoingRides, activeAlerts] = await Promise.all([
+    const [activeTrips, pendingRequests, ongoingRides, activeAlerts, routeModeTrips, activeTerminalTrips] = await Promise.all([
       TripSession.countDocuments({ status: 'active' }),
       PickupRequest.countDocuments({ status: 'pending' }),
       RideSession.countDocuments({ status: 'onboard' }),
       StopAlert.countDocuments({ status: { $in: ['sent', 'seen'] } }),
+      TripSession.countDocuments({
+        status: 'active',
+        operatingMode: 'route',
+      }),
+      TripSession.find({
+        status: 'active',
+        operatingMode: 'terminal_queue',
+      }).select('_id'),
     ]);
+    const terminalTripIds = activeTerminalTrips.map((trip) => trip._id);
+    const terminalQueueTrips = terminalTripIds.length;
+    const terminalRequests = terminalTripIds.length
+      ? await PickupRequest.countDocuments({
+          pickupType: 'terminal',
+          tripSessionId: { $in: terminalTripIds },
+          status: { $in: ['pending', 'acknowledged'] },
+        })
+      : 0;
     return ok(
       res,
       {
@@ -150,8 +183,55 @@ router.get(
         pendingRequests,
         onboardRides: ongoingRides,
         activeAlerts,
+        terminalQueueTrips,
+        routeModeTrips,
+        terminalRequests,
       },
       'Admin dashboard summary'
+    );
+  })
+);
+
+router.get(
+  '/hybrid-dispatch',
+  asyncHandler(async (_req, res) => {
+    const [terminalTrips, routeTrips] = await Promise.all([
+      TripSession.find({
+        status: 'active',
+        operatingMode: 'terminal_queue',
+      })
+        .populate('driverId', 'userId')
+        .populate('jeepneyId', 'plateNumber jeepneyName capacity')
+        .populate('routeId', 'name code direction')
+        .sort({ terminalQueueNumber: 1, terminalCheckedInAt: 1, createdAt: 1 }),
+      TripSession.find({
+        status: 'active',
+        operatingMode: 'route',
+      })
+        .populate('driverId', 'userId')
+        .populate('jeepneyId', 'plateNumber jeepneyName capacity')
+        .populate('routeId', 'name code direction')
+        .sort({ startedAt: -1, createdAt: -1 }),
+    ]);
+
+    terminalTrips.sort(compareTerminalQueueTrips);
+    const terminalTripIds = terminalTrips.map((trip) => trip._id);
+    const terminalRequests = terminalTripIds.length
+      ? await PickupRequest.find({
+          pickupType: 'terminal',
+          tripSessionId: { $in: terminalTripIds },
+          status: { $in: ['pending', 'acknowledged'] },
+        }).sort({ createdAt: 1 })
+      : [];
+
+    return ok(
+      res,
+      {
+        terminalQueue: terminalTrips,
+        waitingTerminalPassengers: terminalRequests,
+        routeDrivers: routeTrips,
+      },
+      'Hybrid dispatch board'
     );
   })
 );
@@ -253,11 +333,18 @@ router.post(
     if (!['active', 'inactive'].includes(status)) {
       throw new ApiError(400, 'status must be one of: active, inactive');
     }
+    const operatingMode = normalizeTripOperatingMode(body.operatingMode);
 
     const normalizedRouteId =
       body.assignedRouteId && String(body.assignedRouteId).trim() !== ''
         ? normalizeOptionalObjectId(body.assignedRouteId, 'assignedRouteId', true)
         : null;
+    if (operatingMode === 'terminal_queue' && !normalizedRouteId) {
+      throw new ApiError(
+        409,
+        'Assign an active route with a terminal stop before enabling terminal queue mode'
+      );
+    }
 
     if (normalizedRouteId) {
       const route = await RouteModel.findById(normalizedRouteId);
@@ -267,6 +354,7 @@ router.post(
       if (route.status !== 'active') {
         throw new ApiError(409, 'Route is not active');
       }
+      ensureTerminalQueueRouteSupported(route, operatingMode);
     }
 
     const existingJeepney = await Jeepney.findOne({ plateNumber: jeepneyPayload.plateNumber });
@@ -300,7 +388,15 @@ router.post(
 
     const driver = await Driver.findOneAndUpdate(
       { userId: user._id },
-      { $set: update },
+      {
+        $set: {
+          ...update,
+          operatingMode,
+          terminalQueueStatus: normalizeTerminalQueueStatus(undefined, {
+            operatingMode,
+          }),
+        },
+      },
       { new: true }
     );
     if (!driver) {
@@ -344,9 +440,27 @@ router.patch(
       }
       updates.status = status;
     }
+    if (hasOwn(body, 'operatingMode')) {
+      const operatingMode = normalizeTripOperatingMode(body.operatingMode);
+      updates.operatingMode = operatingMode;
+      updates.terminalQueueStatus = normalizeTerminalQueueStatus(undefined, {
+        operatingMode,
+      });
+      if (operatingMode !== 'terminal_queue') {
+        updatesToUnset.terminalCheckedInAt = '';
+        updatesToUnset.terminalQueueNumber = '';
+        updatesToUnset.terminalStopRef = '';
+      }
+    }
     if (hasOwn(body, 'assignedRouteId')) {
       if (!body.assignedRouteId) {
         updatesToUnset.assignedRouteId = '';
+        if (updates.operatingMode === 'terminal_queue') {
+          throw new ApiError(
+            409,
+            'Assign an active route with a terminal stop before enabling terminal queue mode'
+          );
+        }
       } else {
         const routeId = normalizeOptionalObjectId(body.assignedRouteId, 'assignedRouteId', true);
         const route = await RouteModel.findById(routeId);
@@ -356,9 +470,38 @@ router.patch(
         if (route.status !== 'active') {
           throw new ApiError(409, 'Route is not active');
         }
+        ensureTerminalQueueRouteSupported(
+          route,
+          updates.operatingMode || body.operatingMode
+        );
         updates.assignedRouteId = routeId;
         assignedRouteSnapshot = buildRoutePathSnapshot(route);
       }
+    }
+    if (
+      updates.operatingMode === 'terminal_queue' &&
+      !hasOwn(body, 'assignedRouteId')
+    ) {
+      const existingProfile = await Driver.findById(req.params.id).select(
+        'assignedRouteId'
+      );
+      if (!existingProfile) {
+        throw new ApiError(404, 'Driver not found');
+      }
+      if (!existingProfile.assignedRouteId) {
+        throw new ApiError(
+          409,
+          'Assign an active route with a terminal stop before enabling terminal queue mode'
+        );
+      }
+      const route = await RouteModel.findById(existingProfile.assignedRouteId);
+      if (!route || route.status !== 'active') {
+        throw new ApiError(
+          409,
+          'Assign an active route with a terminal stop before enabling terminal queue mode'
+        );
+      }
+      ensureTerminalQueueRouteSupported(route, updates.operatingMode);
     }
 
     const updateAction = {};

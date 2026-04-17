@@ -46,6 +46,13 @@ const {
   canDriverAcknowledgePickupRequest,
   canPassengerCancelPickupRequest,
 } = require('../services/pickupFlow.service');
+const {
+  compareTerminalQueueTrips,
+  isTerminalPickupType,
+  normalizeTerminalQueueStatus,
+  normalizePickupType,
+  resolveRouteTerminalStop,
+} = require('../services/hybridDispatch.service');
 
 const router = express.Router();
 
@@ -72,6 +79,43 @@ const ensureDriverCanHandlePickup = ({ driver, trip }) => {
   }
   if (String(driver.assignedJeepneyId) !== String(trip.jeepneyId)) {
     throw new ApiError(403, 'Focused trip must use the driver assigned jeepney');
+  }
+};
+
+const syncTerminalQueueStatus = async (trip) => {
+  if (!trip || String(trip.operatingMode || 'route') !== 'terminal_queue') {
+    return;
+  }
+
+  const terminalRequests = await PickupRequest.find({
+    tripSessionId: trip._id,
+    pickupType: 'terminal',
+    status: { $in: ['pending', 'acknowledged'] },
+  }).select('status');
+
+  const hasAcknowledged = terminalRequests.some(
+    (request) => request.status === 'acknowledged'
+  );
+  const nextStatus = normalizeTerminalQueueStatus(
+    hasAcknowledged ? 'loading' : 'waiting',
+    { operatingMode: trip.operatingMode }
+  );
+  if (trip.terminalQueueStatus === nextStatus) {
+    return;
+  }
+
+  trip.terminalQueueStatus = nextStatus;
+  await trip.save();
+  if (trip.driverId) {
+    await Driver.findByIdAndUpdate(trip.driverId, {
+      $set: {
+        operatingMode: trip.operatingMode,
+        terminalQueueStatus: trip.terminalQueueStatus,
+        terminalCheckedInAt: trip.terminalCheckedInAt || trip.startedAt || new Date(),
+        terminalQueueNumber: trip.terminalQueueNumber,
+        terminalStopRef: trip.terminalStopRef,
+      },
+    });
   }
 };
 
@@ -111,8 +155,10 @@ const reverseGeocodeLabel = async ({ latitude, longitude }) => {
 const resolveEligibleTripForRoute = async ({
   routeId,
   pickupLocation,
+  pickupType,
   excludeTripIds = [],
 }) => {
+  const normalizedPickupType = normalizePickupType(pickupType);
   const trips = await TripSession.find({
     routeId,
     status: 'active',
@@ -133,10 +179,17 @@ const resolveEligibleTripForRoute = async ({
   for (const trip of trips) {
     const driver = trip.driverId;
     const jeepney = trip.jeepneyId;
+    const tripOperatingMode = String(trip.operatingMode || 'route');
     if (!driver || !driver.userId || !driver.isVerified || driver.status !== 'active') {
       continue;
     }
     if (!jeepney || jeepney.status !== 'active' || !isFinitePositiveNumber(jeepney.capacity)) {
+      continue;
+    }
+    if (normalizedPickupType === 'terminal' && tripOperatingMode !== 'terminal_queue') {
+      continue;
+    }
+    if (normalizedPickupType === 'roadside' && tripOperatingMode === 'terminal_queue') {
       continue;
     }
 
@@ -159,7 +212,9 @@ const resolveEligibleTripForRoute = async ({
 
     const jeepneyCoordinates = pointCoordinates(jeepney.lastKnownLocation);
     const distanceMeters =
-      pickupCoordinates && jeepneyCoordinates
+      normalizedPickupType === 'terminal'
+        ? 0
+        : pickupCoordinates && jeepneyCoordinates
         ? haversineMeters(
             pickupCoordinates[1],
             pickupCoordinates[0],
@@ -183,6 +238,9 @@ const resolveEligibleTripForRoute = async ({
   }
 
   eligibleTrips.sort((left, right) => {
+    if (normalizedPickupType === 'terminal') {
+      return compareTerminalQueueTrips(left.trip, right.trip);
+    }
     if (left.distanceMeters !== right.distanceMeters) {
       return left.distanceMeters - right.distanceMeters;
     }
@@ -214,8 +272,14 @@ router.post(
     ensureObjectId(payload.routeId, 'routeId');
     const route = await Route.findById(payload.routeId);
     if (!route) throw new ApiError(404, 'Route not found');
+    const pickupType = normalizePickupType(payload.pickupType);
+    const terminalStop = isTerminalPickupType(pickupType)
+      ? resolveRouteTerminalStop(route)
+      : null;
 
-    let pickupLocation = payload.pickupLocation;
+    let pickupLocation = isTerminalPickupType(pickupType)
+      ? terminalStop?.location
+      : payload.pickupLocation;
     if (!pickupLocation || !Array.isArray(pickupLocation.coordinates) || pickupLocation.coordinates.length < 2) {
       pickupLocation = pickDefaultRouteCoordinate(route);
       if (!pickupLocation) {
@@ -247,7 +311,11 @@ router.post(
       );
     }
 
-    if (!isRoutePickupNearRoad({
+    if (isTerminalPickupType(pickupType)) {
+      if (!terminalStop) {
+        throw new ApiError(409, 'Selected route has no terminal stop configured');
+      }
+    } else if (!isRoutePickupNearRoad({
       latitude: latPickup,
       longitude: lngPickup,
       route,
@@ -303,6 +371,7 @@ router.post(
     trip = await resolveEligibleTripForRoute({
       routeId: route._id,
       pickupLocation,
+      pickupType,
     });
 
     const pendingCount = await PickupRequest.countDocuments({
@@ -326,8 +395,13 @@ router.post(
       passengerId: passenger._id,
       tripSessionId: trip._id,
       routeId: payload.routeId,
-      stopRef: payload.stopRef,
+      pickupType,
+      stopRef: isTerminalPickupType(pickupType)
+        ? terminalStop?.stopRef || payload.stopRef
+        : payload.stopRef,
       pickupLocation,
+      terminalStopRef: terminalStop?.stopRef,
+      terminalLocation: terminalStop?.location,
       destinationStopRef: normalizedDestinationStopRef,
       destinationLocation: {
         type: 'Point',
@@ -343,10 +417,14 @@ router.post(
     await publishNotification({
       userId: tripDriverUser?.userId,
       type: 'pickup_request_created',
-      title: 'New roadside pickup request',
+      title: isTerminalPickupType(pickupType)
+        ? 'New terminal boarding request'
+        : 'New roadside pickup request',
       body:
         `${req.user.fullName || 'Passenger'} requested ` +
-        `${payload.stopRef || 'a pickup stop'} to ` +
+        `${(isTerminalPickupType(pickupType)
+          ? terminalStop?.stopRef
+          : payload.stopRef) || 'a pickup stop'} to ` +
         `${normalizedDestinationStopRef}`,
       payload: {
         requestId: request._id,
@@ -357,7 +435,14 @@ router.post(
       category: 'trip',
     });
 
-    return ok(res, request, 'Pickup request created', 201);
+    return ok(
+      res,
+      request,
+      isTerminalPickupType(pickupType)
+        ? 'Terminal boarding request created'
+        : 'Pickup request created',
+      201
+    );
   })
 );
 
@@ -450,6 +535,9 @@ router.patch(
       request.acknowledgedBy = driver?._id || null;
     }
     await request.save();
+    if (request.pickupType === 'terminal') {
+      await syncTerminalQueueStatus(trip);
+    }
     const passengerUser = await Passenger.findById(request.passengerId).select('userId');
     await publishNotification({
       userId: passengerUser?.userId,
@@ -489,6 +577,9 @@ router.patch(
     await request.save();
     const trip = await TripSession.findById(request.tripSessionId)
       .populate('driverId', 'userId');
+    if (request.pickupType === 'terminal') {
+      await syncTerminalQueueStatus(trip);
+    }
     await publishNotification({
       userId: trip?.driverId?.userId,
       type: 'pickup_request_cancelled',
@@ -543,6 +634,9 @@ router.patch(
       request.status = 'completed';
       request.acknowledgedAt = request.acknowledgedAt || new Date();
       await request.save();
+    }
+    if (request.pickupType === 'terminal') {
+      await syncTerminalQueueStatus(trip);
     }
     return ok(res, request, 'Pickup request marked completed');
   })

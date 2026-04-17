@@ -6,6 +6,14 @@ const {
   canPassengerBoardPickupRequest,
   canPassengerCancelPickupRequest,
 } = require('./src/services/pickupFlow.service');
+const {
+  compareTerminalQueueTrips,
+  normalizePickupType,
+  normalizeTerminalQueueStatus,
+  normalizeTripOperatingMode,
+  routeHasTerminalStop,
+  resolveRouteTerminalStop,
+} = require('./src/services/hybridDispatch.service');
 
 // Test configuration
 const TEST_CONFIG = {
@@ -258,6 +266,125 @@ function testPassengerCanCancelOnlyOpenRequests() {
   );
 }
 
+function testPickupTypeNormalization() {
+  assert.strictEqual(
+    normalizePickupType('terminal'),
+    'terminal',
+    'Terminal pickup type should normalize correctly'
+  );
+  assert.strictEqual(
+    normalizePickupType('anything-else'),
+    'roadside',
+    'Unknown pickup types should fall back to roadside'
+  );
+}
+
+function testTripOperatingModeNormalization() {
+  assert.strictEqual(
+    normalizeTripOperatingMode('terminal_queue'),
+    'terminal_queue',
+    'Terminal queue operating mode should normalize correctly'
+  );
+  assert.strictEqual(
+    normalizeTripOperatingMode('route_mode'),
+    'route',
+    'Unknown operating modes should fall back to route'
+  );
+}
+
+function testResolveRouteTerminalStop() {
+  const terminal = resolveRouteTerminalStop({
+    stops: [
+      {
+        name: 'Midpoint',
+        order: 3,
+        location: { coordinates: [121.0101, 14.6101] },
+      },
+      {
+        name: 'Main Terminal',
+        order: 1,
+        location: { coordinates: [121.0001, 14.6001] },
+      },
+    ],
+  });
+
+  assert(terminal, 'Terminal stop should resolve for routes with stops');
+  assert.strictEqual(
+    terminal.stopRef,
+    'Main Terminal',
+    'Lowest-order route stop should be used as the terminal'
+  );
+}
+
+function testRouteHasTerminalStop() {
+  assert.strictEqual(
+    routeHasTerminalStop({
+      stops: [
+        {
+          name: 'Terminal',
+          order: 1,
+          location: { coordinates: [121.0, 14.6] },
+        },
+      ],
+    }),
+    true,
+    'Routes with at least one valid stop should expose a terminal stop'
+  );
+  assert.strictEqual(
+    routeHasTerminalStop({ stops: [] }),
+    false,
+    'Routes without valid stops should not expose a terminal stop'
+  );
+}
+
+function testTerminalQueueSorting() {
+  const waitingLater = {
+    operatingMode: 'terminal_queue',
+    terminalQueueStatus: 'waiting',
+    terminalQueueNumber: 2,
+    terminalCheckedInAt: '2026-04-18T08:05:00.000Z',
+  };
+  const loadingSooner = {
+    operatingMode: 'terminal_queue',
+    terminalQueueStatus: 'loading',
+    terminalQueueNumber: 3,
+    terminalCheckedInAt: '2026-04-18T08:07:00.000Z',
+  };
+  const waitingEarlier = {
+    operatingMode: 'terminal_queue',
+    terminalQueueStatus: 'waiting',
+    terminalQueueNumber: 1,
+    terminalCheckedInAt: '2026-04-18T08:00:00.000Z',
+  };
+
+  const sorted = [waitingLater, loadingSooner, waitingEarlier].sort(
+    compareTerminalQueueTrips
+  );
+  assert.strictEqual(
+    sorted[0],
+    loadingSooner,
+    'Loading terminal trips should be prioritized over waiting trips'
+  );
+  assert.strictEqual(
+    sorted[1],
+    waitingEarlier,
+    'Waiting trips should then sort by queue number and check-in time'
+  );
+}
+
+function testTerminalQueueStatusNormalization() {
+  assert.strictEqual(
+    normalizeTerminalQueueStatus('loading', { operatingMode: 'terminal_queue' }),
+    'loading',
+    'Terminal queue trips should keep valid queue statuses'
+  );
+  assert.strictEqual(
+    normalizeTerminalQueueStatus('loading', { operatingMode: 'route' }),
+    'off_queue',
+    'Route-mode trips should never keep terminal queue statuses'
+  );
+}
+
 // ============ BOARDING WINDOW TESTS ============
 function testBoardingWindowValid() {
   const pickupTime = new Date();
@@ -477,10 +604,18 @@ async function runAllTests() {
   runTest('Pickup', 'Driver Acknowledge Only Pending', testDriverAcknowledgeOnlyPending);
   runTest('Pickup', 'Passenger Boards Only After Acknowledgement', testPassengerBoardsOnlyAfterAcknowledgement);
   runTest('Pickup', 'Passenger Cancels Only Open Requests', testPassengerCanCancelOnlyOpenRequests);
+  runTest('Pickup', 'Pickup Type Normalization', testPickupTypeNormalization);
 
   console.log('\n--- Boarding Window Tests ---');
   runTest('Boarding', 'Boarding Window Valid', testBoardingWindowValid);
   runTest('Boarding', 'Boarding Window Expired', testBoardingWindowExpired);
+
+  console.log('\n--- Hybrid Dispatch Tests ---');
+  runTest('Hybrid', 'Trip Operating Mode Normalization', testTripOperatingModeNormalization);
+  runTest('Hybrid', 'Resolve Route Terminal Stop', testResolveRouteTerminalStop);
+  runTest('Hybrid', 'Route Has Terminal Stop', testRouteHasTerminalStop);
+  runTest('Hybrid', 'Terminal Queue Sorting', testTerminalQueueSorting);
+  runTest('Hybrid', 'Terminal Queue Status Normalization', testTerminalQueueStatusNormalization);
 
   console.log('\n--- Stop Alert Tests ---');
   runTest('StopAlert', 'Cooldown Active', testStopAlertCooldown);
@@ -547,8 +682,12 @@ function generateCSV() {
     'Pickup - Driver Acknowledge Only Pending': 'Verifies only pending pickup requests can be acknowledged by drivers',
     'Pickup - Passenger Boards Only After Acknowledgement': 'Verifies boarding is blocked until the driver acknowledges the pickup',
     'Pickup - Passenger Cancels Only Open Requests': 'Verifies passengers can only cancel pending or acknowledged pickups',
+    'Pickup - Pickup Type Normalization': 'Verifies hybrid pickup types normalize to terminal or roadside',
     'Boarding - Boarding Window Valid': 'Verifies boarding within time window is allowed',
     'Boarding - Boarding Window Expired': 'Verifies boarding outside time window is rejected',
+    'Hybrid - Trip Operating Mode Normalization': 'Verifies trip operating modes normalize to route or terminal queue',
+    'Hybrid - Resolve Route Terminal Stop': 'Verifies the first configured route stop is used as the terminal reference',
+    'Hybrid - Terminal Queue Sorting': 'Verifies loading trips and earlier queue numbers are prioritized in terminal dispatch',
     'StopAlert - Cooldown Active': 'Verifies stop alert cooldown period is enforced',
     'StopAlert - Cooldown Expired': 'Verifies stop alert can be sent after cooldown',
     'Reassignment - Jeep Passed By': 'Verifies jeep is marked as passed when beyond threshold',

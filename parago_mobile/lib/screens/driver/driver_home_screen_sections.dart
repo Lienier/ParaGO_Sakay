@@ -165,8 +165,12 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
   }
 
   LatLng? _pickupPosition(PickupRequestModel request) {
-    final lat = request.pickupLatitude;
-    final lng = request.pickupLongitude;
+    final lat = request.pickupType == 'terminal'
+        ? (request.terminalLatitude ?? request.pickupLatitude)
+        : request.pickupLatitude;
+    final lng = request.pickupType == 'terminal'
+        ? (request.terminalLongitude ?? request.pickupLongitude)
+        : request.pickupLongitude;
     if (lat == null || lng == null) {
       return null;
     }
@@ -229,10 +233,18 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       final request = activeRequests[index];
       markers.add(
         _DriveMarkerData(
-          label: request.stopRef ?? 'Pickup ${index + 1}',
+          label: request.pickupType == 'terminal'
+              ? (request.terminalStopRef ??
+                  request.stopRef ??
+                  'Terminal passenger')
+              : (request.stopRef ?? 'Pickup ${index + 1}'),
           detail: request.status == 'acknowledged'
-              ? 'Acknowledged pickup'
-              : 'Waiting pickup',
+              ? request.pickupType == 'terminal'
+                  ? 'Acknowledged terminal boarding'
+                  : 'Acknowledged pickup'
+              : request.pickupType == 'terminal'
+                  ? 'Waiting at terminal'
+                  : 'Waiting pickup',
           position: _pickupPosition(request) ??
               routePath[math.min(index, routePath.length - 1)],
           icon: Icons.person_pin_circle,
@@ -352,13 +364,14 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         ? null
         : _driverPickupRequirementMessage(trip: focusedTrip);
     final visibleOperationsMessage =
-      _visibleInfoMessage(_driverOperationsBannerMessage(focusedTrip));
+        _visibleInfoMessage(_driverOperationsBannerMessage(focusedTrip));
     final visibleStatusMessage = _visibleInfoMessage(_statusMessage);
     final displayedOnboard = _displayedOnboardCount(focusedTrip, focusedRides);
     final activeAlerts = focusedAlerts
         .where(
-          (alert) => _DriverHomeScreenState._activeAlertStatuses
-              .contains(alert.status) &&
+          (alert) =>
+              _DriverHomeScreenState._activeAlertStatuses
+                  .contains(alert.status) &&
               !_isDriveAlertDismissed(alert.id),
         )
         .toList();
@@ -453,27 +466,25 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       onDecrement: focusedTrip == null
           ? null
           : () => _changePassengerCount(focusedTrip.id, -1),
-      onStartTrip:
-          _loading ||
+      onStartTrip: _loading ||
               (focusedTrip != null && focusedTrip.status == 'active') ||
               startRequirementMessage != null
-              ? null
-              : () => _startTrip(focusedTrip),
+          ? null
+          : () => _startTrip(focusedTrip),
       onEndTrip:
           focusedTrip == null || _loading || focusedTrip.status != 'active'
               ? null
               : () => _endTrip(focusedTrip.id),
-      onTogglePickup:
-          focusedTrip == null ||
-                  _loading ||
-                  focusedTrip.status != 'active' ||
-                  (focusedTrip.acceptRequests == false &&
-                      pickupRequirementMessage != null)
-              ? null
-              : () => _toggleAccept(
-                    focusedTrip,
-                    !(focusedTrip.acceptRequests ?? true),
-                  ),
+      onTogglePickup: focusedTrip == null ||
+              _loading ||
+              focusedTrip.status != 'active' ||
+              (focusedTrip.acceptRequests == false &&
+                  pickupRequirementMessage != null)
+          ? null
+          : () => _toggleAccept(
+                focusedTrip,
+                !(focusedTrip.acceptRequests ?? true),
+              ),
       onAcknowledgeAlert: activeAlerts.isEmpty
           ? null
           : () => _acknowledgeAlert(activeAlerts.first.id),
@@ -489,30 +500,30 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       readLiveData: () {
         final liveTrip = _focusedTrip;
         final liveRequests = liveTrip == null
-          ? const <PickupRequestModel>[]
-          : (_tripRequests[liveTrip.id] ?? const <PickupRequestModel>[]);
+            ? const <PickupRequestModel>[]
+            : (_tripRequests[liveTrip.id] ?? const <PickupRequestModel>[]);
         final liveAlerts = liveTrip == null
-          ? const <StopAlertModel>[]
-          : (_tripAlerts[liveTrip.id] ?? const <StopAlertModel>[]);
+            ? const <StopAlertModel>[]
+            : (_tripAlerts[liveTrip.id] ?? const <StopAlertModel>[]);
         final liveRides = liveTrip == null
-          ? const <RideSessionModel>[]
-          : (_tripRides[liveTrip.id] ?? const <RideSessionModel>[]);
+            ? const <RideSessionModel>[]
+            : (_tripRides[liveTrip.id] ?? const <RideSessionModel>[]);
 
         final liveStartRequirement = liveTrip == null
-          ? null
-          : _driverStartRequirementMessage(trip: liveTrip);
+            ? null
+            : _driverStartRequirementMessage(trip: liveTrip);
         final livePickupRequirement = liveTrip == null
-          ? null
-          : _driverPickupRequirementMessage(trip: liveTrip);
+            ? null
+            : _driverPickupRequirementMessage(trip: liveTrip);
         final liveActiveAlerts = liveAlerts
-          .where(
-            (alert) =>
-              _DriverHomeScreenState._activeAlertStatuses.contains(
-              alert.status,
-              ) &&
-              !_isDriveAlertDismissed(alert.id),
-          )
-          .toList(growable: false);
+            .where(
+              (alert) =>
+                  _DriverHomeScreenState._activeAlertStatuses.contains(
+                    alert.status,
+                  ) &&
+                  !_isDriveAlertDismissed(alert.id),
+            )
+            .toList(growable: false);
 
         final liveOperationsMessage =
             _visibleInfoMessage(_driverOperationsBannerMessage(liveTrip));
@@ -521,59 +532,59 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         return _DrivePanelLiveData(
           trip: liveTrip,
           routeLabel: liveTrip == null
-            ? (_assignedRouteSummary()?.label ?? 'Metro overview')
-            : _routeLabel(liveTrip),
+              ? (_assignedRouteSummary()?.label ?? 'Metro overview')
+              : _routeLabel(liveTrip),
           isOnline: _isOnline,
           availabilityNote: _availabilityNote,
           requirementMessage: liveOperationsMessage,
           statusMessage: liveStatusMessage,
           displayedOnboard: _displayedOnboardCount(liveTrip, liveRides),
-          manualAdjustment:
-            liveTrip == null ? 0 : (_manualOnboardAdjustments[liveTrip.id] ?? 0),
+          manualAdjustment: liveTrip == null
+              ? 0
+              : (_manualOnboardAdjustments[liveTrip.id] ?? 0),
           activePickupCount: liveRequests
-            .where(
-            (request) => _DriverHomeScreenState._pickupStatuses.contains(
-              request.status,
-            ),
-            )
-            .length,
+              .where(
+                (request) => _DriverHomeScreenState._pickupStatuses.contains(
+                  request.status,
+                ),
+              )
+              .length,
           activeDestinationAlerts: liveActiveAlerts,
           onIncrement: liveTrip == null
-            ? null
-            : () => _changePassengerCount(liveTrip.id, 1),
+              ? null
+              : () => _changePassengerCount(liveTrip.id, 1),
           onDecrement: liveTrip == null
-            ? null
-            : () => _changePassengerCount(liveTrip.id, -1),
+              ? null
+              : () => _changePassengerCount(liveTrip.id, -1),
           onStartTrip: _loading ||
-              (liveTrip != null && liveTrip.status == 'active') ||
-              liveStartRequirement != null
-            ? null
-            : () => _startTrip(liveTrip),
-          onEndTrip:
-            liveTrip == null || _loading || liveTrip.status != 'active'
+                  (liveTrip != null && liveTrip.status == 'active') ||
+                  liveStartRequirement != null
+              ? null
+              : () => _startTrip(liveTrip),
+          onEndTrip: liveTrip == null || _loading || liveTrip.status != 'active'
               ? null
               : () => _endTrip(liveTrip.id),
           onTogglePickup: liveTrip == null ||
-              _loading ||
-              liveTrip.status != 'active' ||
-              (liveTrip.acceptRequests == false &&
-                livePickupRequirement != null)
-            ? null
-            : () => _toggleAccept(
-              liveTrip,
-              !(liveTrip.acceptRequests ?? true),
-              ),
+                  _loading ||
+                  liveTrip.status != 'active' ||
+                  (liveTrip.acceptRequests == false &&
+                      livePickupRequirement != null)
+              ? null
+              : () => _toggleAccept(
+                    liveTrip,
+                    !(liveTrip.acceptRequests ?? true),
+                  ),
           onDismissAlert: liveActiveAlerts.isEmpty
-            ? null
-            : () => _dismissDriveAlert(liveActiveAlerts.first.id),
+              ? null
+              : () => _dismissDriveAlert(liveActiveAlerts.first.id),
           onDismissRequirementMessage: liveOperationsMessage == null
-            ? null
-            : () => _dismissInfoMessage(liveOperationsMessage),
+              ? null
+              : () => _dismissInfoMessage(liveOperationsMessage),
           onDismissStatusMessage: liveStatusMessage == null
-            ? null
-            : () => _dismissInfoMessage(liveStatusMessage),
+              ? null
+              : () => _dismissInfoMessage(liveStatusMessage),
         );
-        },
+      },
       height: mapHeight,
     );
   }
@@ -586,7 +597,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         ? null
         : _driverPickupRequirementMessage(trip: focusedTrip);
     final visiblePickupRequirementMessage =
-      _visibleInfoMessage(pickupRequirementMessage);
+        _visibleInfoMessage(pickupRequirementMessage);
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
@@ -622,13 +633,21 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               subtitle:
                   '${ParagoFormat.statusLabel(request.status)} - ${ParagoFormat.relative(request.createdAt)}',
               detail: request.status == 'acknowledged'
-                  ? 'Pickup acknowledged. Wait for the passenger to validate boarding from the passenger app.'
+                  ? request.pickupType == 'terminal'
+                      ? 'Terminal boarding acknowledged. Wait for the passenger to validate boarding from the passenger app.'
+                      : 'Pickup acknowledged. Wait for the passenger to validate boarding from the passenger app.'
                   : request.status == 'completed'
                       ? 'Passenger boarding has been validated and the ride is already active.'
                       : request.sourceNote ??
-                          'Passenger requested a roadside pickup.',
+                          (request.pickupType == 'terminal'
+                              ? 'Passenger requested terminal boarding.'
+                              : 'Passenger requested a roadside pickup.'),
               status: request.status,
-              primaryLabel: request.status == 'pending' ? 'Acknowledge' : null,
+              primaryLabel: request.status == 'pending'
+                  ? request.pickupType == 'terminal'
+                      ? 'Load passenger'
+                      : 'Acknowledge'
+                  : null,
               onPrimary: request.status == 'pending' &&
                       visiblePickupRequirementMessage == null
                   ? () => _acknowledgeRequest(focusedTrip, request.id)
@@ -647,9 +666,9 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     required List<RideSessionModel> rides,
   }) {
     final recentNotifications = _notifications
-      .where((item) => !_isNotificationDismissed(item.id))
-      .take(5)
-      .toList();
+        .where((item) => !_isNotificationDismissed(item.id))
+        .take(5)
+        .toList();
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),

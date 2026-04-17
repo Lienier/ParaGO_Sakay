@@ -1,4 +1,5 @@
 const express = require('express');
+const Driver = require('../models/driver');
 const TripSession = require('../models/tripSession');
 const Jeepney = require('../models/jeepney');
 const Route = require('../models/route');
@@ -14,8 +15,15 @@ const {
   requireTrip,
   ensureDriverAssignedToTrip,
 } = require('../services/routeContext.service');
+const {
+  nextTerminalQueueNumber,
+  normalizeTerminalQueueStatus,
+  normalizeTripOperatingMode,
+  resolveRouteTerminalStop,
+} = require('../services/hybridDispatch.service');
 
 const router = express.Router();
+const terminalQueueCreateRetryLimit = 4;
 
 const buildRoutePathSnapshot = (route) => {
   const coordinates = Array.isArray(route?.path?.coordinates)
@@ -30,6 +38,123 @@ const buildRoutePathSnapshot = (route) => {
     type: 'LineString',
     coordinates: coordinates.map((entry) => [Number(entry[0]), Number(entry[1])]),
   };
+};
+
+const isDuplicateKeyError = (error) => error?.code === 11000;
+
+const buildTerminalQueueFields = async ({
+  route,
+  operatingMode,
+  startedAt,
+  excludeTripId,
+}) => {
+  if (operatingMode !== 'terminal_queue') {
+    return {
+      terminalQueueStatus: normalizeTerminalQueueStatus(undefined, {
+        operatingMode,
+      }),
+      terminalQueueNumber: undefined,
+      terminalCheckedInAt: undefined,
+      terminalStopRef: undefined,
+      terminalLocation: undefined,
+    };
+  }
+
+  const terminalStop = resolveRouteTerminalStop(route);
+  if (!terminalStop) {
+    throw new ApiError(409, 'Selected route has no terminal stop configured');
+  }
+
+  const existingQueueTrips = await TripSession.find({
+    routeId: route._id,
+    operatingMode: 'terminal_queue',
+    status: { $in: ['scheduled', 'active'] },
+    ...(excludeTripId ? { _id: { $ne: excludeTripId } } : {}),
+  }).select('terminalQueueNumber terminalCheckedInAt status createdAt startedAt');
+
+  return {
+    terminalQueueStatus: normalizeTerminalQueueStatus(undefined, {
+      operatingMode,
+    }),
+    terminalQueueNumber: nextTerminalQueueNumber(existingQueueTrips),
+    terminalCheckedInAt: startedAt || new Date(),
+    terminalStopRef: terminalStop.stopRef,
+    terminalLocation: terminalStop.location,
+  };
+};
+
+const syncDriverActiveTripState = async ({ driverId, trip }) => {
+  if (!driverId || !trip) {
+    return;
+  }
+
+  const operatingMode = normalizeTripOperatingMode(trip.operatingMode);
+  if (operatingMode !== 'terminal_queue') {
+    await Driver.findByIdAndUpdate(driverId, {
+      $set: {
+        operatingMode: 'route',
+        terminalQueueStatus: 'off_queue',
+      },
+      $unset: {
+        terminalCheckedInAt: '',
+        terminalQueueNumber: '',
+        terminalStopRef: '',
+      },
+    });
+    return;
+  }
+
+  await Driver.findByIdAndUpdate(driverId, {
+    $set: {
+      operatingMode,
+      terminalQueueStatus: normalizeTerminalQueueStatus(
+        trip.terminalQueueStatus,
+        { operatingMode }
+      ),
+      terminalCheckedInAt: trip.terminalCheckedInAt || trip.startedAt || new Date(),
+      terminalQueueNumber: trip.terminalQueueNumber,
+      terminalStopRef: trip.terminalStopRef,
+    },
+  });
+};
+
+const createTripSession = async ({
+  payload,
+  route,
+  operatingMode,
+  startedAt,
+}) => {
+  for (let attempt = 0; attempt < terminalQueueCreateRetryLimit; attempt += 1) {
+    const terminalFields = await buildTerminalQueueFields({
+      route,
+      operatingMode,
+      startedAt,
+    });
+
+    try {
+      return await TripSession.create({
+        ...payload,
+        routePathSnapshot: buildRoutePathSnapshot(route),
+        startedAt,
+        active: payload.status === 'active',
+        operatingMode,
+        ...terminalFields,
+      });
+    } catch (error) {
+      const canRetry =
+        operatingMode === 'terminal_queue' &&
+        isDuplicateKeyError(error) &&
+        attempt < terminalQueueCreateRetryLimit - 1;
+      if (!canRetry) {
+        throw error;
+      }
+    }
+  }
+
+  throw new ApiError(
+    409,
+    'Unable to reserve a unique terminal queue slot right now'
+  );
 };
 
 router.get(
@@ -71,6 +196,9 @@ router.post(
     }
     ensureObjectId(payload.jeepneyId, 'jeepneyId');
     ensureObjectId(payload.routeId, 'routeId');
+    if (payload.driverId) {
+      ensureObjectId(payload.driverId, 'driverId');
+    }
     if (payload.status) {
       ensureEnum(payload.status, 'status', ['scheduled', 'active', 'completed', 'cancelled']);
     }
@@ -88,6 +216,14 @@ router.post(
     if (route.status !== 'active') {
       throw new ApiError(409, 'Route is not active');
     }
+    const operatingMode = normalizeTripOperatingMode(payload.operatingMode);
+    if (
+      operatingMode === 'terminal_queue' &&
+      !resolveRouteTerminalStop(route)
+    ) {
+      throw new ApiError(409, 'Selected route has no terminal stop configured');
+    }
+
     if (req.user.role === DRIVER) {
       const driver = await requireCurrentDriver(req.user);
       if (driver.status !== 'active') {
@@ -99,7 +235,7 @@ router.post(
       if (
         driver.assignedJeepneyId &&
         String(driver.assignedJeepneyId) !== String(jeepney._id)
-      ) {
+        ) {
         throw new ApiError(403, 'This jeepney is not assigned to the driver');
       }
       payload.driverId = driver._id;
@@ -109,12 +245,15 @@ router.post(
         throw new ApiError(400, 'driverId is required when creating a non-scheduled trip');
       }
     }
-    const trip = await TripSession.create({
-      ...payload,
-      routePathSnapshot: buildRoutePathSnapshot(route),
+    const trip = await createTripSession({
+      payload,
+      route,
+      operatingMode,
       startedAt,
-      active: payload.status === 'active',
     });
+    if (trip.status === 'active' && trip.driverId) {
+      await syncDriverActiveTripState({ driverId: trip.driverId, trip });
+    }
     return ok(res, trip, 'Trip session created', 201);
   })
 );
@@ -126,6 +265,7 @@ router.patch(
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'trip id');
     const trip = await requireTrip(req.params.id);
+    let route;
     if (trip.status === 'active') {
       throw new ApiError(409, 'Trip already active');
     }
@@ -157,13 +297,48 @@ router.patch(
       (!trip.routePathSnapshot || !Array.isArray(trip.routePathSnapshot.coordinates)) &&
       trip.routeId
     ) {
-      const route = await Route.findById(trip.routeId);
+      route = await Route.findById(trip.routeId);
       trip.routePathSnapshot = buildRoutePathSnapshot(route);
     }
     trip.startedAt = new Date();
     trip.active = true;
     trip.acceptRequests = true;
+    trip.operatingMode = normalizeTripOperatingMode(trip.operatingMode);
+    if (trip.operatingMode === 'terminal_queue') {
+      route = route || (trip.routeId ? await Route.findById(trip.routeId) : null);
+      if (!route) {
+        throw new ApiError(409, 'Route is required for a terminal queue trip');
+      }
+      const terminalFields = await buildTerminalQueueFields({
+        route,
+        operatingMode: trip.operatingMode,
+        startedAt: trip.startedAt,
+        excludeTripId: trip._id,
+      });
+      trip.terminalQueueStatus = normalizeTerminalQueueStatus(
+        trip.terminalQueueStatus,
+        { operatingMode: trip.operatingMode }
+      );
+      trip.terminalQueueNumber =
+        trip.terminalQueueNumber || terminalFields.terminalQueueNumber;
+      trip.terminalCheckedInAt =
+        trip.terminalCheckedInAt || terminalFields.terminalCheckedInAt;
+      trip.terminalStopRef = trip.terminalStopRef || terminalFields.terminalStopRef;
+      trip.terminalLocation = trip.terminalLocation || terminalFields.terminalLocation;
+    } else {
+      trip.terminalQueueStatus = normalizeTerminalQueueStatus(
+        trip.terminalQueueStatus,
+        { operatingMode: trip.operatingMode }
+      );
+      trip.terminalCheckedInAt = undefined;
+      trip.terminalQueueNumber = undefined;
+      trip.terminalStopRef = undefined;
+      trip.terminalLocation = undefined;
+    }
     await trip.save();
+    if (trip.driverId) {
+      await syncDriverActiveTripState({ driverId: trip.driverId, trip });
+    }
     return ok(res, trip, 'Trip started');
   })
 );
@@ -185,7 +360,16 @@ router.patch(
     trip.endedAt = new Date();
     trip.active = false;
     trip.acceptRequests = false;
+    if (trip.operatingMode === 'terminal_queue') {
+      trip.terminalQueueStatus = 'departed';
+    }
     await trip.save();
+    if (trip.driverId) {
+      await syncDriverActiveTripState({
+        driverId: trip.driverId,
+        trip: { operatingMode: 'route', terminalQueueStatus: 'off_queue' },
+      });
+    }
     return ok(res, trip, 'Trip ended');
   })
 );

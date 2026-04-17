@@ -23,8 +23,9 @@ class PassengerService {
     required String routeId,
     required double currentLat,
     required double currentLng,
-    required double pickupLat,
-    required double pickupLng,
+    required String pickupType,
+    double? pickupLat,
+    double? pickupLng,
     required String destinationStopRef,
     required double destinationLat,
     required double destinationLng,
@@ -33,13 +34,15 @@ class PassengerService {
   }) async {
     final body = <String, dynamic>{
       'routeId': routeId,
+      'pickupType': pickupType,
       'stopRef': stopRef,
       'destinationStopRef': destinationStopRef,
       'sourceNote': sourceNote,
-      'pickupLocation': {
-        'type': 'Point',
-        'coordinates': [pickupLng, pickupLat],
-      },
+      if (pickupLat != null && pickupLng != null)
+        'pickupLocation': {
+          'type': 'Point',
+          'coordinates': [pickupLng, pickupLat],
+        },
       'currentLocation': {
         'type': 'Point',
         'coordinates': [currentLng, currentLat],
