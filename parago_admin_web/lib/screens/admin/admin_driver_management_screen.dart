@@ -317,7 +317,7 @@ class _AdminDriverManagementScreenState
               const SizedBox(height: 16),
               StatefulBuilder(
                 builder: (context, setInnerState) => DropdownButtonFormField<String>(
-                  value: selectedRouteId,
+                  initialValue: selectedRouteId,
                   decoration: const InputDecoration(labelText: 'Route'),
                   items: [
                     for (final route in activeRoutes)

@@ -1,0 +1,909 @@
+{
+  "system": {
+    "name": "ParaGO",
+    "database": "MongoDB",
+    "orm": "Mongoose",
+    "scope": "Backend persistence model",
+    "generatedFrom": [
+      "README.md",
+      "docs/PARAGO_SYSTEM_NOTE.md",
+      "src/models/*.js"
+    ]
+  },
+  "thesisFigures": [
+    {
+      "id": "figure-1-user-access-management",
+      "title": "User and Access Management ERD",
+      "purpose": "Shows shared identity, role-specific profiles, and authentication or access-related records.",
+      "entities": [
+        "User",
+        "Passenger",
+        "Driver",
+        "Admin",
+        "Notification",
+        "RefreshToken",
+        "PasswordResetToken",
+        "AdminLoginChallenge",
+        "ActivityLog",
+        "ReportMetadata"
+      ],
+      "embeddedDocuments": [
+        "EmergencyContact"
+      ],
+      "relationships": [
+        { "from": "User", "to": "Passenger", "via": "Passenger.userId" },
+        { "from": "User", "to": "Driver", "via": "Driver.userId" },
+        { "from": "User", "to": "Admin", "via": "Admin.userId" },
+        { "from": "User", "to": "Notification", "via": "Notification.userId" },
+        { "from": "User", "to": "RefreshToken", "via": "RefreshToken.userId" },
+        { "from": "User", "to": "PasswordResetToken", "via": "PasswordResetToken.userId" },
+        { "from": "User", "to": "AdminLoginChallenge", "via": "AdminLoginChallenge.userId" },
+        { "from": "User", "to": "ActivityLog", "via": "ActivityLog.actorId" },
+        { "from": "User", "to": "ReportMetadata", "via": "ReportMetadata.generatedBy" }
+      ]
+    },
+    {
+      "id": "figure-2-transport-operations",
+      "title": "Transport Operations ERD",
+      "purpose": "Shows route, vehicle, driver assignment, and trip execution records.",
+      "entities": [
+        "Driver",
+        "Jeepney",
+        "Route",
+        "TripSession"
+      ],
+      "embeddedDocuments": [
+        "GeoPoint",
+        "Waypoint",
+        "RouteStop",
+        "RouteBounds",
+        "RouteNavigation",
+        "FareConfig"
+      ],
+      "relationships": [
+        { "from": "Jeepney", "to": "Driver", "via": "Driver.assignedJeepneyId" },
+        { "from": "Route", "to": "Driver", "via": "Driver.assignedRouteId" },
+        { "from": "Driver", "to": "Jeepney", "via": "Jeepney.currentDriverId" },
+        { "from": "Jeepney", "to": "TripSession", "via": "TripSession.jeepneyId" },
+        { "from": "Driver", "to": "TripSession", "via": "TripSession.driverId" },
+        { "from": "Route", "to": "TripSession", "via": "TripSession.routeId" },
+        { "from": "Route", "to": "RouteStop", "via": "Route.stops" },
+        { "from": "Route", "to": "Waypoint", "via": "Route.waypoints" },
+        { "from": "Route", "to": "RouteNavigation", "via": "Route.navigation" },
+        { "from": "Route", "to": "FareConfig", "via": "Route.fareConfig" }
+      ]
+    },
+    {
+      "id": "figure-3-passenger-ride-workflow",
+      "title": "Passenger Ride Workflow ERD",
+      "purpose": "Shows how a passenger request progresses into a ride session and stop alert lifecycle.",
+      "entities": [
+        "Passenger",
+        "Driver",
+        "Route",
+        "TripSession",
+        "PickupRequest",
+        "RideSession",
+        "StopAlert"
+      ],
+      "embeddedDocuments": [
+        "GeoPoint",
+        "FareSnapshot"
+      ],
+      "relationships": [
+        { "from": "Passenger", "to": "PickupRequest", "via": "PickupRequest.passengerId" },
+        { "from": "TripSession", "to": "PickupRequest", "via": "PickupRequest.tripSessionId" },
+        { "from": "Route", "to": "PickupRequest", "via": "PickupRequest.routeId" },
+        { "from": "Driver", "to": "PickupRequest", "via": "PickupRequest.acknowledgedBy" },
+        { "from": "Passenger", "to": "RideSession", "via": "RideSession.passengerId" },
+        { "from": "TripSession", "to": "RideSession", "via": "RideSession.tripSessionId" },
+        { "from": "PickupRequest", "to": "RideSession", "via": "RideSession.pickupRequestId" },
+        { "from": "Passenger", "to": "StopAlert", "via": "StopAlert.passengerId" },
+        { "from": "TripSession", "to": "StopAlert", "via": "StopAlert.tripSessionId" },
+        { "from": "RideSession", "to": "StopAlert", "via": "StopAlert.rideSessionId" },
+        { "from": "Route", "to": "StopAlert", "via": "StopAlert.routeId" },
+        { "from": "Driver", "to": "StopAlert", "via": "StopAlert.acknowledgedBy" },
+        { "from": "PickupRequest", "to": "FareSnapshot", "via": "PickupRequest.fareSnapshot" },
+        { "from": "RideSession", "to": "FareSnapshot", "via": "RideSession.fareSnapshot" }
+      ]
+    }
+  ],
+  "entities": [
+    {
+      "name": "User",
+      "collection": "users",
+      "sourceFile": "src/models/user.js",
+      "description": "Shared identity record for passengers, drivers, and admins.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "email", "type": "String", "required": true, "unique": true },
+        { "name": "passwordHash", "type": "String", "required": false, "select": false },
+        { "name": "fullName", "type": "String", "required": true },
+        { "name": "phone", "type": "String", "required": false },
+        {
+          "name": "role",
+          "type": "String",
+          "required": true,
+          "enum": ["PASSENGER", "DRIVER", "ADMIN"],
+          "default": "PASSENGER"
+        },
+        {
+          "name": "authProvider",
+          "type": "String",
+          "required": true,
+          "enum": ["local", "google", "facebook"],
+          "default": "local"
+        },
+        { "name": "providerId", "type": "String", "required": false },
+        {
+          "name": "status",
+          "type": "String",
+          "required": true,
+          "enum": ["active", "suspended", "deactivated"],
+          "default": "active"
+        },
+        { "name": "isVerified", "type": "Boolean", "required": true, "default": false },
+        { "name": "lastLoginAt", "type": "Date", "required": false },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["email"], "unique": true },
+        { "fields": ["role", "status"] },
+        {
+          "fields": ["authProvider", "providerId"],
+          "unique": true,
+          "partialFilterExpression": {
+            "providerId": { "$exists": true, "$type": "string" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Passenger",
+      "collection": "passengers",
+      "sourceFile": "src/models/passenger.js",
+      "description": "Passenger profile extension of User.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "userId", "type": "ObjectId", "required": true, "unique": true, "ref": "User" },
+        { "name": "phone", "type": "String", "required": false },
+        { "name": "photoUrl", "type": "String", "required": false },
+        { "name": "emergencyContact", "type": "Embedded", "required": false, "embedded": "EmergencyContact" },
+        { "name": "defaultRouteId", "type": "ObjectId", "required": false, "ref": "Route" },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ]
+    },
+    {
+      "name": "Driver",
+      "collection": "drivers",
+      "sourceFile": "src/models/driver.js",
+      "description": "Driver operational profile extension of User.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "userId", "type": "ObjectId", "required": true, "unique": true, "ref": "User" },
+        { "name": "licenseNumber", "type": "String", "required": false },
+        { "name": "employeeNumber", "type": "String", "required": false },
+        { "name": "phone", "type": "String", "required": false },
+        { "name": "assignedJeepneyId", "type": "ObjectId", "required": false, "ref": "Jeepney" },
+        { "name": "assignedRouteId", "type": "ObjectId", "required": false, "ref": "Route" },
+        { "name": "isVerified", "type": "Boolean", "required": true, "default": false },
+        {
+          "name": "status",
+          "type": "String",
+          "required": true,
+          "enum": ["active", "inactive"],
+          "default": "inactive"
+        },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["assignedRouteId", "status"] },
+        { "fields": ["assignedJeepneyId", "isVerified"] }
+      ]
+    },
+    {
+      "name": "Admin",
+      "collection": "admins",
+      "sourceFile": "src/models/admin.js",
+      "description": "Admin profile extension of User.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "userId", "type": "ObjectId", "required": true, "unique": true, "ref": "User" },
+        { "name": "permissions", "type": "Array<String>", "required": false },
+        { "name": "notes", "type": "String", "required": false },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ]
+    },
+    {
+      "name": "Jeepney",
+      "collection": "jeepneys",
+      "sourceFile": "src/models/jeepney.js",
+      "description": "Vehicle record used by trip sessions and driver assignment.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "plateNumber", "type": "String", "required": true, "unique": true },
+        { "name": "capacity", "type": "Number", "required": false, "min": 1 },
+        { "name": "vehicleTag", "type": "String", "required": false },
+        { "name": "jeepneyName", "type": "String", "required": false },
+        { "name": "manufacturer", "type": "String", "required": false },
+        { "name": "capacityBand", "type": "String", "required": true, "default": "normal" },
+        {
+          "name": "status",
+          "type": "String",
+          "required": true,
+          "enum": ["active", "inactive", "maintenance"],
+          "default": "active"
+        },
+        { "name": "currentDriverId", "type": "ObjectId", "required": false, "ref": "Driver" },
+        { "name": "lastKnownLocation", "type": "Embedded", "required": false, "embedded": "GeoPoint" },
+        { "name": "lastSeenAt", "type": "Date", "required": false },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["plateNumber"], "unique": true },
+        { "fields": ["status", "currentDriverId"] },
+        { "fields": ["lastKnownLocation"], "type": "2dsphere" }
+      ]
+    },
+    {
+      "name": "Route",
+      "collection": "routes",
+      "sourceFile": "src/models/route.js",
+      "description": "Transport route definition with geometry, stops, navigation metadata, and fare config.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "name", "type": "String", "required": true },
+        { "name": "code", "type": "String", "required": true, "unique": true },
+        {
+          "name": "direction",
+          "type": "String",
+          "required": true,
+          "enum": ["up", "down", "circular"],
+          "default": "circular"
+        },
+        {
+          "name": "status",
+          "type": "String",
+          "required": true,
+          "enum": ["active", "inactive"],
+          "default": "active"
+        },
+        { "name": "description", "type": "String", "required": false },
+        { "name": "path", "type": "GeoJSON LineString", "required": false },
+        { "name": "waypoints", "type": "Array<Waypoint>", "required": false },
+        { "name": "stops", "type": "Array<RouteStop>", "required": false },
+        { "name": "navigation", "type": "Embedded", "required": false, "embedded": "RouteNavigation" },
+        { "name": "fareConfig", "type": "Embedded", "required": true, "embedded": "FareConfig" },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["code"], "unique": true },
+        { "fields": ["status"] },
+        { "fields": ["path"], "type": "2dsphere" }
+      ]
+    },
+    {
+      "name": "TripSession",
+      "collection": "tripsessions",
+      "sourceFile": "src/models/tripSession.js",
+      "description": "Live or scheduled jeepney trip tied to a route and optionally a driver.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "jeepneyId", "type": "ObjectId", "required": true, "ref": "Jeepney" },
+        { "name": "driverId", "type": "ObjectId", "required": false, "ref": "Driver" },
+        { "name": "routeId", "type": "ObjectId", "required": true, "ref": "Route" },
+        { "name": "routePathSnapshot", "type": "GeoJSON LineString", "required": false },
+        {
+          "name": "status",
+          "type": "String",
+          "required": true,
+          "enum": ["scheduled", "active", "completed", "cancelled"],
+          "default": "scheduled"
+        },
+        { "name": "startedAt", "type": "Date", "required": false },
+        { "name": "endedAt", "type": "Date", "required": false },
+        { "name": "acceptRequests", "type": "Boolean", "required": true, "default": true },
+        { "name": "occupancyCount", "type": "Number", "required": true, "default": 0, "min": 0 },
+        { "name": "active", "type": "Boolean", "required": true, "default": false },
+        { "name": "notes", "type": "String", "required": false },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["status", "startedAt"], "sort": ["asc", "desc"] },
+        { "fields": ["jeepneyId", "driverId", "status"] }
+      ]
+    },
+    {
+      "name": "PickupRequest",
+      "collection": "pickuprequests",
+      "sourceFile": "src/models/pickupRequest.js",
+      "description": "Passenger pickup request for a trip and route.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "passengerId", "type": "ObjectId", "required": true, "ref": "Passenger" },
+        { "name": "tripSessionId", "type": "ObjectId", "required": true, "ref": "TripSession" },
+        { "name": "routeId", "type": "ObjectId", "required": true, "ref": "Route" },
+        { "name": "stopRef", "type": "String", "required": false },
+        { "name": "pickupLocation", "type": "Embedded", "required": false, "embedded": "GeoPoint" },
+        { "name": "destinationStopRef", "type": "String", "required": false },
+        { "name": "destinationLocation", "type": "Embedded", "required": false, "embedded": "GeoPoint" },
+        { "name": "fareSnapshot", "type": "Embedded", "required": false, "embedded": "FareSnapshot" },
+        {
+          "name": "status",
+          "type": "String",
+          "required": true,
+          "enum": ["pending", "acknowledged", "completed", "expired", "cancelled"],
+          "default": "pending"
+        },
+        { "name": "acknowledgedBy", "type": "ObjectId", "required": false, "ref": "Driver" },
+        { "name": "acknowledgedAt", "type": "Date", "required": false },
+        { "name": "sourceNote", "type": "String", "required": false },
+        { "name": "expiresAt", "type": "Date", "required": true, "ttl": true },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["passengerId", "status", "createdAt"], "sort": ["asc", "asc", "desc"] },
+        { "fields": ["tripSessionId", "status"] },
+        { "fields": ["status", "expiresAt"] },
+        { "fields": ["destinationLocation"], "type": "2dsphere" },
+        { "fields": ["expiresAt"], "type": "ttl", "expireAfterSeconds": 0 }
+      ]
+    },
+    {
+      "name": "RideSession",
+      "collection": "ridesessions",
+      "sourceFile": "src/models/rideSession.js",
+      "description": "Ride lifecycle record created after boarding validation.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "passengerId", "type": "ObjectId", "required": true, "ref": "Passenger" },
+        { "name": "tripSessionId", "type": "ObjectId", "required": true, "ref": "TripSession" },
+        { "name": "pickupRequestId", "type": "ObjectId", "required": true, "ref": "PickupRequest" },
+        { "name": "destinationStopRef", "type": "String", "required": false },
+        { "name": "destinationLocation", "type": "Embedded", "required": false, "embedded": "GeoPoint" },
+        { "name": "fareSnapshot", "type": "Embedded", "required": false, "embedded": "FareSnapshot" },
+        {
+          "name": "status",
+          "type": "String",
+          "required": true,
+          "enum": ["waiting", "onboard", "completed"],
+          "default": "waiting"
+        },
+        { "name": "boardedAt", "type": "Date", "required": false },
+        { "name": "endedAt", "type": "Date", "required": false },
+        { "name": "canSendStopAlert", "type": "Boolean", "required": true, "default": false },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["passengerId", "tripSessionId", "status"] },
+        { "fields": ["tripSessionId", "status"] },
+        { "fields": ["destinationLocation"], "type": "2dsphere" }
+      ]
+    },
+    {
+      "name": "StopAlert",
+      "collection": "stopalerts",
+      "sourceFile": "src/models/stopAlert.js",
+      "description": "Digital para or unload request tied to an ongoing ride.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "passengerId", "type": "ObjectId", "required": true, "ref": "Passenger" },
+        { "name": "tripSessionId", "type": "ObjectId", "required": true, "ref": "TripSession" },
+        { "name": "rideSessionId", "type": "ObjectId", "required": true, "ref": "RideSession" },
+        { "name": "routeId", "type": "ObjectId", "required": true, "ref": "Route" },
+        { "name": "stopRef", "type": "String", "required": false },
+        { "name": "note", "type": "String", "required": false },
+        {
+          "name": "status",
+          "type": "String",
+          "required": true,
+          "enum": ["sent", "seen", "acknowledged", "dismissed"],
+          "default": "sent"
+        },
+        { "name": "acknowledgedBy", "type": "ObjectId", "required": false, "ref": "Driver" },
+        { "name": "acknowledgedAt", "type": "Date", "required": false },
+        { "name": "location", "type": "Embedded", "required": false, "embedded": "GeoPoint" },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["tripSessionId", "status"] },
+        { "fields": ["passengerId", "status"] },
+        { "fields": ["createdAt"], "sort": ["desc"] }
+      ]
+    },
+    {
+      "name": "Notification",
+      "collection": "notifications",
+      "sourceFile": "src/models/notification.js",
+      "description": "In-app notification store and realtime delivery source.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "userId", "type": "ObjectId", "required": true, "ref": "User" },
+        { "name": "type", "type": "String", "required": true },
+        { "name": "title", "type": "String", "required": true },
+        { "name": "body", "type": "String", "required": true },
+        { "name": "payload", "type": "Mixed", "required": true, "default": {} },
+        { "name": "readAt", "type": "Date", "required": false },
+        { "name": "isRead", "type": "Boolean", "required": true, "default": false },
+        { "name": "category", "type": "String", "required": false },
+        { "name": "expiresAt", "type": "Date", "required": false },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["userId", "isRead", "createdAt"], "sort": ["asc", "asc", "desc"] },
+        { "fields": ["createdAt"], "sort": ["desc"] }
+      ]
+    },
+    {
+      "name": "ActivityLog",
+      "collection": "activitylogs",
+      "sourceFile": "src/models/activityLog.js",
+      "description": "Admin and operational activity audit log.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "actorId", "type": "ObjectId", "required": false, "ref": "User" },
+        { "name": "actorRole", "type": "String", "required": false },
+        { "name": "action", "type": "String", "required": true },
+        { "name": "entity", "type": "String", "required": true },
+        { "name": "entityId", "type": "String", "required": false },
+        { "name": "details", "type": "Mixed", "required": true, "default": {} },
+        { "name": "ip", "type": "String", "required": false },
+        { "name": "client", "type": "String", "required": false },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["actorId", "createdAt"], "sort": ["asc", "desc"] },
+        { "fields": ["entity", "entityId", "createdAt"], "sort": ["asc", "asc", "desc"] }
+      ]
+    },
+    {
+      "name": "RefreshToken",
+      "collection": "refreshtokens",
+      "sourceFile": "src/models/refreshToken.js",
+      "description": "Server-side refresh token record with revocation and rotation metadata.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "userId", "type": "ObjectId", "required": true, "ref": "User" },
+        { "name": "tokenHash", "type": "String", "required": true, "unique": true },
+        { "name": "expiresAt", "type": "Date", "required": true, "ttl": true },
+        { "name": "revokedAt", "type": "Date", "required": false },
+        { "name": "replacedByHash", "type": "String", "required": false },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["userId"] },
+        { "fields": ["tokenHash"], "unique": true },
+        { "fields": ["revokedAt"] },
+        { "fields": ["expiresAt"], "type": "ttl", "expireAfterSeconds": 0 },
+        { "fields": ["userId", "revokedAt"] }
+      ]
+    },
+    {
+      "name": "PasswordResetToken",
+      "collection": "passwordresettokens",
+      "sourceFile": "src/models/passwordResetToken.js",
+      "description": "Password reset workflow token record.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "userId", "type": "ObjectId", "required": true, "ref": "User" },
+        { "name": "tokenHash", "type": "String", "required": true, "unique": true },
+        { "name": "expiresAt", "type": "Date", "required": true, "ttl": true },
+        { "name": "usedAt", "type": "Date", "required": false },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["userId"] },
+        { "fields": ["tokenHash"], "unique": true },
+        { "fields": ["usedAt"] },
+        { "fields": ["expiresAt"], "type": "ttl", "expireAfterSeconds": 0 },
+        { "fields": ["userId", "usedAt"] }
+      ]
+    },
+    {
+      "name": "AdminLoginChallenge",
+      "collection": "adminloginchallenges",
+      "sourceFile": "src/models/adminLoginChallenge.js",
+      "description": "Admin OTP challenge record used during admin login verification.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "userId", "type": "ObjectId", "required": true, "ref": "User" },
+        { "name": "phone", "type": "String", "required": true },
+        { "name": "codeHash", "type": "String", "required": true },
+        { "name": "expiresAt", "type": "Date", "required": true, "ttl": true },
+        { "name": "attempts", "type": "Number", "required": true, "default": 0 },
+        { "name": "maxAttempts", "type": "Number", "required": true, "default": 5 },
+        { "name": "usedAt", "type": "Date", "required": false },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["userId"] },
+        { "fields": ["usedAt"] },
+        { "fields": ["expiresAt"], "type": "ttl", "expireAfterSeconds": 0 },
+        { "fields": ["userId", "usedAt", "createdAt"], "sort": ["asc", "asc", "desc"] }
+      ]
+    },
+    {
+      "name": "ReportMetadata",
+      "collection": "reportmetadata",
+      "sourceFile": "src/models/reportMetadata.js",
+      "description": "Metadata for generated admin reports.",
+      "fields": [
+        { "name": "_id", "type": "ObjectId", "primaryKey": true },
+        { "name": "reportType", "type": "String", "required": true },
+        { "name": "periodStart", "type": "Date", "required": true },
+        { "name": "periodEnd", "type": "Date", "required": true },
+        { "name": "generatedBy", "type": "ObjectId", "required": true, "ref": "User" },
+        { "name": "params", "type": "Mixed", "required": true, "default": {} },
+        { "name": "resultSummary", "type": "Mixed", "required": true, "default": {} },
+        { "name": "fileUrl", "type": "String", "required": false },
+        { "name": "createdAt", "type": "Date", "required": true, "auto": true },
+        { "name": "updatedAt", "type": "Date", "required": true, "auto": true }
+      ],
+      "indexes": [
+        { "fields": ["reportType", "periodStart", "periodEnd"] }
+      ]
+    }
+  ],
+  "embeddedDocuments": [
+    {
+      "name": "EmergencyContact",
+      "usedBy": ["Passenger.emergencyContact"],
+      "fields": [
+        { "name": "name", "type": "String", "required": false },
+        { "name": "phone", "type": "String", "required": false }
+      ]
+    },
+    {
+      "name": "GeoPoint",
+      "usedBy": [
+        "Jeepney.lastKnownLocation",
+        "PickupRequest.pickupLocation",
+        "PickupRequest.destinationLocation",
+        "RideSession.destinationLocation",
+        "StopAlert.location",
+        "Route.waypoints.location",
+        "Route.stops.location",
+        "Route.navigation.origin",
+        "Route.navigation.destination"
+      ],
+      "fields": [
+        { "name": "type", "type": "String", "required": true, "enum": ["Point"], "default": "Point" },
+        { "name": "coordinates", "type": "Array<Number>", "required": true }
+      ]
+    },
+    {
+      "name": "Waypoint",
+      "usedBy": ["Route.waypoints[]"],
+      "fields": [
+        { "name": "name", "type": "String", "required": false },
+        { "name": "location", "type": "Embedded", "required": false, "embedded": "GeoPoint" }
+      ]
+    },
+    {
+      "name": "RouteStop",
+      "usedBy": ["Route.stops[]"],
+      "fields": [
+        { "name": "name", "type": "String", "required": true },
+        { "name": "code", "type": "String", "required": false },
+        { "name": "order", "type": "Number", "required": true },
+        { "name": "fare", "type": "Number", "required": true, "default": 0, "min": 0 },
+        { "name": "location", "type": "Embedded", "required": false, "embedded": "GeoPoint" }
+      ]
+    },
+    {
+      "name": "RouteBounds",
+      "usedBy": ["Route.navigation.bounds"],
+      "fields": [
+        { "name": "north", "type": "Number", "required": true },
+        { "name": "south", "type": "Number", "required": true },
+        { "name": "east", "type": "Number", "required": true },
+        { "name": "west", "type": "Number", "required": true }
+      ]
+    },
+    {
+      "name": "FareConfig",
+      "usedBy": ["Route.fareConfig"],
+      "fields": [
+        { "name": "baseAmount", "type": "Number", "required": true, "default": 17, "min": 0 },
+        { "name": "baseDistanceKm", "type": "Number", "required": true, "default": 4, "min": 0 },
+        { "name": "additionalAmountPerKm", "type": "Number", "required": true, "default": 2, "min": 0 }
+      ]
+    },
+    {
+      "name": "RouteNavigation",
+      "usedBy": ["Route.navigation"],
+      "fields": [
+        {
+          "name": "source",
+          "type": "String",
+          "required": true,
+          "enum": ["openstreetmap", "tomtom", "cached"],
+          "default": "openstreetmap"
+        },
+        {
+          "name": "trafficProfile",
+          "type": "String",
+          "required": false,
+          "enum": ["light", "moderate", "heavy", "severe"]
+        },
+        { "name": "origin", "type": "Embedded", "required": false, "embedded": "GeoPoint" },
+        { "name": "destination", "type": "Embedded", "required": false, "embedded": "GeoPoint" },
+        { "name": "bounds", "type": "Embedded", "required": false, "embedded": "RouteBounds" },
+        { "name": "distanceMeters", "type": "Number", "required": false, "min": 0 },
+        { "name": "durationSeconds", "type": "Number", "required": false, "min": 0 },
+        { "name": "rawDurationSeconds", "type": "Number", "required": false, "min": 0 },
+        { "name": "trafficDelayInSeconds", "type": "Number", "required": false, "min": 0 },
+        { "name": "averageJeepSpeedKph", "type": "Number", "required": false, "min": 1 },
+        { "name": "trafficMultiplier", "type": "Number", "required": false, "min": 1 }
+      ]
+    },
+    {
+      "name": "FareSnapshot",
+      "usedBy": ["PickupRequest.fareSnapshot", "RideSession.fareSnapshot"],
+      "fields": [
+        { "name": "boardingStopRef", "type": "String", "required": false },
+        { "name": "boardingStopOrder", "type": "Number", "required": false, "min": 0 },
+        { "name": "boardingFare", "type": "Number", "required": true, "default": 0, "min": 0 },
+        { "name": "destinationStopRef", "type": "String", "required": false },
+        { "name": "destinationStopOrder", "type": "Number", "required": false, "min": 0 },
+        { "name": "destinationFare", "type": "Number", "required": true, "default": 0, "min": 0 },
+        { "name": "amount", "type": "Number", "required": true, "default": 0, "min": 0 }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": "User",
+      "to": "Passenger",
+      "type": "one-to-zero-or-one",
+      "via": "Passenger.userId",
+      "requiredOnChild": true,
+      "enforcedByUnique": true
+    },
+    {
+      "from": "User",
+      "to": "Driver",
+      "type": "one-to-zero-or-one",
+      "via": "Driver.userId",
+      "requiredOnChild": true,
+      "enforcedByUnique": true
+    },
+    {
+      "from": "User",
+      "to": "Admin",
+      "type": "one-to-zero-or-one",
+      "via": "Admin.userId",
+      "requiredOnChild": true,
+      "enforcedByUnique": true
+    },
+    {
+      "from": "Route",
+      "to": "Passenger",
+      "type": "one-to-many",
+      "via": "Passenger.defaultRouteId",
+      "requiredOnChild": false
+    },
+    {
+      "from": "Jeepney",
+      "to": "Driver",
+      "type": "one-to-many",
+      "via": "Driver.assignedJeepneyId",
+      "requiredOnChild": false,
+      "note": "Assignment is optional and not uniquely constrained at the database level."
+    },
+    {
+      "from": "Route",
+      "to": "Driver",
+      "type": "one-to-many",
+      "via": "Driver.assignedRouteId",
+      "requiredOnChild": false
+    },
+    {
+      "from": "Driver",
+      "to": "Jeepney",
+      "type": "one-to-many",
+      "via": "Jeepney.currentDriverId",
+      "requiredOnChild": false,
+      "note": "Operationally this behaves like a current assignment pointer, but it is not unique in schema."
+    },
+    {
+      "from": "Jeepney",
+      "to": "TripSession",
+      "type": "one-to-many",
+      "via": "TripSession.jeepneyId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "Driver",
+      "to": "TripSession",
+      "type": "one-to-many",
+      "via": "TripSession.driverId",
+      "requiredOnChild": false
+    },
+    {
+      "from": "Route",
+      "to": "TripSession",
+      "type": "one-to-many",
+      "via": "TripSession.routeId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "Passenger",
+      "to": "PickupRequest",
+      "type": "one-to-many",
+      "via": "PickupRequest.passengerId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "TripSession",
+      "to": "PickupRequest",
+      "type": "one-to-many",
+      "via": "PickupRequest.tripSessionId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "Route",
+      "to": "PickupRequest",
+      "type": "one-to-many",
+      "via": "PickupRequest.routeId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "Driver",
+      "to": "PickupRequest",
+      "type": "one-to-many",
+      "via": "PickupRequest.acknowledgedBy",
+      "requiredOnChild": false
+    },
+    {
+      "from": "Passenger",
+      "to": "RideSession",
+      "type": "one-to-many",
+      "via": "RideSession.passengerId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "TripSession",
+      "to": "RideSession",
+      "type": "one-to-many",
+      "via": "RideSession.tripSessionId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "PickupRequest",
+      "to": "RideSession",
+      "type": "one-to-many",
+      "via": "RideSession.pickupRequestId",
+      "requiredOnChild": true,
+      "note": "Business flow suggests one ride session per pickup request, but the schema does not enforce uniqueness."
+    },
+    {
+      "from": "Passenger",
+      "to": "StopAlert",
+      "type": "one-to-many",
+      "via": "StopAlert.passengerId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "TripSession",
+      "to": "StopAlert",
+      "type": "one-to-many",
+      "via": "StopAlert.tripSessionId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "RideSession",
+      "to": "StopAlert",
+      "type": "one-to-many",
+      "via": "StopAlert.rideSessionId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "Route",
+      "to": "StopAlert",
+      "type": "one-to-many",
+      "via": "StopAlert.routeId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "Driver",
+      "to": "StopAlert",
+      "type": "one-to-many",
+      "via": "StopAlert.acknowledgedBy",
+      "requiredOnChild": false
+    },
+    {
+      "from": "User",
+      "to": "Notification",
+      "type": "one-to-many",
+      "via": "Notification.userId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "User",
+      "to": "ActivityLog",
+      "type": "one-to-many",
+      "via": "ActivityLog.actorId",
+      "requiredOnChild": false
+    },
+    {
+      "from": "User",
+      "to": "RefreshToken",
+      "type": "one-to-many",
+      "via": "RefreshToken.userId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "User",
+      "to": "PasswordResetToken",
+      "type": "one-to-many",
+      "via": "PasswordResetToken.userId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "User",
+      "to": "AdminLoginChallenge",
+      "type": "one-to-many",
+      "via": "AdminLoginChallenge.userId",
+      "requiredOnChild": true
+    },
+    {
+      "from": "User",
+      "to": "ReportMetadata",
+      "type": "one-to-many",
+      "via": "ReportMetadata.generatedBy",
+      "requiredOnChild": true
+    },
+    {
+      "from": "Route",
+      "to": "RouteStop",
+      "type": "embedded-one-to-many",
+      "via": "Route.stops"
+    },
+    {
+      "from": "Route",
+      "to": "Waypoint",
+      "type": "embedded-one-to-many",
+      "via": "Route.waypoints"
+    },
+    {
+      "from": "Route",
+      "to": "RouteNavigation",
+      "type": "embedded-one-to-one",
+      "via": "Route.navigation"
+    },
+    {
+      "from": "Route",
+      "to": "FareConfig",
+      "type": "embedded-one-to-one",
+      "via": "Route.fareConfig"
+    },
+    {
+      "from": "PickupRequest",
+      "to": "FareSnapshot",
+      "type": "embedded-one-to-one",
+      "via": "PickupRequest.fareSnapshot"
+    },
+    {
+      "from": "RideSession",
+      "to": "FareSnapshot",
+      "type": "embedded-one-to-one",
+      "via": "RideSession.fareSnapshot"
+    }
+  ]
+}

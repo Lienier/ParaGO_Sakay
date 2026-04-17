@@ -1,6 +1,11 @@
 const assert = require('assert');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const {
+  canDriverAcknowledgePickupRequest,
+  canPassengerBoardPickupRequest,
+  canPassengerCancelPickupRequest,
+} = require('./src/services/pickupFlow.service');
 
 // Test configuration
 const TEST_CONFIG = {
@@ -199,6 +204,60 @@ function testMaxRequestsPerPassenger() {
   assert(maxedCount >= TEST_CONFIG.MAX_REQUESTS_PER_PASSENGER_PER_TRIP, 'Should block request at limit');
 }
 
+function testDriverAcknowledgeOnlyPending() {
+  assert.strictEqual(
+    canDriverAcknowledgePickupRequest('pending'),
+    true,
+    'Driver should be able to acknowledge pending pickups'
+  );
+  assert.strictEqual(
+    canDriverAcknowledgePickupRequest('acknowledged'),
+    false,
+    'Driver should not re-acknowledge acknowledged pickups'
+  );
+  assert.strictEqual(
+    canDriverAcknowledgePickupRequest('completed'),
+    false,
+    'Driver should not acknowledge completed pickups'
+  );
+}
+
+function testPassengerBoardsOnlyAfterAcknowledgement() {
+  assert.strictEqual(
+    canPassengerBoardPickupRequest('pending'),
+    false,
+    'Passenger should not board before driver acknowledgement'
+  );
+  assert.strictEqual(
+    canPassengerBoardPickupRequest('acknowledged'),
+    true,
+    'Passenger should be able to board after driver acknowledgement'
+  );
+  assert.strictEqual(
+    canPassengerBoardPickupRequest('completed'),
+    false,
+    'Passenger should not board a completed pickup request'
+  );
+}
+
+function testPassengerCanCancelOnlyOpenRequests() {
+  assert.strictEqual(
+    canPassengerCancelPickupRequest('pending'),
+    true,
+    'Passenger should be able to cancel pending pickups'
+  );
+  assert.strictEqual(
+    canPassengerCancelPickupRequest('acknowledged'),
+    true,
+    'Passenger should be able to cancel acknowledged pickups'
+  );
+  assert.strictEqual(
+    canPassengerCancelPickupRequest('completed'),
+    false,
+    'Passenger should not cancel completed pickups'
+  );
+}
+
 // ============ BOARDING WINDOW TESTS ============
 function testBoardingWindowValid() {
   const pickupTime = new Date();
@@ -230,22 +289,60 @@ function testStopAlertCooldownExpired() {
 }
 
 // ============ JEEP REASSIGNMENT TESTS ============
+function loadPickupReassignmentService() {
+  process.env.MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/parago-test';
+  process.env.JWT_SECRET = process.env.JWT_SECRET || TEST_CONFIG.JWT_SECRET;
+  return require('./src/services/pickupReassignment.service');
+}
+
 function testJeepPassByDistance() {
-  const pickupLat = 14.5995;
-  const pickupLon = 120.9842;
-  const jeepLat = 14.6000;
-  const jeepLon = 120.9850;
-  const distance = calculateDistance(pickupLat, pickupLon, jeepLat, jeepLon);
-  assert(distance > TEST_CONFIG.JEEP_PASS_BY_REASSIGN_METERS, 'Jeep should be considered passed by');
+  const { hasJeepPassedBy } = loadPickupReassignmentService();
+  const route = {
+    path: {
+      coordinates: [
+        [120.9840, 14.5995],
+        [120.9860, 14.5995],
+      ],
+    },
+  };
+  const passed = hasJeepPassedBy({
+    route,
+    pickupLocation: {
+      coordinates: [120.9850, 14.5995],
+    },
+    jeepLocation: {
+      coordinates: [120.9856, 14.5995],
+    },
+    threshold: TEST_CONFIG.JEEP_PASS_BY_REASSIGN_METERS,
+  });
+  assert.strictEqual(passed, true, 'Jeep ahead of pickup point should be considered passed by');
 }
 
 function testJeepNotPassedBy() {
-  const pickupLat = 14.5995;
-  const pickupLon = 120.9842;
-  const jeepLat = 14.5996;
-  const jeepLon = 120.9843;
-  const distance = calculateDistance(pickupLat, pickupLon, jeepLat, jeepLon);
-  assert(distance < TEST_CONFIG.JEEP_PASS_BY_REASSIGN_METERS, 'Jeep should not be considered passed by');
+  const { hasJeepPassedBy } = loadPickupReassignmentService();
+  const route = {
+    path: {
+      coordinates: [
+        [120.9840, 14.5995],
+        [120.9860, 14.5995],
+      ],
+    },
+  };
+  const passed = hasJeepPassedBy({
+    route,
+    pickupLocation: {
+      coordinates: [120.9850, 14.5995],
+    },
+    jeepLocation: {
+      coordinates: [120.9844, 14.5995],
+    },
+    threshold: TEST_CONFIG.JEEP_PASS_BY_REASSIGN_METERS,
+  });
+  assert.strictEqual(
+    passed,
+    false,
+    'Jeep behind the pickup point should not be considered passed by'
+  );
 }
 
 // ============ API RESPONSE FORMAT TESTS ============
@@ -377,6 +474,9 @@ async function runAllTests() {
   runTest('Pickup', 'Request TTL Valid', testPickupRequestTTL);
   runTest('Pickup', 'Request Expired', testPickupRequestExpired);
   runTest('Pickup', 'Max Requests Per Passenger', testMaxRequestsPerPassenger);
+  runTest('Pickup', 'Driver Acknowledge Only Pending', testDriverAcknowledgeOnlyPending);
+  runTest('Pickup', 'Passenger Boards Only After Acknowledgement', testPassengerBoardsOnlyAfterAcknowledgement);
+  runTest('Pickup', 'Passenger Cancels Only Open Requests', testPassengerCanCancelOnlyOpenRequests);
 
   console.log('\n--- Boarding Window Tests ---');
   runTest('Boarding', 'Boarding Window Valid', testBoardingWindowValid);
@@ -444,6 +544,9 @@ function generateCSV() {
     'Pickup - Request TTL Valid': 'Verifies pickup request expiry time is set correctly',
     'Pickup - Request Expired': 'Verifies pickup request expires after TTL',
     'Pickup - Max Requests Per Passenger': 'Verifies passenger request limit enforcement',
+    'Pickup - Driver Acknowledge Only Pending': 'Verifies only pending pickup requests can be acknowledged by drivers',
+    'Pickup - Passenger Boards Only After Acknowledgement': 'Verifies boarding is blocked until the driver acknowledges the pickup',
+    'Pickup - Passenger Cancels Only Open Requests': 'Verifies passengers can only cancel pending or acknowledged pickups',
     'Boarding - Boarding Window Valid': 'Verifies boarding within time window is allowed',
     'Boarding - Boarding Window Expired': 'Verifies boarding outside time window is rejected',
     'StopAlert - Cooldown Active': 'Verifies stop alert cooldown period is enforced',

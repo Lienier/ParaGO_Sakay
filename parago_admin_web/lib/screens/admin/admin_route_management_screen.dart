@@ -6,7 +6,6 @@ import '../../core/utils/parago_format.dart';
 import '../../models/transport/route_summary.dart';
 import '../../services/route_service.dart';
 import '../../services/session_controller.dart';
-import 'admin_route_builder_screen.dart';
 import 'admin_route_landmark_editor_screen.dart';
 
 class AdminRouteManagementScreen extends StatefulWidget {

@@ -45,6 +45,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   static const _activeAlertStatuses = {'sent', 'seen'};
   static const _dismissedNotificationsStoragePrefix =
       'driver.dismissed.notifications.v1';
+  static const double _vehicleGpsJitterMeters = 12;
+  static const double _maxVehicleGpsAccuracyMeters = 35;
 
   List<TripSession> _trips = [];
   List<RouteSummaryModel> _routes = [];
@@ -1216,56 +1218,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     );
   }
 
-  Future<void> _completeRequest(
-    TripSession trip,
-    PickupRequestModel request,
-  ) async {
-    if (!_ensureDriverReady(
-      failurePrefix: 'Cannot confirm pickups yet.',
-      trip: trip,
-      requireActiveTrip: true,
-    )) {
-      return;
-    }
-    final confirmed = await _showPickupCompletionConfirmation(request);
-    if (confirmed != true || !mounted) {
-      return;
-    }
-    final session = context.read<SessionController>();
-    final driverService = DriverService(session.apiClient);
-    await _runDriverAction(
-      loadingMessage: 'Confirming pickup...',
-      successMessage: 'Pickup confirmed. The passenger booking was updated.',
-      action: () => driverService.completeRequest(request.id),
-    );
-  }
-
-  Future<bool> _showPickupCompletionConfirmation(
-    PickupRequestModel request,
-  ) async {
-    final stopLabel = request.stopRef ?? 'this pickup point';
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Confirm pickup'),
-        content: Text(
-          'Confirm that the passenger has been picked up at $stopLabel. This will also update the passenger app.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Confirm pickup'),
-          ),
-        ],
-      ),
-    );
-    return confirmed == true;
-  }
-
   Future<void> _acknowledgeAlert(String alertId) async {
     final session = context.read<SessionController>();
     final alertService = StopAlertService(session.apiClient);
@@ -1360,7 +1312,36 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           timeLimit: Duration(seconds: 8),
         ),
       );
-      final next = LatLng(position.latitude, position.longitude);
+      final previousLocation = _vehicleLocation;
+      final rawNext = LatLng(position.latitude, position.longitude);
+      final reportedAccuracy = position.accuracy;
+      final driftMeters = previousLocation == null
+          ? null
+          : Geolocator.distanceBetween(
+              previousLocation.latitude,
+              previousLocation.longitude,
+              rawNext.latitude,
+              rawNext.longitude,
+            );
+
+      if (previousLocation != null &&
+          reportedAccuracy.isFinite &&
+          reportedAccuracy > _maxVehicleGpsAccuracyMeters &&
+          driftMeters != null &&
+          driftMeters <= reportedAccuracy * 1.5) {
+        debugPrint(
+          'Ignoring noisy vehicle GPS fix '
+          '(accuracy: ${reportedAccuracy.toStringAsFixed(1)}m, '
+          'drift: ${driftMeters.toStringAsFixed(1)}m)',
+        );
+        return;
+      }
+
+      final next = previousLocation != null &&
+              driftMeters != null &&
+              driftMeters < _vehicleGpsJitterMeters
+          ? previousLocation
+          : rawNext;
 
       if (!mounted) return;
       if (_vehicleLocation == null ||
@@ -1976,8 +1957,6 @@ class _DriveMapPanel extends StatelessWidget {
               final routeLabel = live.routeLabel;
               final isOnline = live.isOnline;
               final availabilityNote = live.availabilityNote;
-              final requirementMessage = live.requirementMessage;
-              final statusMessage = live.statusMessage;
               final displayedOnboard = live.displayedOnboard;
               final manualAdjustment = live.manualAdjustment;
               final activePickupCount = live.activePickupCount;
@@ -1987,9 +1966,6 @@ class _DriveMapPanel extends StatelessWidget {
               final onStartTrip = live.onStartTrip;
               final onEndTrip = live.onEndTrip;
               final onTogglePickup = live.onTogglePickup;
-                final onDismissRequirementMessage =
-                  live.onDismissRequirementMessage;
-                final onDismissStatusMessage = live.onDismissStatusMessage;
               final scheme = Theme.of(context).colorScheme;
 
               return Container(

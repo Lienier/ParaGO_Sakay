@@ -2,22 +2,15 @@ const { Server } = require('socket.io');
 
 const User = require('../models/user');
 const { verifyAccessToken } = require('../utils/jwt');
+const { createCorsOriginDelegate } = require('../utils/cors');
 
 let ioInstance = null;
 
+const normalizeRoomKey = (value) => String(value || '').trim();
 const toUserRoom = (userId) => `user:${String(userId)}`;
 const toRoleRoom = (role) => `role:${String(role || '').trim().toLowerCase()}`;
-const toRouteRoom = (routeId) => `route:${String(routeId)}`;
-const toTripRoom = (tripId) => `trip:${String(tripId)}`;
-
-const normalizeBaseOrigin = (origin) => {
-  const raw = String(origin || '').trim();
-  if (!raw) return '*';
-  if (!raw.startsWith('http://') && !raw.startsWith('https://')) {
-    return '*';
-  }
-  return raw;
-};
+const toRouteRoom = (routeId) => `route:${normalizeRoomKey(routeId)}`;
+const toTripRoom = (tripId) => `trip:${normalizeRoomKey(tripId)}`;
 
 const extractToken = (socket) => {
   const authToken = socket.handshake.auth?.token;
@@ -61,14 +54,22 @@ const serializeNotification = (notification) => {
   };
 };
 
-const attachSocketServer = (httpServer, { corsOrigin = '*' } = {}) => {
+const withRoomKey = (value, callback) => {
+  const roomKey = normalizeRoomKey(value);
+  if (!roomKey) return;
+  callback(roomKey);
+};
+
+const attachSocketServer = (httpServer, { corsOrigins = [] } = {}) => {
   if (ioInstance) {
     return ioInstance;
   }
 
   const io = new Server(httpServer, {
     cors: {
-      origin: normalizeBaseOrigin(corsOrigin),
+      origin: createCorsOriginDelegate({
+        allowedOrigins: corsOrigins,
+      }),
       methods: ['GET', 'POST'],
     },
     transports: ['websocket', 'polling'],
@@ -118,27 +119,19 @@ const attachSocketServer = (httpServer, { corsOrigin = '*' } = {}) => {
 
     // Allow clients to subscribe to route/trip updates
     socket.on('subscribe.route', (routeId) => {
-      if (routeId) {
-        socket.join(toRouteRoom(routeId));
-      }
+      withRoomKey(routeId, (roomKey) => socket.join(toRouteRoom(roomKey)));
     });
 
     socket.on('subscribe.trip', (tripId) => {
-      if (tripId) {
-        socket.join(toTripRoom(tripId));
-      }
+      withRoomKey(tripId, (roomKey) => socket.join(toTripRoom(roomKey)));
     });
 
     socket.on('unsubscribe.route', (routeId) => {
-      if (routeId) {
-        socket.leave(toRouteRoom(routeId));
-      }
+      withRoomKey(routeId, (roomKey) => socket.leave(toRouteRoom(roomKey)));
     });
 
     socket.on('unsubscribe.trip', (tripId) => {
-      if (tripId) {
-        socket.leave(toTripRoom(tripId));
-      }
+      withRoomKey(tripId, (roomKey) => socket.leave(toTripRoom(roomKey)));
     });
   });
 
@@ -167,17 +160,14 @@ const emitOperationsChanged = (payload = {}) => {
   emitToRole('admin', 'ops.changed', payload);
 };
 
-const toRouteRoom = (routeId) => `route:${String(routeId)}`;
-const toTripRoom = (tripId) => `trip:${String(tripId)}`;
-
 const joinRouteRoom = (socket, routeId) => {
-  if (!socket || !routeId) return;
-  socket.join(toRouteRoom(routeId));
+  if (!socket) return;
+  withRoomKey(routeId, (roomKey) => socket.join(toRouteRoom(roomKey)));
 };
 
 const joinTripRoom = (socket, tripId) => {
-  if (!socket || !tripId) return;
-  socket.join(toTripRoom(tripId));
+  if (!socket) return;
+  withRoomKey(tripId, (roomKey) => socket.join(toTripRoom(roomKey)));
 };
 
 const emitToRoute = (routeId, eventName, payload) => {
@@ -199,7 +189,7 @@ const emitJeepneyLocationUpdate = ({
   timestamp,
 }) => {
   if (!ioInstance) return;
-  
+
   const payload = {
     tripId: String(tripId || ''),
     routeId: String(routeId || ''),
@@ -213,12 +203,12 @@ const emitJeepneyLocationUpdate = ({
   if (routeId) {
     emitToRoute(routeId, 'jeepney.location.updated', payload);
   }
-  
+
   // Broadcast to all passengers/drivers on this specific trip
   if (tripId) {
     emitToTrip(tripId, 'jeepney.location.updated', payload);
   }
-  
+
   // Broadcast to all passengers (for active trips view)
   emitToRole('passenger', 'jeepney.location.updated', payload);
 };

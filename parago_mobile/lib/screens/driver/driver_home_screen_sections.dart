@@ -621,19 +621,17 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               title: request.stopRef ?? 'Unspecified pickup point',
               subtitle:
                   '${ParagoFormat.statusLabel(request.status)} - ${ParagoFormat.relative(request.createdAt)}',
-              detail: request.sourceNote ??
-                  'Passenger requested a roadside pickup.',
+              detail: request.status == 'acknowledged'
+                  ? 'Pickup acknowledged. Wait for the passenger to validate boarding from the passenger app.'
+                  : request.status == 'completed'
+                      ? 'Passenger boarding has been validated and the ride is already active.'
+                      : request.sourceNote ??
+                          'Passenger requested a roadside pickup.',
               status: request.status,
               primaryLabel: request.status == 'pending' ? 'Acknowledge' : null,
               onPrimary: request.status == 'pending' &&
                       visiblePickupRequirementMessage == null
                   ? () => _acknowledgeRequest(focusedTrip, request.id)
-                  : null,
-              secondaryLabel:
-                  request.status == 'acknowledged' ? 'Complete pickup' : null,
-              onSecondary: request.status == 'acknowledged' &&
-                      visiblePickupRequirementMessage == null
-                  ? () => _completeRequest(focusedTrip, request)
                   : null,
               icon: Icons.person_pin_circle_outlined,
             ),

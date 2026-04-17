@@ -140,8 +140,7 @@ class _AuthScreenState extends State<AuthScreen> {
       }
 
       if (response.user.role != UserRole.passenger) {
-        throw Exception(
-            'This account is not authorized for passenger access.');
+        throw Exception('This account is not authorized for passenger access.');
       }
       await session.saveAuth(response);
     } on PlatformException catch (error) {
@@ -261,7 +260,10 @@ class _AuthScreenState extends State<AuthScreen> {
                           Text(
                             'Login',
                             textAlign: TextAlign.left,
-                            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyLarge
+                                ?.copyWith(
                                   color: Colors.white.withValues(alpha: 0.92),
                                   fontSize: 28,
                                   fontWeight: FontWeight.w700,
@@ -517,8 +519,7 @@ class _AuthScreenState extends State<AuthScreen> {
                               children: [
                                 Expanded(child: Divider()),
                                 Padding(
-                                  padding:
-                                      EdgeInsets.symmetric(horizontal: 12),
+                                  padding: EdgeInsets.symmetric(horizontal: 12),
                                   child: Text(
                                     'or',
                                     style: TextStyle(color: Colors.white),
@@ -563,31 +564,6 @@ class _AuthScreenState extends State<AuthScreen> {
               ),
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _BenefitChip extends StatelessWidget {
-  const _BenefitChip({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w700,
         ),
       ),
     );

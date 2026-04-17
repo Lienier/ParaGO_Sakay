@@ -32,7 +32,6 @@ const {
 const { ensureObjectId, ensureLatLng } = require('../utils/validators');
 const {
   serializePickupRequest,
-  serializeRideSession,
 } = require('../utils/realtimePayloads');
 const {
   requireCurrentDriver,
@@ -43,6 +42,10 @@ const {
   ensurePassengerOwnsPickupRequest,
 } = require('../services/routeContext.service');
 const { checkAndReassignPassedRequests } = require('../services/pickupReassignment.service');
+const {
+  canDriverAcknowledgePickupRequest,
+  canPassengerCancelPickupRequest,
+} = require('../services/pickupFlow.service');
 
 const router = express.Router();
 
@@ -418,8 +421,11 @@ router.patch(
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'pickup request id');
     const request = await requirePickupRequest(req.params.id);
-    if (request.status === 'completed' || request.status === 'cancelled') {
-      throw new ApiError(409, 'Request cannot be acknowledged in current state');
+    if (request.status === 'acknowledged') {
+      return ok(res, request, 'Pickup request already acknowledged');
+    }
+    if (!canDriverAcknowledgePickupRequest(request.status)) {
+      throw new ApiError(409, 'Only pending pickup requests can be acknowledged');
     }
     const trip = await requireTrip(request.tripSessionId);
     if (trip.status !== 'active') {
@@ -475,9 +481,26 @@ router.patch(
         forbiddenMessage: 'You can only cancel your own request',
       });
     }
+    if (!canPassengerCancelPickupRequest(request.status)) {
+      throw new ApiError(409, 'Only pending or acknowledged requests can be cancelled');
+    }
 
     request.status = 'cancelled';
     await request.save();
+    const trip = await TripSession.findById(request.tripSessionId)
+      .populate('driverId', 'userId');
+    await publishNotification({
+      userId: trip?.driverId?.userId,
+      type: 'pickup_request_cancelled',
+      title: 'Pickup request cancelled',
+      body: `Pickup request near ${request.stopRef || 'the selected stop'} was cancelled by the passenger.`,
+      payload: {
+        requestId: request._id.toString(),
+        tripSessionId: request.tripSessionId?.toString() || '',
+        request: serializePickupRequest(request),
+      },
+      category: 'trip',
+    });
     return ok(res, request, 'Pickup request cancelled');
   })
 );
@@ -501,40 +524,26 @@ router.patch(
       });
       ensureDriverCanHandlePickup({ driver, trip });
     }
-    if (request.status !== 'acknowledged') {
-      if (request.status !== 'pending') {
-        throw new ApiError(409, 'Only pending/acknowledged requests can be completed');
-      }
-    }
-    const previousStatus = request.status;
-    request.status = 'completed';
-    request.acknowledgedAt = request.acknowledgedAt || new Date();
-    await request.save();
-    const existingRideSession = await RideSession.findOne({
+    const rideSession = await RideSession.findOne({
       pickupRequestId: request._id,
     });
-    const ridePreviousStatus = existingRideSession?.status;
-    const rideSession = await RideSession.findOneAndUpdate(
-      { pickupRequestId: request._id },
-      { status: 'completed', endedAt: new Date() },
-      { new: true }
-    );
-    const passengerUser = await Passenger.findById(request.passengerId).select('userId');
-    await publishNotification({
-      userId: passengerUser?.userId,
-      type: 'pickup_request_completed',
-      title: 'Pickup confirmed',
-      body: `The driver confirmed your pickup at ${request.stopRef || 'the selected pickup point'}`,
-      payload: {
-        requestId: request._id,
-        tripSessionId: trip._id.toString(),
-        previousStatus,
-        ridePreviousStatus,
-        request: serializePickupRequest(request),
-        rideSession: serializeRideSession(rideSession),
-      },
-      category: 'trip',
-    });
+    if (!rideSession) {
+      throw new ApiError(
+        409,
+        'Passenger must validate boarding before pickup can be completed'
+      );
+    }
+    if (rideSession.status !== 'onboard' && rideSession.status !== 'completed') {
+      throw new ApiError(
+        409,
+        'Pickup can only be confirmed for an onboard or completed ride session'
+      );
+    }
+    if (request.status !== 'completed') {
+      request.status = 'completed';
+      request.acknowledgedAt = request.acknowledgedAt || new Date();
+      await request.save();
+    }
     return ok(res, request, 'Pickup request marked completed');
   })
 );

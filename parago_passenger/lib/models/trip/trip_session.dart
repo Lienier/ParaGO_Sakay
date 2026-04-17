@@ -74,7 +74,7 @@ class TripSession {
       startedAt: json['startedAt']?.toString(),
       endedAt: json['endedAt']?.toString(),
       acceptRequests: json['acceptRequests'] as bool?,
-      occupancyCount: json['occupancyCount'] as int?,
+      occupancyCount: _toInt(json['occupancyCount']),
       active: json['active'] as bool?,
       notes: json['notes']?.toString(),
     );
@@ -195,5 +195,12 @@ List<LatLng> _readLinePoints(dynamic value) {
 double? _toDouble(dynamic value) {
   if (value is num) return value.toDouble();
   if (value is String) return double.tryParse(value);
+  return null;
+}
+
+int? _toInt(dynamic value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  if (value is String) return int.tryParse(value);
   return null;
 }

@@ -4,6 +4,15 @@ const { haversineMeters } = require('../utils/geo');
 const PickupRequest = require('../models/pickupRequest');
 const TripSession = require('../models/tripSession');
 const RideSession = require('../models/rideSession');
+const Driver = require('../models/driver');
+const { publishNotification } = require('./notificationPublisher');
+const {
+  serializePickupRequest,
+  serializeRideSession,
+} = require('../utils/realtimePayloads');
+const {
+  canPassengerBoardPickupRequest,
+} = require('./pickupFlow.service');
 
 const validateBoardingAttempt = async ({
   passengerId,
@@ -19,10 +28,15 @@ const validateBoardingAttempt = async ({
     _id: pickupRequestId,
     passengerId,
     tripSessionId,
-    status: { $in: ['pending', 'acknowledged'] },
   });
   if (!pickupRequest) {
-    throw new ApiError(404, 'No matching pending/acknowledged pickup request found');
+    throw new ApiError(404, 'No matching pickup request found');
+  }
+  if (!canPassengerBoardPickupRequest(pickupRequest.status)) {
+    throw new ApiError(
+      409,
+      'Pickup request must be acknowledged by the driver before boarding'
+    );
   }
 
   if (!pickupRequest.pickupLocation?.coordinates?.length) {
@@ -116,8 +130,27 @@ const validateBoardingAttempt = async ({
   });
 
   pickupRequest.status = 'completed';
-  pickupRequest.acknowledgedAt = now;
   await pickupRequest.save();
+  await TripSession.findByIdAndUpdate(tripSessionId, {
+    $inc: { occupancyCount: 1 },
+  });
+
+  const tripDriver = trip.driverId
+    ? await Driver.findById(trip.driverId).select('userId')
+    : null;
+  await publishNotification({
+    userId: tripDriver?.userId,
+    type: 'passenger_boarded',
+    title: 'Passenger boarded',
+    body: `Passenger boarded near ${pickupRequest.stopRef || 'the selected pickup point'}.`,
+    payload: {
+      requestId: pickupRequest._id.toString(),
+      tripSessionId: trip._id.toString(),
+      request: serializePickupRequest(pickupRequest),
+      rideSession: serializeRideSession(rideSession),
+    },
+    category: 'trip',
+  });
 
   return rideSession;
 };

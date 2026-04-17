@@ -634,11 +634,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
           Form(
             key: _formKey,
             child: LayoutBuilder(
-              builder: (context, constraints) {
-                final sideBySide = constraints.maxWidth >= 1180;
-
-                return _buildRouteDetailsCard(theme);
-              },
+              builder: (context, constraints) => _buildRouteDetailsCard(theme),
             ),
           ),
           const SizedBox(height: 16),
@@ -779,135 +775,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
               decoration: const InputDecoration(
                 labelText: 'Description',
                 border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFareSettingsCard(ThemeData theme, RouteSummaryModel? existing) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Fare settings',
-              style: theme.textTheme.titleLarge,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'These values drive the passenger fare preview and backend fare computation for this route.',
-              style: theme.textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 14),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final stacked = constraints.maxWidth < 780;
-                final fields = [
-                  TextFormField(
-                    controller: _fareBaseAmountCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(
-                      labelText: 'Base fare',
-                      prefixText: 'PHP ',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) =>
-                        _validateNonNegativeNumber(value, 'Base fare'),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                  TextFormField(
-                    controller: _fareBaseDistanceCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(
-                      labelText: 'Base distance',
-                      suffixText: 'km',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) =>
-                        _validateNonNegativeNumber(value, 'Base distance'),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                  TextFormField(
-                    controller: _fareAdditionalPerKmCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(
-                      labelText: 'Additional per km',
-                      prefixText: 'PHP ',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) =>
-                        _validateNonNegativeNumber(value, 'Additional fare'),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ];
-
-                if (stacked) {
-                  return Column(
-                    children: [
-                      for (var index = 0;
-                          index < fields.length;
-                          index += 1) ...[
-                        fields[index],
-                        if (index < fields.length - 1)
-                          const SizedBox(height: 12),
-                      ],
-                    ],
-                  );
-                }
-
-                return Row(
-                  children: [
-                    for (var index = 0; index < fields.length; index += 1) ...[
-                      Expanded(child: fields[index]),
-                      if (index < fields.length - 1) const SizedBox(width: 12),
-                    ],
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 14),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFF102725).withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Text(
-                _fareRuleSummary(),
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: existing == null
-                    ? const Color(0xFF0F6A5F).withValues(alpha: 0.08)
-                    : const Color(0xFFE29B2D).withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Text(
-                existing == null
-                    ? 'Saving will create a new route.'
-                    : 'Route code already exists. Saving will update ${existing.label}.',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
               ),
             ),
           ],

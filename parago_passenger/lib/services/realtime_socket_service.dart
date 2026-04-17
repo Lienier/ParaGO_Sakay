@@ -78,6 +78,7 @@ class RealtimeSocketService {
     socket.onConnect((_) {
       _networkFailureReported = false;
       debugPrint('Realtime socket connected.');
+      _restoreSubscriptions();
     });
     socket.onDisconnect((reason) {
       debugPrint('Realtime socket disconnected: $reason');
@@ -144,39 +145,51 @@ class RealtimeSocketService {
   }
 
   void subscribeToRoute(String routeId) {
-    if (_socket == null || !_socket!.connected || routeId.isEmpty) return;
-    if (_subscribedRoutes.contains(routeId)) return;
-    
-    _socket!.emit('subscribe.route', routeId);
-    _subscribedRoutes.add(routeId);
-    debugPrint('Subscribed to route updates: $routeId');
+    final trimmedRouteId = routeId.trim();
+    if (trimmedRouteId.isEmpty) return;
+    final isNewSubscription = _subscribedRoutes.add(trimmedRouteId);
+    if (!isNewSubscription || _socket == null || !_socket!.connected) {
+      return;
+    }
+
+    _socket!.emit('subscribe.route', trimmedRouteId);
+    debugPrint('Subscribed to route updates: $trimmedRouteId');
   }
 
   void unsubscribeFromRoute(String routeId) {
-    if (_socket == null || routeId.isEmpty) return;
-    if (!_subscribedRoutes.contains(routeId)) return;
-    
-    _socket!.emit('unsubscribe.route', routeId);
-    _subscribedRoutes.remove(routeId);
-    debugPrint('Unsubscribed from route updates: $routeId');
+    final trimmedRouteId = routeId.trim();
+    if (trimmedRouteId.isEmpty) return;
+    final removed = _subscribedRoutes.remove(trimmedRouteId);
+    if (!removed || _socket == null || !_socket!.connected) {
+      return;
+    }
+
+    _socket!.emit('unsubscribe.route', trimmedRouteId);
+    debugPrint('Unsubscribed from route updates: $trimmedRouteId');
   }
 
   void subscribeToTrip(String tripId) {
-    if (_socket == null || !_socket!.connected || tripId.isEmpty) return;
-    if (_subscribedTrips.contains(tripId)) return;
-    
-    _socket!.emit('subscribe.trip', tripId);
-    _subscribedTrips.add(tripId);
-    debugPrint('Subscribed to trip updates: $tripId');
+    final trimmedTripId = tripId.trim();
+    if (trimmedTripId.isEmpty) return;
+    final isNewSubscription = _subscribedTrips.add(trimmedTripId);
+    if (!isNewSubscription || _socket == null || !_socket!.connected) {
+      return;
+    }
+
+    _socket!.emit('subscribe.trip', trimmedTripId);
+    debugPrint('Subscribed to trip updates: $trimmedTripId');
   }
 
   void unsubscribeFromTrip(String tripId) {
-    if (_socket == null || tripId.isEmpty) return;
-    if (!_subscribedTrips.contains(tripId)) return;
-    
-    _socket!.emit('unsubscribe.trip', tripId);
-    _subscribedTrips.remove(tripId);
-    debugPrint('Unsubscribed from trip updates: $tripId');
+    final trimmedTripId = tripId.trim();
+    if (trimmedTripId.isEmpty) return;
+    final removed = _subscribedTrips.remove(trimmedTripId);
+    if (!removed || _socket == null || !_socket!.connected) {
+      return;
+    }
+
+    _socket!.emit('unsubscribe.trip', trimmedTripId);
+    debugPrint('Unsubscribed from trip updates: $trimmedTripId');
   }
 
   Map<String, dynamic> _normalizePayload(dynamic payload) {
@@ -206,6 +219,19 @@ class RealtimeSocketService {
 
     final explicitPort = uri.hasPort ? ':${uri.port}' : '';
     return '$scheme://$host$explicitPort';
+  }
+
+  void _restoreSubscriptions() {
+    final socket = _socket;
+    if (socket == null || !socket.connected) {
+      return;
+    }
+    for (final routeId in _subscribedRoutes) {
+      socket.emit('subscribe.route', routeId);
+    }
+    for (final tripId in _subscribedTrips) {
+      socket.emit('subscribe.trip', tripId);
+    }
   }
 
   void _stopRetryingOnNetworkError(

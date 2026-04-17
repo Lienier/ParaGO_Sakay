@@ -2,6 +2,7 @@ const express = require('express');
 const RideSession = require('../models/rideSession');
 const Passenger = require('../models/passenger');
 const StopAlert = require('../models/stopAlert');
+const TripSession = require('../models/tripSession');
 const asyncHandler = require('../utils/asyncHandler');
 const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
@@ -111,6 +112,9 @@ router.patch(
     if (!completedSession) {
       throw new ApiError(404, 'Ride session not found');
     }
+    await TripSession.findByIdAndUpdate(session.tripSessionId, {
+      $inc: { occupancyCount: -1 },
+    });
     await StopAlert.updateMany(
       {
         rideSessionId: session._id,

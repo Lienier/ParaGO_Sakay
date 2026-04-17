@@ -40,6 +40,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const double _pickupPinToleranceMeters = 300;
   static const double _unloadPinToleranceMeters = 5;
   static const double _pickupFromCurrentLocationMeters = 50;
+  static const double _passengerGpsJitterMeters = 12;
+  static const double _maxPassengerGpsAccuracyMeters = 35;
   static const double _autoUnloadDistanceMeters = 120;
   static const int _autoUnloadConsecutiveOutsideChecks = 3;
   static const Duration _autoUnloadSustainedSeparation = Duration(seconds: 60);
@@ -243,6 +245,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final notificationService = NotificationService(session.apiClient);
     final routeService = RouteService(session.apiClient);
     final requestStartedAt = DateTime.now();
+    final previousRouteId = _selectedRouteId;
 
     if (!silent) {
       setState(() => _loading = true);
@@ -314,6 +317,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
             ? 'Showing cached trip data while reconnecting.'
             : null;
       });
+      _syncRealtimeRouteSubscription(
+        previousRouteId: previousRouteId,
+        nextRouteId: nextRouteId,
+      );
       _handleRealtimePassengerUpdates(
         notifications: notifications,
         silent: silent,
@@ -624,25 +631,33 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 
   Future<void> _board() async {
-    final pending = _requests
-        .where((request) =>
-            request.status == 'pending' || request.status == 'acknowledged')
+    final acknowledgedRequests = _requests
+        .where((request) => request.status == 'acknowledged')
         .toList()
       ..sort((a, b) => (b.expiresAt ?? '').compareTo(a.expiresAt ?? ''));
 
-    if (pending.isEmpty) {
+    if (acknowledgedRequests.isEmpty) {
       setState(() => _statusMessage =
-          'You need a recent pickup request before boarding confirmation.');
+          'Wait for the driver to acknowledge your pickup request before boarding.');
       await ActionFeedback.showInfoDialog(
         context,
-        title: 'Pickup needed',
+        title: 'Acknowledgement required',
         message:
-            'You need a recent pickup request before boarding confirmation.',
+            'Wait for the driver to acknowledge your pickup request before boarding.',
       );
       return;
     }
 
-    final request = _selectedTripBooking ?? pending.first;
+    final request = _selectedTripBooking?.status == 'acknowledged'
+        ? _selectedTripBooking!
+        : acknowledgedRequests.first;
+    final currentLocation = await _ensureCurrentPassengerLocation(
+      silent: true,
+      forceRefresh: true,
+    );
+    if (!mounted) {
+      return;
+    }
 
     final session = context.read<SessionController>();
     final passengerService = PassengerService(session.apiClient);
@@ -653,6 +668,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       action: () => passengerService.validateBoarding(
         tripSessionId: request.tripSessionId,
         pickupRequestId: request.id,
+        lat: currentLocation?.latitude,
+        lng: currentLocation?.longitude,
       ),
     );
   }
@@ -1322,6 +1339,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     bool silent = false,
     bool forceRefresh = false,
     bool triggerAutoUnload = true,
+    bool recenterMap = false,
   }) async {
     final existingLocation = _currentPassengerLocation;
     final existingTimestamp = _currentPassengerLocationAt;
@@ -1373,7 +1391,26 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           accuracy: LocationAccuracy.best,
         ),
       );
-      final next = LatLng(position.latitude, position.longitude);
+      final previousLocation = _currentPassengerLocation;
+      final rawNext = LatLng(position.latitude, position.longitude);
+      final reportedAccuracy = position.accuracy;
+      final driftMeters = previousLocation == null
+          ? null
+          : _distance.as(LengthUnit.Meter, previousLocation, rawNext);
+
+      if (previousLocation != null &&
+          reportedAccuracy.isFinite &&
+          reportedAccuracy > _maxPassengerGpsAccuracyMeters &&
+          driftMeters != null &&
+          driftMeters <= reportedAccuracy * 1.5) {
+        return previousLocation;
+      }
+
+      final next = previousLocation != null &&
+              driftMeters != null &&
+              driftMeters < _passengerGpsJitterMeters
+          ? previousLocation
+          : rawNext;
       if (!mounted) {
         return next;
       }
@@ -1381,7 +1418,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _currentPassengerLocation = next;
         _currentPassengerLocationAt = DateTime.now();
       });
-      _passengerMapController.move(next, 16);
+      if (recenterMap || (!silent && previousLocation == null)) {
+        _passengerMapController.move(next, 16);
+      }
       if (triggerAutoUnload) {
         unawaited(_maybeAutoUnloadWhenSeparated());
       }
@@ -1696,9 +1735,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }) async {
     final session = context.read<SessionController>();
     final passengerService = PassengerService(session.apiClient);
-    final lookupSerial = forPickup
-        ? ++_pickupLabelLookupSerial
-        : ++_unloadLabelLookupSerial;
+    final lookupSerial =
+        forPickup ? ++_pickupLabelLookupSerial : ++_unloadLabelLookupSerial;
     try {
       final label = await passengerService.reverseGeocodeLabel(
         lat: point.latitude,
@@ -1707,9 +1745,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       if (!mounted || label == null || label.isEmpty) {
         return;
       }
-      final latestSerial = forPickup
-          ? _pickupLabelLookupSerial
-          : _unloadLabelLookupSerial;
+      final latestSerial =
+          forPickup ? _pickupLabelLookupSerial : _unloadLabelLookupSerial;
       final activePoint = forPickup ? _draftPickupPoint : _draftUnloadPoint;
       if (lookupSerial != latestSerial || !_sameMapPoint(activePoint, point)) {
         return;
@@ -1980,7 +2017,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       case 'acknowledged':
         return 'Driver acknowledged your booking';
       case 'completed':
-        return 'Pickup confirmed by the driver';
+        return 'Boarding confirmed and ride is active';
       case 'cancelled':
         return 'Booking was cancelled';
       default:
@@ -2043,7 +2080,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                           const SizedBox(height: 4),
                           Text(
                             'Stop #$stopNumber on ${selectedRoute.name}',
-                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(
                                   color: const Color(0xFF67726E),
                                 ),
                           ),
@@ -2179,8 +2219,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           ),
     ];
 
-
-
     if (_draftPickupPoint != null) {
       tripMarkers.add(
         Marker(
@@ -2307,8 +2345,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           ),
     ];
 
-
-
     if (_draftPickupPoint != null) {
       tripMarkers.add(
         Marker(
@@ -2401,8 +2437,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                 TextButton.icon(
                   onPressed: _locatingPassenger
                       ? null
-                      : () =>
-                          _ensureCurrentPassengerLocation(forceRefresh: true),
+                      : () => _ensureCurrentPassengerLocation(
+                            forceRefresh: true,
+                            recenterMap: true,
+                          ),
                   icon: _locatingPassenger
                       ? const SizedBox(
                           width: 16,
@@ -2590,25 +2628,39 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
     _realtimeNotificationSubscription?.cancel();
     _realtimeLocationSubscription?.cancel();
-    
+
     _realtimeNotificationSubscription =
         _realtimeSocketService.notificationCreatedStream.listen(
       _handleRealtimeSocketNotification,
     );
-    
+
     _realtimeLocationSubscription =
         _realtimeSocketService.jeepneyLocationStream.listen(
       _handleRealtimeLocationUpdate,
     );
-    
+
     _realtimeSocketService.connect(
       apiBaseUrl: session.apiClient.baseUrl,
       token: token,
     );
-    
-    // Subscribe to selected route for location updates
-    if (_selectedRouteId != null && _selectedRouteId!.isNotEmpty) {
-      _realtimeSocketService.subscribeToRoute(_selectedRouteId!);
+
+    _syncRealtimeRouteSubscription(
+      previousRouteId: null,
+      nextRouteId: _selectedRouteId,
+    );
+  }
+
+  void _syncRealtimeRouteSubscription({
+    required String? previousRouteId,
+    required String? nextRouteId,
+  }) {
+    final previous = previousRouteId?.trim() ?? '';
+    final next = nextRouteId?.trim() ?? '';
+    if (previous.isNotEmpty && previous != next) {
+      _realtimeSocketService.unsubscribeFromRoute(previous);
+    }
+    if (next.isNotEmpty) {
+      _realtimeSocketService.subscribeToRoute(next);
     }
   }
 
@@ -2648,16 +2700,29 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
 
     final tripId = event['tripId']?.toString() ?? '';
+    final routeId = event['routeId']?.toString() ?? '';
+    final jeepneyId = event['jeepneyId']?.toString() ?? '';
     final latitude = _parseDouble(event['latitude']);
     final longitude = _parseDouble(event['longitude']);
 
-    if (tripId.isEmpty || latitude == null || longitude == null) {
+    if (latitude == null || longitude == null) {
       return;
     }
 
-    // Update trip location in memory
+    var updated = false;
     setState(() {
-      final tripIndex = _trips.indexWhere((trip) => trip.id == tripId);
+      var tripIndex = -1;
+      if (tripId.isNotEmpty) {
+        tripIndex = _trips.indexWhere((trip) => trip.id == tripId);
+      }
+      if (tripIndex < 0 && jeepneyId.isNotEmpty) {
+        tripIndex = _trips.indexWhere((trip) => trip.jeepneyId == jeepneyId);
+      }
+      if (tripIndex < 0 && routeId.isNotEmpty) {
+        tripIndex = _trips.indexWhere(
+          (trip) => _tripIsLive(trip) && trip.routeId == routeId,
+        );
+      }
       if (tripIndex >= 0) {
         final updatedTrip = _trips[tripIndex].copyWith(
           jeepneyLatitude: latitude,
@@ -2668,8 +2733,13 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           updatedTrip,
           ..._trips.sublist(tripIndex + 1),
         ];
+        updated = true;
       }
     });
+
+    if (!updated) {
+      await _refreshFromSocketEvent();
+    }
   }
 
   double? _parseDouble(dynamic value) {
@@ -2768,225 +2838,46 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       return;
     }
 
-    final fullNameCtrl = TextEditingController(text: profile.fullName);
-    final emailCtrl = TextEditingController(text: profile.email);
-    final phoneCtrl = TextEditingController(text: profile.phone ?? '');
-    final photoUrlCtrl = TextEditingController(text: profile.photoUrl ?? '');
-    final emergencyNameCtrl = TextEditingController(
-      text: profile.emergencyContactName ?? '',
-    );
-    final emergencyPhoneCtrl = TextEditingController(
-      text: profile.emergencyContactPhone ?? '',
-    );
     final activeRoutes = _routes
         .where((route) => route.status == 'active')
         .toList(growable: false);
-    var selectedRouteId = profile.defaultRouteId;
 
-    await showModalBottomSheet<void>(
+    final result = await showModalBottomSheet<_PassengerProfileSettingsResult>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
       backgroundColor: Colors.white,
-      builder: (sheetContext) {
-        var saving = false;
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            Future<void> save() async {
-              if (saving) {
-                return;
-              }
-              setSheetState(() => saving = true);
-              try {
-                await ActionFeedback.run<void>(
-                  context: context,
-                  loadingMessage: 'Saving passenger profile...',
-                  successMessage: 'Profile updated successfully.',
-                  action: () async {
-                    await profileService.updateAccount(
-                      fullName: fullNameCtrl.text,
-                      email: emailCtrl.text,
-                    );
-                    await profileService.updatePassengerProfile(
-                      phone: phoneCtrl.text,
-                      photoUrl: photoUrlCtrl.text,
-                      defaultRouteId: selectedRouteId,
-                      emergencyContactName: emergencyNameCtrl.text,
-                      emergencyContactPhone: emergencyPhoneCtrl.text,
-                    );
-                    await session.refreshCurrentUser();
-                    if (selectedRouteId != null &&
-                        selectedRouteId!.trim().isNotEmpty &&
-                        _routes.any((route) => route.id == selectedRouteId)) {
-                      setState(() => _selectedRouteId = selectedRouteId);
-                    }
-                    await _load(silent: true);
-                  },
-                  onSuccess: (_) async {
-                    if (!mounted) {
-                      return;
-                    }
-                    Navigator.of(sheetContext).pop();
-                    setState(() {
-                      _statusMessage =
-                          'Passenger profile updated successfully.';
-                    });
-                  },
-                  onError: (error) async {
-                    if (!mounted) {
-                      return;
-                    }
-                    setState(() {
-                      _statusMessage = ActionFeedback.messageOf(error);
-                    });
-                  },
-                );
-              } finally {
-                if (sheetContext.mounted) {
-                  setSheetState(() => saving = false);
-                }
-              }
-            }
-
-            return SafeArea(
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  20,
-                  8,
-                  20,
-                  20 + MediaQuery.viewInsetsOf(context).bottom,
-                ),
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'Profile & settings',
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.w800,
-                            ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Keep your account details, emergency contact, and default route preference up to date.',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                      const SizedBox(height: 18),
-                      TextField(
-                        controller: fullNameCtrl,
-                        textCapitalization: TextCapitalization.words,
-                        decoration: const InputDecoration(
-                          labelText: 'Full name',
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: emailCtrl,
-                        keyboardType: TextInputType.emailAddress,
-                        decoration: const InputDecoration(
-                          labelText: 'Email address',
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: phoneCtrl,
-                        keyboardType: TextInputType.phone,
-                        decoration: const InputDecoration(
-                          labelText: 'Passenger phone',
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: photoUrlCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Photo URL',
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      DropdownButtonFormField<String?>(
-                        initialValue: activeRoutes.any(
-                          (route) => route.id == selectedRouteId,
-                        )
-                            ? selectedRouteId
-                            : null,
-                        items: [
-                          const DropdownMenuItem<String?>(
-                            value: null,
-                            child: Text('No default route'),
-                          ),
-                          for (final route in activeRoutes)
-                            DropdownMenuItem<String?>(
-                              value: route.id,
-                              child: Text(route.label),
-                            ),
-                        ],
-                        onChanged: (value) {
-                          setSheetState(() => selectedRouteId = value);
-                        },
-                        decoration: const InputDecoration(
-                          labelText: 'Default route',
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      Text(
-                        'Emergency contact',
-                        style:
-                            Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: emergencyNameCtrl,
-                        textCapitalization: TextCapitalization.words,
-                        decoration: const InputDecoration(
-                          labelText: 'Contact name',
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: emergencyPhoneCtrl,
-                        keyboardType: TextInputType.phone,
-                        decoration: const InputDecoration(
-                          labelText: 'Contact phone',
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          onPressed: saving ? null : save,
-                          icon: saving
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.save_outlined),
-                          label: Text(
-                            saving ? 'Saving...' : 'Save profile',
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
+      builder: (_) => _PassengerProfileSettingsSheet(
+        profile: profile,
+        activeRoutes: activeRoutes,
+        profileService: profileService,
+      ),
     );
 
-    fullNameCtrl.dispose();
-    emailCtrl.dispose();
-    phoneCtrl.dispose();
-    photoUrlCtrl.dispose();
-    emergencyNameCtrl.dispose();
-    emergencyPhoneCtrl.dispose();
+    if (!mounted || result == null) {
+      return;
+    }
+
+    final selectedRouteId = result.selectedRouteId;
+    await session.refreshCurrentUser();
+    if (!mounted) {
+      return;
+    }
+
+    if (selectedRouteId != null &&
+        selectedRouteId.isNotEmpty &&
+        _routes.any((route) => route.id == selectedRouteId)) {
+      setState(() => _selectedRouteId = selectedRouteId);
+    }
+
+    await _load(silent: true);
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _statusMessage = 'Passenger profile updated successfully.';
+    });
   }
 
   Future<void> _openRoutePicker() async {
@@ -3069,12 +2960,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   void _selectPassengerRoute(String routeId) {
     final nextRoute = _routeById(routeId);
-    
+
     // Unsubscribe from previous route
     if (_selectedRouteId != null && _selectedRouteId != routeId) {
       _realtimeSocketService.unsubscribeFromRoute(_selectedRouteId!);
     }
-    
+
     setState(() {
       _selectedRouteId = routeId;
       _selectedTripId = _preferredTripIdForRoute(
@@ -3091,7 +2982,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           ? _statusMessage
           : 'Map updated for ${nextRoute.label}. Pin your pickup point first.';
     });
-    
+
     // Subscribe to new route for real-time location updates
     _realtimeSocketService.subscribeToRoute(routeId);
 
@@ -3277,6 +3168,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       return 'Capacity sync pending';
     }
     return '$seats seat${seats == 1 ? '' : 's'} available';
+  }
+
+  String _passengerCountLabel(TripSession? trip) {
+    final passengerCount = trip?.occupancyCount;
+    if (passengerCount == null) {
+      return 'Passenger count syncing';
+    }
+    return '$passengerCount passenger${passengerCount == 1 ? '' : 's'} onboard';
   }
 
   double? _distanceFromJeepneyToBooking(
@@ -3574,9 +3473,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                   children: [
                     Text(
                       'Ride History',
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                            fontWeight: FontWeight.w800,
-                          ),
+                      style:
+                          Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                fontWeight: FontWeight.w800,
+                              ),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -3604,12 +3504,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                                     const SizedBox(height: 16),
                                     Text(
                                       'No history yet',
-                                      style: Theme.of(context).textTheme.titleMedium,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium,
                                     ),
                                     const SizedBox(height: 8),
                                     Text(
                                       'Your bookings and rides will appear here',
-                                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium
+                                          ?.copyWith(
                                             color: const Color(0xFF67726E),
                                           ),
                                     ),
@@ -3620,7 +3525,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                           if (_requests.isNotEmpty || _rides.isNotEmpty) ...[
                             Text(
                               'BOOKINGS',
-                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(
                                     color: const Color(0xFF8A928F),
                                     fontWeight: FontWeight.w700,
                                   ),
@@ -3641,8 +3549,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                                       children: [
                                         Expanded(
                                           child: Text(
-                                            request.stopRef ?? 'Booking request',
-                                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                            request.stopRef ??
+                                                'Booking request',
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleMedium
+                                                ?.copyWith(
                                                   fontWeight: FontWeight.w700,
                                                 ),
                                           ),
@@ -3653,12 +3565,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                                     const SizedBox(height: 8),
                                     Text(
                                       _bookingStateText(request),
-                                      style: Theme.of(context).textTheme.bodyMedium,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium,
                                     ),
                                     const SizedBox(height: 8),
                                     Text(
                                       ParagoFormat.relative(request.createdAt),
-                                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
                                             color: const Color(0xFF67726E),
                                           ),
                                     ),
@@ -3680,7 +3597,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                             const SizedBox(height: 20),
                             Text(
                               'RIDES',
-                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(
                                     color: const Color(0xFF8A928F),
                                     fontWeight: FontWeight.w700,
                                   ),
@@ -3701,8 +3621,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                                       children: [
                                         Expanded(
                                           child: Text(
-                                            ride.destinationStopRef ?? 'Ride session',
-                                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                            ride.destinationStopRef ??
+                                                'Ride session',
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleMedium
+                                                ?.copyWith(
                                                   fontWeight: FontWeight.w700,
                                                 ),
                                           ),
@@ -3713,12 +3637,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                                     const SizedBox(height: 8),
                                     Text(
                                       _rideStatusMessage(ride),
-                                      style: Theme.of(context).textTheme.bodyMedium,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium,
                                     ),
                                     const SizedBox(height: 8),
                                     Text(
                                       'Boarded ${ParagoFormat.relative(ride.boardedAt)}',
-                                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
                                             color: const Color(0xFF67726E),
                                           ),
                                     ),
@@ -3726,7 +3655,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                                       const SizedBox(height: 8),
                                       Text(
                                         'Fare: ${_formatFareAmount(ride.estimatedFare)}',
-                                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodyMedium
+                                            ?.copyWith(
                                               fontWeight: FontWeight.w600,
                                             ),
                                       ),
@@ -3881,14 +3813,20 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                               children: [
                                 Text(
                                   'Need assistance?',
-                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleMedium
+                                      ?.copyWith(
                                         fontWeight: FontWeight.w700,
                                       ),
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
                                   'We\'re here to help',
-                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodyMedium
+                                      ?.copyWith(
                                         color: const Color(0xFF4E5A56),
                                       ),
                                 ),
@@ -4273,6 +4211,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                             Theme.of(context).textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w800,
                                 ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _passengerCountLabel(selectedTrip),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: const Color(0xFF67726E),
+                              fontWeight: FontWeight.w600,
+                            ),
                       ),
                     ],
                   ),
@@ -4753,7 +4699,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                                         Expanded(
                                           child: Text(
                                             'Current Ride',
-                                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleMedium
+                                                ?.copyWith(
                                                   fontWeight: FontWeight.w800,
                                                 ),
                                           ),
@@ -4763,15 +4712,21 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                                     ),
                                     const SizedBox(height: 12),
                                     Text(
-                                      displayRide.destinationStopRef ?? 'Ride in progress',
-                                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                      displayRide.destinationStopRef ??
+                                          'Ride in progress',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyLarge
+                                          ?.copyWith(
                                             fontWeight: FontWeight.w600,
                                           ),
                                     ),
                                     const SizedBox(height: 8),
                                     Text(
                                       _rideStatusMessage(displayRide),
-                                      style: Theme.of(context).textTheme.bodyMedium,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium,
                                     ),
                                   ],
                                 ),
@@ -4925,6 +4880,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                                 ? null
                                 : () => _ensureCurrentPassengerLocation(
                                       forceRefresh: true,
+                                      recenterMap: true,
                                     ),
                           ),
                           const SizedBox(width: 10),
@@ -5506,6 +5462,262 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PassengerProfileSettingsResult {
+  const _PassengerProfileSettingsResult({
+    required this.selectedRouteId,
+  });
+
+  final String? selectedRouteId;
+}
+
+class _PassengerProfileSettingsSheet extends StatefulWidget {
+  const _PassengerProfileSettingsSheet({
+    required this.profile,
+    required this.activeRoutes,
+    required this.profileService,
+  });
+
+  final PassengerProfileModel profile;
+  final List<RouteSummaryModel> activeRoutes;
+  final PassengerProfileService profileService;
+
+  @override
+  State<_PassengerProfileSettingsSheet> createState() =>
+      _PassengerProfileSettingsSheetState();
+}
+
+class _PassengerProfileSettingsSheetState
+    extends State<_PassengerProfileSettingsSheet> {
+  late final TextEditingController _fullNameCtrl;
+  late final TextEditingController _emailCtrl;
+  late final TextEditingController _phoneCtrl;
+  late final TextEditingController _photoUrlCtrl;
+  late final TextEditingController _emergencyNameCtrl;
+  late final TextEditingController _emergencyPhoneCtrl;
+  late String? _selectedRouteId;
+  bool _saving = false;
+
+  String? get _normalizedSelectedRouteId {
+    final value = _selectedRouteId?.trim();
+    if (value == null || value.isEmpty) {
+      return null;
+    }
+    return value;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final profile = widget.profile;
+    _fullNameCtrl = TextEditingController(text: profile.fullName);
+    _emailCtrl = TextEditingController(text: profile.email);
+    _phoneCtrl = TextEditingController(text: profile.phone ?? '');
+    _photoUrlCtrl = TextEditingController(text: profile.photoUrl ?? '');
+    _emergencyNameCtrl = TextEditingController(
+      text: profile.emergencyContactName ?? '',
+    );
+    _emergencyPhoneCtrl = TextEditingController(
+      text: profile.emergencyContactPhone ?? '',
+    );
+    _selectedRouteId = _normalizedRouteId(profile.defaultRouteId);
+  }
+
+  @override
+  void dispose() {
+    _fullNameCtrl.dispose();
+    _emailCtrl.dispose();
+    _phoneCtrl.dispose();
+    _photoUrlCtrl.dispose();
+    _emergencyNameCtrl.dispose();
+    _emergencyPhoneCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) {
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final result = await ActionFeedback.run<_PassengerProfileSettingsResult>(
+        context: context,
+        loadingMessage: 'Saving passenger profile...',
+        showSuccess: false,
+        action: () async {
+          final selectedRouteId = _normalizedSelectedRouteId;
+          await widget.profileService.updateAccount(
+            fullName: _fullNameCtrl.text,
+            email: _emailCtrl.text,
+          );
+          await widget.profileService.updatePassengerProfile(
+            phone: _phoneCtrl.text,
+            photoUrl: _photoUrlCtrl.text,
+            defaultRouteId: selectedRouteId,
+            emergencyContactName: _emergencyNameCtrl.text,
+            emergencyContactPhone: _emergencyPhoneCtrl.text,
+          );
+          return _PassengerProfileSettingsResult(
+            selectedRouteId: selectedRouteId,
+          );
+        },
+      );
+      if (!mounted || result == null) {
+        return;
+      }
+
+      Navigator.of(context).pop(result);
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  String? _normalizedRouteId(String? value) {
+    final normalized = value?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return null;
+    }
+    return normalized;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedRouteId = _normalizedSelectedRouteId;
+
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          20,
+          8,
+          20,
+          20 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Profile & settings',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Keep your account details, emergency contact, and default route preference up to date.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 18),
+              TextField(
+                controller: _fullNameCtrl,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'Full name',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _emailCtrl,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(
+                  labelText: 'Email address',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _phoneCtrl,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'Passenger phone',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _photoUrlCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Photo URL',
+                ),
+              ),
+              const SizedBox(height: 18),
+              DropdownButtonFormField<String?>(
+                initialValue: widget.activeRoutes.any(
+                  (route) => route.id == selectedRouteId,
+                )
+                    ? selectedRouteId
+                    : null,
+                items: [
+                  const DropdownMenuItem<String?>(
+                    value: null,
+                    child: Text('No default route'),
+                  ),
+                  for (final route in widget.activeRoutes)
+                    DropdownMenuItem<String?>(
+                      value: route.id,
+                      child: Text(route.label),
+                    ),
+                ],
+                onChanged: (value) {
+                  setState(
+                    () => _selectedRouteId = _normalizedRouteId(value),
+                  );
+                },
+                decoration: const InputDecoration(
+                  labelText: 'Default route',
+                ),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                'Emergency contact',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _emergencyNameCtrl,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'Contact name',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _emergencyPhoneCtrl,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'Contact phone',
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _saving ? null : _save,
+                  icon: _saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(Icons.save_outlined),
+                  label: Text(
+                    _saving ? 'Saving...' : 'Save profile',
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

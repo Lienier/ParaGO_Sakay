@@ -54,6 +54,7 @@ module.exports = {
   ),
 
   googleClientIds: splitCsv(process.env.GOOGLE_CLIENT_IDS),
+  corsAllowedOrigins: splitCsv(process.env.CORS_ALLOWED_ORIGINS),
   facebookAppToken: process.env.FACEBOOK_APP_TOKEN || '',
   firebaseProjectId: process.env.FIREBASE_PROJECT_ID || '',
   firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL || '',

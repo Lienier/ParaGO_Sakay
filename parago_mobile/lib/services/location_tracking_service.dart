@@ -12,6 +12,7 @@ class LocationTrackingService {
   StreamSubscription<Position>? _positionSubscription;
   Timer? _fallbackTimer;
   Position? _lastPosition;
+  Position? _lastSentPosition;
   DateTime? _lastUpdateSentAt;
   bool _isTracking = false;
   int _updatesSent = 0;
@@ -19,7 +20,8 @@ class LocationTrackingService {
 
   static const Duration _updateInterval = Duration(seconds: 5);
   static const Duration _fallbackInterval = Duration(seconds: 10);
-  static const double _minimumDistanceMeters = 5.0;
+  static const double _minimumDistanceMeters = 8.0;
+  static const double _maxAcceptedAccuracyMeters = 35.0;
 
   bool get isTracking => _isTracking;
   int get updatesSent => _updatesSent;
@@ -95,7 +97,12 @@ class LocationTrackingService {
   Future<void> _handlePositionUpdate(Position position) async {
     if (!_isTracking) return;
 
+    final previousSample = _lastPosition;
     _lastPosition = position;
+
+    if (_looksLikeNoisyFix(position, previousSample ?? _lastSentPosition)) {
+      return;
+    }
 
     final now = DateTime.now();
     final lastSent = _lastUpdateSentAt;
@@ -104,7 +111,7 @@ class LocationTrackingService {
       return;
     }
 
-    final lastPos = _lastPosition;
+    final lastPos = _lastSentPosition;
     if (lastPos != null && lastSent != null) {
       final distance = Geolocator.distanceBetween(
         lastPos.latitude,
@@ -125,6 +132,7 @@ class LocationTrackingService {
         lng: position.longitude,
       );
       
+      _lastSentPosition = position;
       _lastUpdateSentAt = now;
       _updatesSent++;
       
@@ -156,5 +164,22 @@ class LocationTrackingService {
 
   void dispose() {
     stopTracking();
+  }
+
+  bool _looksLikeNoisyFix(Position position, Position? reference) {
+    final accuracy = position.accuracy;
+    if (reference == null ||
+        !accuracy.isFinite ||
+        accuracy <= _maxAcceptedAccuracyMeters) {
+      return false;
+    }
+
+    final driftMeters = Geolocator.distanceBetween(
+      reference.latitude,
+      reference.longitude,
+      position.latitude,
+      position.longitude,
+    );
+    return driftMeters <= accuracy * 1.5;
   }
 }

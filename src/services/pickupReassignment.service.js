@@ -1,11 +1,11 @@
 const PickupRequest = require('../models/pickupRequest');
 const TripSession = require('../models/tripSession');
-const Driver = require('../models/driver');
 const Passenger = require('../models/passenger');
 const { haversineMeters } = require('../utils/geo');
 const { jeepPassByReassignMeters } = require('../config/env');
 const { publishNotification } = require('./notificationPublisher');
-const { serializePickupRequest } = require('../utils/realtimePayloads');
+const Route = require('../models/route');
+const { nearestRouteProjection } = require('../utils/routeGeo');
 
 const pointCoordinates = (value) =>
   Array.isArray(value?.coordinates) && value.coordinates.length >= 2
@@ -16,11 +16,25 @@ const pointCoordinates = (value) =>
  * Check if assigned jeep has passed by the passenger's pickup location
  * Returns true if jeep is more than threshold meters past the pickup point
  */
-const hasJeepPassedBy = ({ jeepLocation, pickupLocation, threshold }) => {
+const hasJeepPassedBy = ({ route, jeepLocation, pickupLocation, threshold }) => {
   const jeepCoords = pointCoordinates(jeepLocation);
   const pickupCoords = pointCoordinates(pickupLocation);
 
-  if (!jeepCoords || !pickupCoords) {
+  if (!route || !jeepCoords || !pickupCoords) {
+    return false;
+  }
+
+  const jeepProjection = nearestRouteProjection({
+    latitude: jeepCoords[1],
+    longitude: jeepCoords[0],
+    route,
+  });
+  const pickupProjection = nearestRouteProjection({
+    latitude: pickupCoords[1],
+    longitude: pickupCoords[0],
+    route,
+  });
+  if (!jeepProjection || !pickupProjection) {
     return false;
   }
 
@@ -31,8 +45,7 @@ const hasJeepPassedBy = ({ jeepLocation, pickupLocation, threshold }) => {
     jeepCoords[0]
   );
 
-  // If jeep is more than threshold meters away, consider it as passed by
-  return distance > threshold;
+  return jeepProjection.progress > pickupProjection.progress && distance > threshold;
 };
 
 /**
@@ -54,9 +67,12 @@ const checkAndReassignPassedRequests = async () => {
         .populate('driverId', 'userId');
 
       if (!trip || trip.status !== 'active' || !trip.jeepneyId) continue;
+      const route = await Route.findById(trip.routeId);
+      if (!route) continue;
 
       // Check if jeep has passed by the pickup location
       const hasPassed = hasJeepPassedBy({
+        route,
         jeepLocation: trip.jeepneyId.lastKnownLocation,
         pickupLocation: request.pickupLocation,
         threshold: jeepPassByReassignMeters,
@@ -73,7 +89,7 @@ const checkAndReassignPassedRequests = async () => {
           userId: passenger?.userId,
           type: 'pickup_request_expired',
           title: 'Jeepney passed by',
-          body: 'The assigned jeepney has passed your pickup location. Finding another jeepney for you...',
+          body: 'The assigned jeepney has passed your pickup location. Please send a new pickup request.',
           payload: {
             requestId: request._id.toString(),
             tripSessionId: trip._id.toString(),
