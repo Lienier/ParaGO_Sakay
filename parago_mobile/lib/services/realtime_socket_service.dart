@@ -46,6 +46,12 @@ class RealtimeSocketService {
     if (_socket != null &&
         _currentSocketBaseUrl == socketBaseUrl &&
         _currentToken == trimmedToken) {
+      if (_socket!.connected) {
+        return;
+      }
+      debugPrint('Realtime socket reconnecting to existing target.');
+      _networkFailureReported = false;
+      _socket!.connect();
       return;
     }
 

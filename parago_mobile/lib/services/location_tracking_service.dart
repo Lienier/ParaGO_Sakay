@@ -24,10 +24,10 @@ class LocationTrackingService {
   int _updatesSent = 0;
   int _updatesFailed = 0;
 
-  static const Duration _updateInterval = Duration(seconds: 5);
-  static const Duration _fallbackInterval = Duration(seconds: 10);
-  static const double _minimumDistanceMeters = 8.0;
-  static const double _maxAcceptedAccuracyMeters = 35.0;
+  static const Duration _updateInterval = Duration(seconds: 1);
+  static const Duration _fallbackInterval = Duration(seconds: 2);
+  static const double _minimumDistanceMeters = 1.5;
+  static const double _maxAcceptedAccuracyMeters = 20.0;
 
   bool get isTracking => _isTracking;
   int get updatesSent => _updatesSent;
@@ -59,7 +59,7 @@ class LocationTrackingService {
     _isTracking = true;
     _updatesSent = 0;
     _updatesFailed = 0;
-    debugPrint('Starting real-time location tracking (5s interval)');
+    debugPrint('Starting ultra-low-latency location tracking (1s interval)');
 
     _positionSubscription = Geolocator.getPositionStream(
       locationSettings: _streamLocationSettings(),
@@ -173,18 +173,18 @@ class LocationTrackingService {
 
   LocationSettings _streamLocationSettings() {
     if (kIsWeb) {
-      return const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 4,
-      );
+        return const LocationSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 1,
+        );
     }
 
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
         return AndroidSettings(
           accuracy: LocationAccuracy.bestForNavigation,
-          distanceFilter: 4,
-          intervalDuration: const Duration(seconds: 3),
+          distanceFilter: 1,
+          intervalDuration: const Duration(seconds: 1),
           foregroundNotificationConfig: const ForegroundNotificationConfig(
             notificationTitle: 'ParaGO driver tracking active',
             notificationText:
@@ -196,7 +196,7 @@ class LocationTrackingService {
       case TargetPlatform.macOS:
         return AppleSettings(
           accuracy: LocationAccuracy.bestForNavigation,
-          distanceFilter: 4,
+          distanceFilter: 1,
           activityType: ActivityType.automotiveNavigation,
           pauseLocationUpdatesAutomatically: false,
           showBackgroundLocationIndicator: false,
@@ -206,25 +206,25 @@ class LocationTrackingService {
       case TargetPlatform.fuchsia:
         return const LocationSettings(
           accuracy: LocationAccuracy.high,
-          distanceFilter: 4,
+          distanceFilter: 1,
         );
     }
   }
 
   LocationSettings _singleFixLocationSettings() {
     if (kIsWeb) {
-      return const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        timeLimit: Duration(seconds: 8),
-      );
+        return const LocationSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          timeLimit: Duration(seconds: 4),
+        );
     }
 
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
         return AndroidSettings(
           accuracy: LocationAccuracy.bestForNavigation,
-          intervalDuration: const Duration(seconds: 3),
-          timeLimit: const Duration(seconds: 8),
+          intervalDuration: const Duration(seconds: 1),
+          timeLimit: const Duration(seconds: 4),
           foregroundNotificationConfig: const ForegroundNotificationConfig(
             notificationTitle: 'ParaGO driver tracking active',
             notificationText:
@@ -245,7 +245,7 @@ class LocationTrackingService {
       case TargetPlatform.fuchsia:
         return const LocationSettings(
           accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 8),
+          timeLimit: Duration(seconds: 4),
         );
     }
   }

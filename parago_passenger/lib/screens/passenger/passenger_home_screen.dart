@@ -42,17 +42,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const double _pickupFromCurrentLocationMeters = 50;
   static const double _passengerGpsJitterMeters = 12;
   static const double _maxPassengerGpsAccuracyMeters = 35;
-  static const double _tripMarkerJitterMeters = 10;
-  static const double _tripMarkerSnapThresholdMeters = 220;
+  static const double _tripMarkerJitterMeters = 1;
+  static const double _tripMarkerSnapThresholdMeters = 35;
   static const double _autoUnloadDistanceMeters = 120;
   static const int _autoUnloadConsecutiveOutsideChecks = 3;
   static const Duration _autoUnloadSustainedSeparation = Duration(seconds: 60);
   static const Duration _autoUnloadForceAfterPrompt = Duration(minutes: 2);
-  static const Duration _tripMarkerAnimationTick = Duration(milliseconds: 50);
+  static const Duration _tripMarkerAnimationTick = Duration(milliseconds: 16);
   static const Duration _tripMarkerAnimationMinDuration =
-      Duration(milliseconds: 450);
+      Duration(milliseconds: 80);
   static const Duration _tripMarkerAnimationMaxDuration =
-      Duration(milliseconds: 1200);
+      Duration(milliseconds: 220);
   static const double _sheetCollapsedSize = 0.09;
   static const double _sheetPeekSize = 0.38;
   static const double _sheetExpandedSize = 0.90;
@@ -249,7 +249,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     return null;
   }
 
-  Future<void> _load({bool silent = false}) async {
+  Future<void> _load({
+    bool silent = false,
+    bool preferFresh = false,
+  }) async {
     final session = context.read<SessionController>();
     final tripService = TripService(session.apiClient);
     final passengerService = PassengerService(session.apiClient);
@@ -263,11 +266,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
 
     try {
+      final shouldUseLiveCache = !preferFresh;
       final results = await Future.wait<dynamic>([
-        tripService.getActiveTrips(useCache: true),
-        passengerService.getMyPickupRequests(useCache: true),
-        passengerService.getMyRides(useCache: true),
-        notificationService.getMine(useCache: true),
+        tripService.getActiveTrips(useCache: shouldUseLiveCache),
+        passengerService.getMyPickupRequests(useCache: shouldUseLiveCache),
+        passengerService.getMyRides(useCache: shouldUseLiveCache),
+        notificationService.getMine(useCache: shouldUseLiveCache),
         routeService.getRoutes(useCache: true),
       ]);
 
@@ -294,24 +298,13 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         requests: requests,
         rides: rides,
       );
-      String? requestFocusedTripId;
-      if (nextRouteId != null) {
-        for (final request in requests) {
-          if (request.routeId == nextRouteId &&
-              (request.status == 'pending' ||
-                  request.status == 'acknowledged' ||
-                  request.status == 'completed')) {
-            requestFocusedTripId = request.tripSessionId;
-            break;
-          }
-        }
-      }
-      final nextTripId = requestFocusedTripId ??
-          _preferredTripIdForRoute(
-            trips,
-            nextRouteId,
-            anchor: _draftPickupPoint,
-          );
+      final nextTripId = _selectTripIdForRoute(
+        trips: trips,
+        requests: requests,
+        rides: rides,
+        routeId: nextRouteId,
+        anchor: _draftPickupPoint,
+      );
 
       if (!mounted) return;
       setState(() {
@@ -356,17 +349,21 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   void _startLiveRefreshLoop() {
     _liveRefreshTimer?.cancel();
-    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
+    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
       if (!mounted || _silentRefreshActive) {
         return;
       }
       _silentRefreshActive = true;
       try {
+        _ensureRealtimeSocketConnection();
         await _ensureCurrentPassengerLocation(
           silent: true,
           forceRefresh: true,
         );
-        await _load(silent: true);
+        await _load(
+          silent: true,
+          preferFresh: !_realtimeSocketService.isConnected,
+        );
       } finally {
         _silentRefreshActive = false;
       }
@@ -1360,26 +1357,28 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     required List<PickupRequestModel> requests,
     required List<RideSessionModel> rides,
   }) {
+    final rideFocusedRouteId = _preferredRouteIdFromRides(
+      rides: rides,
+      requests: requests,
+      trips: trips,
+      routes: routes,
+    );
+    if (rideFocusedRouteId != null) {
+      return rideFocusedRouteId;
+    }
+
+    final requestFocusedRouteId = _preferredRouteIdFromRequests(
+      requests: requests,
+      routes: routes,
+    );
+    if (requestFocusedRouteId != null) {
+      return requestFocusedRouteId;
+    }
+
     final existingRouteId = _selectedRouteId;
     if (existingRouteId != null &&
         routes.any((route) => route.id == existingRouteId)) {
       return existingRouteId;
-    }
-
-    for (final ride in rides) {
-      for (final request in requests) {
-        if (request.id == ride.pickupRequestId) {
-          return request.routeId;
-        }
-      }
-    }
-
-    for (final request in requests) {
-      if (request.status == 'pending' ||
-          request.status == 'acknowledged' ||
-          request.status == 'completed') {
-        return request.routeId;
-      }
     }
 
     if (trips.isNotEmpty) {
@@ -1415,6 +1414,113 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           .compareTo(_tripDistanceMeters(right, comparisonAnchor));
     });
     return candidates.first.id;
+  }
+
+  String? _selectTripIdForRoute({
+    required List<TripSession> trips,
+    required List<PickupRequestModel> requests,
+    required List<RideSessionModel> rides,
+    required String? routeId,
+    LatLng? anchor,
+  }) {
+    if (routeId == null || routeId.isEmpty) {
+      return null;
+    }
+
+    final route = _routeById(routeId);
+    if (route == null) {
+      return _preferredTripIdForRoute(trips, routeId, anchor: anchor);
+    }
+
+    for (final ride in rides) {
+      if (!_isFocusedRideStatus(ride.status)) {
+        continue;
+      }
+      final trip = _tripFromListById(trips, ride.tripSessionId);
+      if (trip != null && _tripIsLive(trip) && _tripMatchesRoute(trip, route)) {
+        return trip.id;
+      }
+    }
+
+    for (final request in requests) {
+      if (!_isFocusedRequestStatus(request.status) ||
+          request.routeId != routeId ||
+          request.tripSessionId.trim().isEmpty) {
+        continue;
+      }
+      final trip = _tripFromListById(trips, request.tripSessionId);
+      if (trip != null && _tripIsLive(trip) && _tripMatchesRoute(trip, route)) {
+        return trip.id;
+      }
+    }
+
+    final existingTripId = _selectedTripId;
+    if (existingTripId != null && existingTripId.isNotEmpty) {
+      final trip = _tripFromListById(trips, existingTripId);
+      if (trip != null && _tripIsLive(trip) && _tripMatchesRoute(trip, route)) {
+        return trip.id;
+      }
+    }
+
+    return _preferredTripIdForRoute(trips, routeId, anchor: anchor);
+  }
+
+  String? _preferredRouteIdFromRides({
+    required List<RideSessionModel> rides,
+    required List<PickupRequestModel> requests,
+    required List<TripSession> trips,
+    required List<RouteSummaryModel> routes,
+  }) {
+    for (final ride in rides) {
+      if (!_isFocusedRideStatus(ride.status)) {
+        continue;
+      }
+
+      for (final request in requests) {
+        if (request.id == ride.pickupRequestId &&
+            routes.any((route) => route.id == request.routeId)) {
+          return request.routeId;
+        }
+      }
+
+      for (final trip in trips) {
+        if (trip.id == ride.tripSessionId &&
+            routes.any((route) => route.id == trip.routeId)) {
+          return trip.routeId;
+        }
+      }
+    }
+    return null;
+  }
+
+  String? _preferredRouteIdFromRequests({
+    required List<PickupRequestModel> requests,
+    required List<RouteSummaryModel> routes,
+  }) {
+    for (final request in requests) {
+      if (_isFocusedRequestStatus(request.status) &&
+          routes.any((route) => route.id == request.routeId)) {
+        return request.routeId;
+      }
+    }
+    return null;
+  }
+
+  bool _isFocusedRideStatus(String status) =>
+      status == 'onboard' || status == 'waiting';
+
+  bool _isFocusedRequestStatus(String status) =>
+      status == 'pending' ||
+      status == 'acknowledged' ||
+      status == 'completed';
+
+  TripSession? _tripFromListById(List<TripSession> trips, String tripId) {
+    for (final trip in trips) {
+      if (trip.id == tripId) {
+        return trip;
+      }
+    }
+    return null;
   }
 
   LatLng? _routeCenter(RouteSummaryModel? route) {
@@ -2706,7 +2812,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _connectRealtimeSocket();
-      await _load();
+      await _load(preferFresh: true);
       if (mounted) {
         _showMapPromptNotification(route: _selectedRoute, force: true);
       }
@@ -2755,6 +2861,13 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       previousRouteId: null,
       nextRouteId: _selectedRouteId,
     );
+  }
+
+  void _ensureRealtimeSocketConnection() {
+    if (!mounted || _realtimeSocketService.isConnected) {
+      return;
+    }
+    _connectRealtimeSocket();
   }
 
   void _syncRealtimeRouteSubscription({
@@ -3024,7 +3137,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
     _silentRefreshActive = true;
     try {
-      await _load(silent: true);
+      await _load(silent: true, preferFresh: true);
     } finally {
       _silentRefreshActive = false;
     }

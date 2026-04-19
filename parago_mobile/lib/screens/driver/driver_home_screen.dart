@@ -55,8 +55,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   static const _activeAlertStatuses = {'sent', 'seen'};
   static const _dismissedNotificationsStoragePrefix =
       'driver.dismissed.notifications.v1';
-  static const double _vehicleGpsJitterMeters = 12;
-  static const double _maxVehicleGpsAccuracyMeters = 35;
+  static const double _vehicleGpsJitterMeters = 2;
+  static const double _maxVehicleGpsAccuracyMeters = 20;
 
   List<TripSession> _trips = [];
   List<RouteSummaryModel> _routes = [];
@@ -384,8 +384,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return;
     }
     if (!forceReconnect &&
-        (_realtimeSocketService.isConnected ||
-            _realtimeSocketService.hasActiveSocket)) {
+        _realtimeSocketService.isConnected) {
       return;
     }
 
@@ -520,7 +519,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         tripService.getMyTrips(useCache: false),
         notificationService.getMine(useCache: false),
         routeService.getRoutes(useCache: false),
-        driverService.getProfile(),
+        driverService.getProfile(useCache: false),
       ]);
 
       final trips = initialResults[0] as List<TripSession>;
@@ -772,7 +771,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   void _startLiveRefreshLoop() {
     _liveRefreshTimer?.cancel();
-    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
       if (!mounted ||
           _silentRefreshActive ||
           _realtimeSocketService.isConnected) {
@@ -1360,10 +1359,26 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     }
 
     if (_vehicleLocation == null ||
-        (next.latitude - _vehicleLocation!.latitude).abs() > 0.00008 ||
-        (next.longitude - _vehicleLocation!.longitude).abs() > 0.00008) {
+        Geolocator.distanceBetween(
+              _vehicleLocation!.latitude,
+              _vehicleLocation!.longitude,
+              next.latitude,
+              next.longitude,
+            ) >=
+            1) {
       setState(() {
         _vehicleLocation = next;
+        _trips = _trips
+            .map(
+              (trip) => trip.id == _focusedTripId ||
+                      (trip.status == 'active' && _focusedTripId == null)
+                  ? trip.copyWith(
+                      jeepneyLatitude: next.latitude,
+                      jeepneyLongitude: next.longitude,
+                    )
+                  : trip,
+            )
+            .toList(growable: false);
       });
     }
 

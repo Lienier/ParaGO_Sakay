@@ -39,6 +39,13 @@ const limiter = rateLimit({
   max: 120,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => {
+    const path = req.path || req.originalUrl || '';
+    return (
+      path.endsWith('/drivers/location') ||
+      path.endsWith('/drivers/me/location')
+    );
+  },
 });
 app.use('/api', limiter);
 

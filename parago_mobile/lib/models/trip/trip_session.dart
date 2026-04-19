@@ -110,6 +110,63 @@ class TripSession {
     if ((jeepneyName ?? '').isNotEmpty) return jeepneyName!;
     return jeepneyId;
   }
+
+  TripSession copyWith({
+    String? id,
+    String? jeepneyId,
+    String? driverId,
+    String? routeId,
+    String? status,
+    List<LatLng>? routePathSnapshotPoints,
+    String? routeName,
+    String? routeCode,
+    String? jeepneyPlateNumber,
+    String? jeepneyName,
+    String? driverName,
+    double? jeepneyLatitude,
+    double? jeepneyLongitude,
+    String? startedAt,
+    String? endedAt,
+    bool? acceptRequests,
+    int? occupancyCount,
+    bool? active,
+    String? notes,
+    String? operatingMode,
+    String? terminalQueueStatus,
+    int? terminalQueueNumber,
+    String? terminalStopRef,
+    double? terminalLatitude,
+    double? terminalLongitude,
+  }) {
+    return TripSession(
+      id: id ?? this.id,
+      jeepneyId: jeepneyId ?? this.jeepneyId,
+      driverId: driverId ?? this.driverId,
+      routeId: routeId ?? this.routeId,
+      status: status ?? this.status,
+      routePathSnapshotPoints:
+          routePathSnapshotPoints ?? this.routePathSnapshotPoints,
+      routeName: routeName ?? this.routeName,
+      routeCode: routeCode ?? this.routeCode,
+      jeepneyPlateNumber: jeepneyPlateNumber ?? this.jeepneyPlateNumber,
+      jeepneyName: jeepneyName ?? this.jeepneyName,
+      driverName: driverName ?? this.driverName,
+      jeepneyLatitude: jeepneyLatitude ?? this.jeepneyLatitude,
+      jeepneyLongitude: jeepneyLongitude ?? this.jeepneyLongitude,
+      startedAt: startedAt ?? this.startedAt,
+      endedAt: endedAt ?? this.endedAt,
+      acceptRequests: acceptRequests ?? this.acceptRequests,
+      occupancyCount: occupancyCount ?? this.occupancyCount,
+      active: active ?? this.active,
+      notes: notes ?? this.notes,
+      operatingMode: operatingMode ?? this.operatingMode,
+      terminalQueueStatus: terminalQueueStatus ?? this.terminalQueueStatus,
+      terminalQueueNumber: terminalQueueNumber ?? this.terminalQueueNumber,
+      terminalStopRef: terminalStopRef ?? this.terminalStopRef,
+      terminalLatitude: terminalLatitude ?? this.terminalLatitude,
+      terminalLongitude: terminalLongitude ?? this.terminalLongitude,
+    );
+  }
 }
 
 List<LatLng> _readLinePoints(dynamic value) {

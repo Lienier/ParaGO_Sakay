@@ -15,10 +15,11 @@ class DriverService {
     );
   }
 
-  Future<Map<String, dynamic>> getProfile() async {
+  Future<Map<String, dynamic>> getProfile({bool useCache = true}) async {
     final response = await _client.request(
       method: 'GET',
       path: '/drivers/me',
+      useCache: useCache,
     );
     final data = response['data'];
     if (data is Map<String, dynamic>) {
