@@ -1421,6 +1421,21 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     );
   }
 
+  Future<void> _completeRideDestination(RideSessionModel ride) async {
+    final session = context.read<SessionController>();
+    final rideService = RideSessionService(session.apiClient);
+    final destinationLabel =
+        (ride.destinationStopRef ?? '').trim().isEmpty
+            ? 'the saved destination'
+            : ride.destinationStopRef!.trim();
+    await _runDriverAction(
+      loadingMessage: 'Closing ride session...',
+      successMessage:
+          'Passenger unloaded near $destinationLabel. Ride session closed.',
+      action: () => rideService.completeRideSession(ride.id),
+    );
+  }
+
   LocationTrackingService _driverLocationTrackingService(
     SessionController session,
   ) {

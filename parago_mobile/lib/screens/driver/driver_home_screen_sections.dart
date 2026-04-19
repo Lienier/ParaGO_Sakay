@@ -184,6 +184,15 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     return LatLng(lat, lng);
   }
 
+  LatLng? _rideDestinationPosition(RideSessionModel ride) {
+    final lat = ride.destinationLatitude;
+    final lng = ride.destinationLongitude;
+    if (lat == null || lng == null) {
+      return null;
+    }
+    return LatLng(lat, lng);
+  }
+
   List<_DriveMarkerData> _buildMarkers(
     TripSession trip,
     List<PickupRequestModel> requests,
@@ -262,6 +271,10 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               .contains(alert.status),
         )
         .toList();
+    final alertedRideIds = activeAlerts
+        .map((alert) => alert.rideSessionId)
+        .where((id) => id.trim().isNotEmpty)
+        .toSet();
     for (var index = 0; index < activeAlerts.length; index += 1) {
       final alert = activeAlerts[index];
       markers.add(
@@ -272,6 +285,32 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               routePath[math.min(index + 2, routePath.length - 1)],
           icon: Icons.flag_circle,
           markerColor: const Color(0xFFCC4B7A),
+          kind: _DriveMarkerKind.unload,
+        ),
+      );
+    }
+
+    final onboardDestinationRides = rides
+        .where(
+          (ride) =>
+              ride.status == 'onboard' &&
+              !alertedRideIds.contains(ride.id) &&
+              ((ride.destinationStopRef ?? '').trim().isNotEmpty ||
+                  _rideDestinationPosition(ride) != null),
+        )
+        .toList(growable: false);
+    for (var index = 0; index < onboardDestinationRides.length; index += 1) {
+      final ride = onboardDestinationRides[index];
+      markers.add(
+        _DriveMarkerData(
+          label: (ride.destinationStopRef ?? '').trim().isEmpty
+              ? 'Passenger destination'
+              : ride.destinationStopRef!.trim(),
+          detail: 'Saved unload destination for an onboard passenger',
+          position: _rideDestinationPosition(ride) ??
+              routePath[math.min(index + 2, routePath.length - 1)],
+          icon: Icons.flag_outlined,
+          markerColor: const Color(0xFF7B61C8),
           kind: _DriveMarkerKind.unload,
         ),
       );
@@ -685,6 +724,57 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           accent: const Color(0xFF8A3B5D),
         ),
         const SizedBox(height: 16),
+        Text(
+          'Onboard destinations',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        const SizedBox(height: 10),
+        if (focusedTrip == null)
+          const _DriverEmptyState(
+            title: 'No trip selected',
+            message: 'Select a trip to review onboard passenger destinations.',
+          )
+        else ...[
+          () {
+            final onboardRides = rides
+                .where((ride) => ride.status == 'onboard')
+                .toList(growable: false);
+            if (onboardRides.isEmpty) {
+              return const _DriverEmptyState(
+                title: 'No onboard passengers',
+                message: 'Saved unload destinations appear here once riders board.',
+              );
+            }
+            return Column(
+              children: [
+                for (var index = 0; index < onboardRides.length; index += 1) ...[
+                  () {
+                    final ride = onboardRides[index];
+                    final destinationLabel =
+                        (ride.destinationStopRef ?? '').trim().isEmpty
+                            ? 'Saved destination ${index + 1}'
+                            : ride.destinationStopRef!.trim();
+                    final hasSavedPoint = _rideDestinationPosition(ride) != null;
+                    return _DriverActionCard(
+                      title: destinationLabel,
+                      subtitle:
+                          'Onboard passenger - ${ParagoFormat.relative(ride.boardedAt)}',
+                      detail: hasSavedPoint
+                          ? 'Saved drop-off location is pinned on the driver map.'
+                          : 'Passenger saved a drop-off stop reference without map coordinates.',
+                      status: ride.status,
+                      secondaryLabel: 'Mark unloaded',
+                      onSecondary: () => _completeRideDestination(ride),
+                      icon: Icons.location_on_outlined,
+                    );
+                  }(),
+                  if (index < onboardRides.length - 1) const SizedBox(height: 12),
+                ],
+              ],
+            );
+          }(),
+        ],
+        const SizedBox(height: 18),
         Text(
           'Passenger destination alerts',
           style: Theme.of(context).textTheme.titleLarge,
