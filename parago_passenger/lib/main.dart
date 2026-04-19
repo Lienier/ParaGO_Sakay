@@ -126,6 +126,35 @@ class _BootScreen extends StatelessWidget {
   }
 }
 
+Future<void> _confirmPassengerRoleGateLogout(
+  BuildContext context,
+  SessionController session,
+) async {
+  final shouldLogout = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Sign out?'),
+      content: const Text(
+        'Are you sure you want to sign out of the passenger application?',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          child: const Text('Sign out'),
+        ),
+      ],
+    ),
+  );
+
+  if (shouldLogout == true) {
+    await session.logout();
+  }
+}
+
 class _PassengerOnlyAccessScreen extends StatelessWidget {
   const _PassengerOnlyAccessScreen();
 
@@ -160,7 +189,8 @@ class _PassengerOnlyAccessScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 18),
                     FilledButton(
-                      onPressed: () => session.logout(),
+                      onPressed: () =>
+                          _confirmPassengerRoleGateLogout(context, session),
                       child: const Text('Sign out'),
                     ),
                   ],

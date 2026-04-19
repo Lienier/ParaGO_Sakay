@@ -47,6 +47,32 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
   _AdminWorkspaceSection _selectedSection = _AdminWorkspaceSection.overview;
 
+  Future<void> _confirmAdminLogout(SessionController session) async {
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text(
+          'Are you sure you want to log out of the admin application?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldLogout == true) {
+      await session.logout();
+    }
+  }
+
   Future<void> _load({bool silent = false}) async {
     final session = context.read<SessionController>();
     final admin = AdminService(session.apiClient);
@@ -301,12 +327,12 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
             padding: const EdgeInsets.only(right: 16),
             child: compactHeader
                 ? IconButton.filledTonal(
-                    onPressed: session.logout,
+                    onPressed: () => _confirmAdminLogout(session),
                     tooltip: 'Log out',
                     icon: const Icon(Icons.logout),
                   )
                 : TextButton.icon(
-                    onPressed: session.logout,
+                    onPressed: () => _confirmAdminLogout(session),
                     style: TextButton.styleFrom(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 14,

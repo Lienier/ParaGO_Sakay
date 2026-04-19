@@ -27,7 +27,6 @@ import '../../services/realtime_socket_service.dart';
 import '../../services/session_controller.dart';
 import '../../services/stop_alert_service.dart';
 import '../../services/trip_service.dart';
-import '../../widgets/metric_card.dart';
 import '../../widgets/status_badge.dart';
 
 part 'driver_home_screen_sections.dart';
@@ -410,6 +409,32 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       // Keep logout resilient even when the status endpoint cannot be reached.
     }
     await session.logout();
+  }
+
+  Future<void> _confirmLogoutDriver() async {
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text(
+          'Are you sure you want to log out of the driver application?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldLogout == true) {
+      await _logoutDriver();
+    }
   }
 
   void _syncRealtimeSocket(
@@ -2438,7 +2463,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           ),
           IconButton(
             tooltip: 'Logout',
-            onPressed: _logoutDriver,
+            onPressed: _confirmLogoutDriver,
             icon: const Icon(Icons.logout),
           ),
         ],
@@ -2500,9 +2525,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
             label: 'Alerts',
           ),
           NavigationDestination(
-            icon: Icon(Icons.insights_outlined),
-            selectedIcon: Icon(Icons.insights),
-            label: 'Analytics',
+            icon: Icon(Icons.notifications_none_outlined),
+            selectedIcon: Icon(Icons.notifications),
+            label: 'Notifications',
           ),
         ],
       ),

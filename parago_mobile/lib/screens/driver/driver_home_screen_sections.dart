@@ -340,7 +340,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       case 2:
         return 'Driver Alerts';
       case 3:
-        return 'Driver Analytics';
+        return 'Driver Notifications';
       default:
         return 'Driver Drive';
     }
@@ -365,9 +365,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           rides: focusedRides,
         );
       case 3:
-        return _buildAnalyticsTab(
+        return _buildNotificationsTab(
           notifications: _notifications,
-          focusedTrip: focusedTrip,
         );
       default:
         return _buildDriveTab(
@@ -645,13 +644,6 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
       children: [
-        _TabIntroCard(
-          title: 'Pickup requests',
-          description:
-              'Keep acknowledgements and completions quick while the main drive tab stays focused on navigation.',
-          accent: const Color(0xFFE29B2D),
-        ),
-        const SizedBox(height: 16),
         if (visiblePickupRequirementMessage != null) ...[
           _DriverStatusBanner(
             message: visiblePickupRequirementMessage,
@@ -708,27 +700,10 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     required List<StopAlertModel> alerts,
     required List<RideSessionModel> rides,
   }) {
-    final recentNotifications = _notifications
-        .where((item) => !_isNotificationDismissed(item.id))
-        .take(5)
-        .toList();
-
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
       children: [
-        _TabIntroCard(
-          title: 'Stop alerts',
-          description:
-              'Destination notifications and system notices live here so the drive surface can stay visually calm.',
-          accent: const Color(0xFF8A3B5D),
-        ),
-        const SizedBox(height: 16),
-        Text(
-          'Onboard destinations',
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const SizedBox(height: 10),
         if (focusedTrip == null)
           const _DriverEmptyState(
             title: 'No trip selected',
@@ -775,11 +750,6 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           }(),
         ],
         const SizedBox(height: 18),
-        Text(
-          'Passenger destination alerts',
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const SizedBox(height: 10),
         if (focusedTrip == null)
           const _DriverEmptyState(
             title: 'No trip selected',
@@ -833,144 +803,34 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
             }(),
             const SizedBox(height: 12),
           ],
-        const SizedBox(height: 18),
-        Text(
-          'Driver notifications',
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const SizedBox(height: 10),
-        if (recentNotifications.isEmpty)
+      ],
+    );
+  }
+
+  Widget _buildNotificationsTab({
+    required List<NotificationModel> notifications,
+  }) {
+    final visibleNotifications = notifications
+        .where((item) => !_isNotificationDismissed(item.id))
+        .toList(growable: false);
+
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
+      children: [
+        if (visibleNotifications.isEmpty)
           const _DriverEmptyState(
             title: 'No notifications yet',
             message: 'System notices and event confirmations will appear here.',
           )
         else
-          for (final notification in recentNotifications) ...[
+          for (final notification in visibleNotifications) ...[
             _NotificationCard(
               notification: notification,
               onClose: () => _dismissNotification(notification.id),
             ),
             const SizedBox(height: 12),
           ],
-      ],
-    );
-  }
-
-  Widget _buildAnalyticsTab({
-    required List<NotificationModel> notifications,
-    required TripSession? focusedTrip,
-  }) {
-    final assignedTrips = _trips.length;
-    final activeTrips = _trips.where((trip) => trip.status == 'active').length;
-    final pendingPickups = _tripRequests.values
-        .expand((entries) => entries)
-        .where((request) => request.status == 'pending')
-        .length;
-    final totalAlerts = _tripAlerts.values
-        .expand((entries) => entries)
-        .where(
-          (alert) => _DriverHomeScreenState._activeAlertStatuses
-              .contains(alert.status),
-        )
-        .length;
-    final totalOnboard = _trips.fold<int>(0, (sum, trip) {
-      if (trip.status != 'active') {
-        return sum;
-      }
-      return sum + _baseOnboardCount(trip, _tripRides[trip.id] ?? const []);
-    });
-
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
-      children: [
-        _TabIntroCard(
-          title: 'Driver analytics',
-          description:
-              'This stays secondary in the nav so the live trip map remains the primary working surface.',
-          accent: const Color(0xFF2157A5),
-        ),
-        const SizedBox(height: 16),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final compact = constraints.maxWidth < 640;
-            return GridView.count(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisCount: compact ? 1 : 2,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              childAspectRatio: compact ? 1.7 : 1.04,
-              children: [
-                MetricCard(
-                  label: 'Assigned trips',
-                  value: assignedTrips.toString(),
-                  icon: Icons.route_outlined,
-                  accent: const Color(0xFF0F6A5F),
-                  caption: 'Trip records under this driver account',
-                ),
-                MetricCard(
-                  label: 'Trips active now',
-                  value: activeTrips.toString(),
-                  icon: Icons.play_circle_outline,
-                  accent: const Color(0xFF2157A5),
-                  caption: 'Trips currently marked as active',
-                ),
-                MetricCard(
-                  label: 'Pending pickups',
-                  value: pendingPickups.toString(),
-                  icon: Icons.near_me_outlined,
-                  accent: const Color(0xFFE29B2D),
-                  caption: 'Requests still waiting in the queue',
-                ),
-                MetricCard(
-                  label: 'Destination alerts',
-                  value: totalAlerts.toString(),
-                  icon: Icons.flag_circle_outlined,
-                  accent: const Color(0xFF8A3B5D),
-                  caption: 'Passengers nearing their unload points',
-                ),
-              ],
-            );
-          },
-        ),
-        const SizedBox(height: 18),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Operational summary',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 14),
-                _SummaryRow(
-                  label: 'Onboard passengers now',
-                  value: totalOnboard.toString(),
-                ),
-                _SummaryRow(
-                  label: 'Focused trip',
-                  value: focusedTrip == null
-                      ? 'No trip selected'
-                      : _routeLabel(focusedTrip),
-                ),
-                _SummaryRow(
-                  label: 'Unread notifications',
-                  value: notifications
-                      .where((notification) => !notification.isRead)
-                      .length
-                      .toString(),
-                ),
-                _SummaryRow(
-                  label: 'Requests open',
-                  value: focusedTrip?.acceptRequests == false ? 'No' : 'Yes',
-                ),
-              ],
-            ),
-          ),
-        ),
       ],
     );
   }

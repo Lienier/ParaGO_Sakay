@@ -31,6 +31,7 @@ const {
   normalizeTripOperatingMode,
   resolveRouteTerminalStop,
 } = require('../services/hybridDispatch.service');
+const { deriveDriverPresence } = require('../services/driverPresence.service');
 
 const router = express.Router();
 
@@ -61,11 +62,22 @@ const normalizeOptionalObjectId = (value, fieldName, allowMissing = false) => {
 
 const buildDriverProfile = async (driver) => {
   if (!driver) return null;
-  return driver.populate([
+  const populatedDriver = await driver.populate([
     { path: 'userId', select: 'email fullName status role' },
-    { path: 'assignedJeepneyId', select: 'plateNumber capacity status' },
+    {
+      path: 'assignedJeepneyId',
+      select: 'plateNumber jeepneyName capacity status lastSeenAt',
+    },
     { path: 'assignedRouteId', select: 'name code status' },
   ]);
+  const raw =
+    typeof populatedDriver.toObject === 'function'
+      ? populatedDriver.toObject()
+      : populatedDriver;
+  return {
+    ...raw,
+    ...(await deriveDriverPresence(populatedDriver)),
+  };
 };
 
 const ensureTerminalQueueRouteSupported = (route, operatingMode) => {
@@ -239,12 +251,9 @@ router.get(
 router.get(
   '/drivers',
   asyncHandler(async (_req, res) => {
-    const drivers = await Driver.find()
-      .populate('userId', 'email fullName status role')
-      .populate('assignedJeepneyId', 'plateNumber jeepneyName capacity status')
-      .populate('assignedRouteId', 'name code status')
-      .sort({ createdAt: -1 });
-    return ok(res, drivers, 'Drivers list');
+    const drivers = await Driver.find().sort({ createdAt: -1 });
+    const profiles = await Promise.all(drivers.map((driver) => buildDriverProfile(driver)));
+    return ok(res, profiles, 'Drivers list');
   })
 );
 
@@ -329,9 +338,13 @@ router.post(
     }
     const jeepneyPayload = buildJeepneyCreatePayload(body.jeepney);
 
-    const status = String(body.status || 'active').toLowerCase();
-    if (!['active', 'inactive'].includes(status)) {
-      throw new ApiError(400, 'status must be one of: active, inactive');
+    const requestedAccountStatus = String(
+      body.accountStatus ?? body.status ?? 'active'
+    ).toLowerCase();
+    const accountStatus =
+      requestedAccountStatus === 'inactive' ? 'suspended' : requestedAccountStatus;
+    if (!['active', 'suspended', 'deactivated'].includes(accountStatus)) {
+      throw new ApiError(400, 'status must be one of: active, suspended, deactivated');
     }
     const operatingMode = normalizeTripOperatingMode(body.operatingMode);
 
@@ -367,7 +380,7 @@ router.post(
       password: body.password,
       fullName: body.fullName,
       role: 'DRIVER',
-      status,
+      status: accountStatus,
     });
 
     const update = {};
@@ -380,7 +393,6 @@ router.post(
     if (hasOwn(body, 'phone')) {
       update.phone = String(body.phone || '').trim();
     }
-    update.status = status;
     if (typeof body.isVerified === 'boolean') update.isVerified = body.isVerified;
     if (normalizedRouteId) {
       update.assignedRouteId = normalizedRouteId;
@@ -413,7 +425,13 @@ router.post(
     const profile = await buildDriverProfile(driver);
     return ok(
       res,
-      { userId: user._id.toString(), status: user.status, role: user.role, driver: profile },
+      {
+        userId: user._id.toString(),
+        status: user.status,
+        accountStatus: user.status,
+        role: user.role,
+        driver: profile,
+      },
       'Driver created',
       201
     );
@@ -428,17 +446,23 @@ router.patch(
     const updates = {};
     const updatesToUnset = {};
     let assignedRouteSnapshot;
+    let accountStatus;
 
     if (hasOwn(body, 'licenseNumber')) updates.licenseNumber = String(body.licenseNumber || '').trim();
     if (hasOwn(body, 'employeeNumber')) updates.employeeNumber = String(body.employeeNumber || '').trim();
     if (hasOwn(body, 'phone')) updates.phone = String(body.phone || '').trim();
     if (typeof body.isVerified === 'boolean') updates.isVerified = body.isVerified;
-    if (hasOwn(body, 'status')) {
-      const status = String(body.status || '').toLowerCase();
-      if (!['active', 'inactive'].includes(status)) {
-        throw new ApiError(400, 'status must be one of: active, inactive');
+    if (hasOwn(body, 'accountStatus') || hasOwn(body, 'status')) {
+      const requestedAccountStatus = String(
+        body.accountStatus ?? body.status ?? ''
+      ).toLowerCase();
+      accountStatus =
+        requestedAccountStatus === 'inactive'
+          ? 'suspended'
+          : requestedAccountStatus;
+      if (!['active', 'suspended', 'deactivated'].includes(accountStatus)) {
+        throw new ApiError(400, 'status must be one of: active, suspended, deactivated');
       }
-      updates.status = status;
     }
     if (hasOwn(body, 'operatingMode')) {
       const operatingMode = normalizeTripOperatingMode(body.operatingMode);
@@ -511,6 +535,17 @@ router.patch(
 
     let profile = await Driver.findByIdAndUpdate(req.params.id, updateAction, { new: true });
     if (!profile) throw new ApiError(404, 'Driver not found');
+
+    if (accountStatus) {
+      const updatedUser = await User.findByIdAndUpdate(
+        profile.userId,
+        { $set: { status: accountStatus } },
+        { new: true }
+      ).select('_id');
+      if (!updatedUser) {
+        throw new ApiError(404, 'Driver user account not found');
+      }
+    }
 
     if (updates.assignedRouteId) {
       await TripSession.updateMany(

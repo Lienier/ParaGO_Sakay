@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -27,6 +29,8 @@ class AdminDriverManagementScreen extends StatefulWidget {
 
 class _AdminDriverManagementScreenState
     extends State<AdminDriverManagementScreen> {
+  static const Duration _presenceRefreshInterval = Duration(seconds: 30);
+
   final _createFormKey = GlobalKey<FormState>();
   final _editFormKey = GlobalKey<FormState>();
   final _searchCtrl = TextEditingController();
@@ -52,6 +56,7 @@ class _AdminDriverManagementScreenState
   List<RouteSummaryModel> _routes = [];
   List<TripSession> _trips = [];
 
+  Timer? _presenceRefreshTimer;
   bool _loading = false;
   bool _saving = false;
   String? _schedulingDriverId;
@@ -74,10 +79,12 @@ class _AdminDriverManagementScreenState
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    _startPresenceRefreshLoop();
   }
 
   @override
   void dispose() {
+    _presenceRefreshTimer?.cancel();
     _searchCtrl.dispose();
     _createLicenseCtrl.dispose();
     _createEmployeeCtrl.dispose();
@@ -192,12 +199,19 @@ class _AdminDriverManagementScreenState
   }
 
   bool _matchesStatusFilter(Map<String, dynamic> driver) {
-    final normalized = _textOf(driver['status']).toLowerCase();
+    final accountStatus = _accountStatusOf(driver);
+    final presenceStatus = _presenceStatusOf(driver);
     switch (_statusFilter) {
-      case 'active':
-        return normalized == 'active';
-      case 'inactive':
-        return normalized == 'inactive';
+      case 'online':
+        return presenceStatus == 'online';
+      case 'offline':
+        return presenceStatus == 'offline';
+      case 'account_active':
+        return accountStatus == 'active';
+      case 'account_suspended':
+        return accountStatus == 'suspended';
+      case 'account_deactivated':
+        return accountStatus == 'deactivated';
       case 'verified':
         return driver['isVerified'] == true;
       case 'unassigned':
@@ -207,12 +221,86 @@ class _AdminDriverManagementScreenState
     }
   }
 
-  Future<void> _load() async {
+  String _accountStatusOf(Map<String, dynamic> driver) {
+    final direct = _textOf(driver['accountStatus']).toLowerCase();
+    if (direct.isNotEmpty) return direct;
+    final user = driver['userId'];
+    if (user is Map<String, dynamic>) {
+      final nested = _textOf(user['status']).toLowerCase();
+      if (nested.isNotEmpty) return nested;
+    }
+    return 'unknown';
+  }
+
+  String _presenceStatusOf(Map<String, dynamic> driver) {
+    final direct = _textOf(driver['presenceStatus']).toLowerCase();
+    if (direct == 'online' || direct == 'offline') {
+      return direct;
+    }
+    final legacy = _textOf(driver['status']).toLowerCase();
+    if (legacy == 'active') return 'online';
+    return 'offline';
+  }
+
+  DateTime? _lastSeenAtOf(Map<String, dynamic> driver) {
+    final raw = driver['lastSeenAt'];
+    if (raw == null) return null;
+    return DateTime.tryParse(raw.toString())?.toLocal();
+  }
+
+  String _lastSeenLabel(DateTime? value) {
+    if (value == null) {
+      return 'No recent heartbeat';
+    }
+    final delta = DateTime.now().difference(value);
+    if (delta.inSeconds < 60) {
+      final seconds = delta.inSeconds.clamp(0, 59);
+      return '$seconds sec ago';
+    }
+    if (delta.inMinutes < 60) {
+      return '${delta.inMinutes} min ago';
+    }
+    if (delta.inHours < 24) {
+      return '${delta.inHours} hr ago';
+    }
+    return '${delta.inDays} day${delta.inDays == 1 ? '' : 's'} ago';
+  }
+
+  Color _accountStatusColor(String status) {
+    switch (status) {
+      case 'active':
+        return Colors.green;
+      case 'suspended':
+        return Colors.orange;
+      case 'deactivated':
+        return Colors.red;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  Color _presenceStatusColor(String status) {
+    return status == 'online' ? Colors.blue : Colors.grey;
+  }
+
+  void _startPresenceRefreshLoop() {
+    _presenceRefreshTimer?.cancel();
+    _presenceRefreshTimer = Timer.periodic(_presenceRefreshInterval, (_) {
+      if (!mounted || _loading) {
+        return;
+      }
+      _load(silent: true);
+    });
+  }
+
+  Future<void> _load({bool silent = false}) async {
     final session = context.read<SessionController>();
     final admin = AdminService(session.apiClient);
     final routeService = RouteService(session.apiClient);
 
-    setState(() => _loading = true);
+    if (!silent) {
+      setState(() => _loading = true);
+    }
 
     try {
       final results = await Future.wait<dynamic>([
@@ -232,7 +320,7 @@ class _AdminDriverManagementScreenState
       if (!mounted) return;
       setState(() => _error = error.toString());
     } finally {
-      if (mounted) {
+      if (mounted && !silent) {
         setState(() => _loading = false);
       }
     }
@@ -551,7 +639,9 @@ class _AdminDriverManagementScreenState
   Widget _buildDriverCard(Map<String, dynamic> driver) {
     final userName = _driverDisplayName(driver);
     final userEmail = _driverEmail(driver);
-    final status = _textOf(driver['status']).toLowerCase();
+    final accountStatus = _accountStatusOf(driver);
+    final presenceStatus = _presenceStatusOf(driver);
+    final lastSeenAt = _lastSeenAtOf(driver);
     final isVerified = driver['isVerified'] == true;
     final license = _textOf(driver['licenseNumber']);
     final employee = _textOf(driver['employeeNumber']);
@@ -616,8 +706,12 @@ class _AdminDriverManagementScreenState
               runSpacing: 8,
               children: [
                 _Badge(
-                  label: 'status: ${_statusLabel(status)}',
-                  color: status == 'active' ? Colors.green : Colors.orange,
+                  label: 'account: ${_statusLabel(accountStatus)}',
+                  color: _accountStatusColor(accountStatus),
+                ),
+                _Badge(
+                  label: 'presence: ${_statusLabel(presenceStatus)}',
+                  color: _presenceStatusColor(presenceStatus),
                 ),
                 _Badge(
                   label: isVerified ? 'verified' : 'not verified',
@@ -633,6 +727,7 @@ class _AdminDriverManagementScreenState
             infoLine('Jeepney plate', jeepneyPlate),
             if (jeepneyCapacity.isNotEmpty)
               infoLine('Capacity', jeepneyCapacity),
+            infoLine('Last heartbeat', _lastSeenLabel(lastSeenAt)),
             const SizedBox(height: 6),
             infoLine(
               'Trip status',
@@ -704,8 +799,11 @@ class _AdminDriverManagementScreenState
         )
         .toList(growable: false);
     final allDrivers = _drivers.whereType<Map<String, dynamic>>().toList();
-    final activeCount = allDrivers
-        .where((driver) => _textOf(driver['status']).toLowerCase() == 'active')
+    final onlineCount = allDrivers
+        .where((driver) => _presenceStatusOf(driver) == 'online')
+        .length;
+    final activeAccountCount = allDrivers
+        .where((driver) => _accountStatusOf(driver) == 'active')
         .length;
     final verifiedCount =
         allDrivers.where((driver) => driver['isVerified'] == true).length;
@@ -743,8 +841,12 @@ class _AdminDriverManagementScreenState
                         value: allDrivers.length.toString(),
                       ),
                       _DriverMetricChip(
-                        label: 'Active',
-                        value: activeCount.toString(),
+                        label: 'Online',
+                        value: onlineCount.toString(),
+                      ),
+                      _DriverMetricChip(
+                        label: 'Active accounts',
+                        value: activeAccountCount.toString(),
                       ),
                       _DriverMetricChip(
                         label: 'Verified',
@@ -779,12 +881,24 @@ class _AdminDriverManagementScreenState
                             child: Text('All drivers'),
                           ),
                           DropdownMenuItem(
-                            value: 'active',
-                            child: Text('Active only'),
+                            value: 'online',
+                            child: Text('Online only'),
                           ),
                           DropdownMenuItem(
-                            value: 'inactive',
-                            child: Text('Inactive only'),
+                            value: 'offline',
+                            child: Text('Offline only'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'account_active',
+                            child: Text('Active accounts'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'account_suspended',
+                            child: Text('Suspended accounts'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'account_deactivated',
+                            child: Text('Deactivated accounts'),
                           ),
                           DropdownMenuItem(
                             value: 'verified',

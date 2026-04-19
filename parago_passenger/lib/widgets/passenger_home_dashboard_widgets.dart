@@ -78,14 +78,15 @@ class PassengerDashboardTopBar extends StatelessWidget {
           PopupMenuButton<String>(
             onSelected: onAccountSelected,
             itemBuilder: (context) => const [
-              PopupMenuItem<String>(
-                value: 'profile',
-                child: Text('Profile & settings'),
-              ),
-              PopupMenuItem<String>(
-                value: 'refresh',
-                child: Text('Refresh data'),
-              ),
+              // Passenger user-menu items temporarily disabled:
+              // PopupMenuItem<String>(
+              //   value: 'profile',
+              //   child: Text('Profile & settings'),
+              // ),
+              // PopupMenuItem<String>(
+              //   value: 'refresh',
+              //   child: Text('Refresh data'),
+              // ),
               PopupMenuItem<String>(
                 value: 'mark_all_read',
                 child: Text('Mark alerts read'),

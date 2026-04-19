@@ -149,7 +149,13 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                     items: const [
                       DropdownMenuItem(value: 'active', child: Text('Active')),
                       DropdownMenuItem(
-                          value: 'inactive', child: Text('Inactive')),
+                        value: 'suspended',
+                        child: Text('Suspended'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'deactivated',
+                        child: Text('Deactivated'),
+                      ),
                     ],
                     onChanged: (value) => _createStatus = value ?? 'active',
                   ),
@@ -188,10 +194,12 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
 
     final selectedRouteId = _nullableIdOf(driver['assignedRouteId']);
     _routeSelection.value = _hasRoute(selectedRouteId) ? selectedRouteId : null;
-    _statusSelection.value =
-        _textOf(driver['status']).toLowerCase() == 'inactive'
-            ? 'inactive'
-            : 'active';
+    final accountStatus = _accountStatusOf(driver);
+    _statusSelection.value = switch (accountStatus) {
+      'suspended' => 'suspended',
+      'deactivated' => 'deactivated',
+      _ => 'active',
+    };
     _verifiedSelection.value = driver['isVerified'] == true;
 
     await showModalBottomSheet(
@@ -304,7 +312,13 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                     items: const [
                       DropdownMenuItem(value: 'active', child: Text('Active')),
                       DropdownMenuItem(
-                          value: 'inactive', child: Text('Inactive')),
+                        value: 'suspended',
+                        child: Text('Suspended'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'deactivated',
+                        child: Text('Deactivated'),
+                      ),
                     ],
                     onChanged: (value) =>
                         _statusSelection.value = value ?? 'active',

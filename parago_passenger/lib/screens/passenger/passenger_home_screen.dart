@@ -3795,7 +3795,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         await _markAllRead();
         return;
       case 'logout':
-        session.logout();
+        await _confirmPassengerLogout(session);
         return;
       case 'refresh':
         await _refreshPassengerData();
@@ -3811,6 +3811,32 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final session = context.read<SessionController>();
     await session.apiClient.clearCache();
     await _load();
+  }
+
+  Future<void> _confirmPassengerLogout(SessionController session) async {
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text(
+          'Are you sure you want to log out of the passenger application?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldLogout == true) {
+      await session.logout();
+    }
   }
 
   Future<void> _openProfileSettings(SessionController session) async {
@@ -4488,31 +4514,32 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                     },
                   ),
                   const Divider(height: 1),
-                  ListTile(
-                    leading: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE8F0FF),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.support_agent_rounded,
-                        color: Color(0xFF2157A5),
-                      ),
-                    ),
-                    title: const Text(
-                      'Support',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    subtitle: const Text('Help & contact information'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      _showSupportBottomSheet();
-                    },
-                  ),
-                  const Divider(height: 1),
+                  // Passenger drawer item temporarily disabled:
+                  // ListTile(
+                  //   leading: Container(
+                  //     width: 40,
+                  //     height: 40,
+                  //     decoration: BoxDecoration(
+                  //       color: const Color(0xFFE8F0FF),
+                  //       borderRadius: BorderRadius.circular(12),
+                  //     ),
+                  //     child: const Icon(
+                  //       Icons.support_agent_rounded,
+                  //       color: Color(0xFF2157A5),
+                  //     ),
+                  //   ),
+                  //   title: const Text(
+                  //     'Support',
+                  //     style: TextStyle(fontWeight: FontWeight.w600),
+                  //   ),
+                  //   subtitle: const Text('Help & contact information'),
+                  //   trailing: const Icon(Icons.chevron_right),
+                  //   onTap: () {
+                  //     Navigator.of(context).pop();
+                  //     _showSupportBottomSheet();
+                  //   },
+                  // ),
+                  // const Divider(height: 1),
                   const SizedBox(height: 12),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -4525,28 +4552,29 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  ListTile(
-                    leading: const Icon(Icons.settings_outlined),
-                    title: const Text('Profile & Settings'),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      unawaited(_openProfileSettings(session));
-                    },
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.refresh_outlined),
-                    title: const Text('Refresh Data'),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      unawaited(_refreshPassengerData());
-                    },
-                  ),
+                  // Passenger account-menu items temporarily disabled:
+                  // ListTile(
+                  //   leading: const Icon(Icons.settings_outlined),
+                  //   title: const Text('Profile & Settings'),
+                  //   onTap: () {
+                  //     Navigator.of(context).pop();
+                  //     unawaited(_openProfileSettings(session));
+                  //   },
+                  // ),
+                  // ListTile(
+                  //   leading: const Icon(Icons.refresh_outlined),
+                  //   title: const Text('Refresh Data'),
+                  //   onTap: () {
+                  //     Navigator.of(context).pop();
+                  //     unawaited(_refreshPassengerData());
+                  //   },
+                  // ),
                   ListTile(
                     leading: const Icon(Icons.logout_outlined),
                     title: const Text('Log Out'),
                     onTap: () {
                       Navigator.of(context).pop();
-                      session.logout();
+                      unawaited(_confirmPassengerLogout(session));
                     },
                   ),
                 ],
@@ -6042,14 +6070,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
               unawaited(_handleDashboardAction(session, action));
             },
             itemBuilder: (context) => const [
-              PopupMenuItem<String>(
-                value: 'profile',
-                child: Text('Profile & settings'),
-              ),
-              PopupMenuItem<String>(
-                value: 'refresh',
-                child: Text('Refresh data'),
-              ),
+              // Passenger user-menu items temporarily disabled:
+              // PopupMenuItem<String>(
+              //   value: 'profile',
+              //   child: Text('Profile & settings'),
+              // ),
+              // PopupMenuItem<String>(
+              //   value: 'refresh',
+              //   child: Text('Refresh data'),
+              // ),
               PopupMenuItem<String>(
                 value: 'mark_all_read',
                 child: Text('Mark alerts read'),
@@ -6465,11 +6494,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _SectionHeader(
-                      title: 'My bookings',
-                      trailing: Text('${_requests.length} total'),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        '${_requests.length} total',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: const Color(0xFF67726E),
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 4),
                     if (_requests.isEmpty)
                       const Text('No bookings yet for this account.')
                     else
@@ -6501,14 +6536,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _SectionHeader(
-                      title: 'Notifications',
-                      trailing: TextButton(
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
                         onPressed: unreadCount == 0 ? null : _markAllRead,
                         child: const Text('Mark all read'),
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 4),
                     if (_notifications.isEmpty)
                       const Text('No notifications yet.')
                     else
