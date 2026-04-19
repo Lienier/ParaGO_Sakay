@@ -53,6 +53,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       Duration(milliseconds: 80);
   static const Duration _tripMarkerAnimationMaxDuration =
       Duration(milliseconds: 220);
+  static const Duration _tripRealtimeStaleAfter = Duration(seconds: 8);
   static const double _sheetCollapsedSize = 0.09;
   static const double _sheetPeekSize = 0.38;
   static const double _sheetExpandedSize = 0.90;
@@ -106,6 +107,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final Map<String, _TripMarkerAnimation> _tripMarkerAnimations =
       <String, _TripMarkerAnimation>{};
+  final Map<String, _TripVehicleMotionState> _tripVehicleStates =
+      <String, _TripVehicleMotionState>{};
   OverlayEntry? _mapPromptOverlayEntry;
   Timer? _mapPromptOverlayTimer;
 
@@ -321,6 +324,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
             ? 'Showing cached trip data while reconnecting.'
             : null;
       });
+      _reconcileTripVehicleStates(trips);
       _pruneTripMarkerAnimations();
       _syncRealtimeRouteSubscription(
         previousRouteId: previousRouteId,
@@ -867,9 +871,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
 
     final trip = _tripById(ride.tripSessionId);
-    if (trip == null ||
-        trip.jeepneyLatitude == null ||
-        trip.jeepneyLongitude == null) {
+    final jeepneyPoint = trip == null ? null : _tripVehiclePoint(trip);
+    if (trip == null || jeepneyPoint == null) {
       _resetAutoUnloadWindow(rideId: ride.id);
       return;
     }
@@ -897,7 +900,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final distanceMeters = _distance.as(
       LengthUnit.Meter,
       passengerLocation,
-      LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!),
+      jeepneyPoint,
     );
     if (distanceMeters < _autoUnloadDistanceMeters) {
       _resetAutoUnloadWindow(rideId: ride.id);
@@ -958,13 +961,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
 
     final trip = _tripById(ride.tripSessionId);
-    if (trip == null ||
-        trip.jeepneyLatitude == null ||
-        trip.jeepneyLongitude == null) {
+    final jeepneyPoint = trip == null ? null : _tripVehiclePoint(trip);
+    if (trip == null || jeepneyPoint == null) {
       return;
     }
 
-    final jeepneyPoint = LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!);
     final destinationPoint = LatLng(
       ride.destinationLatitude!,
       ride.destinationLongitude!,
@@ -1651,13 +1652,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 
   double _tripDistanceMeters(TripSession trip, LatLng anchor) {
-    if (trip.jeepneyLatitude == null || trip.jeepneyLongitude == null) {
+    final vehiclePoint = _tripVehiclePoint(trip);
+    if (vehiclePoint == null) {
       return double.infinity;
     }
     return _distance.as(
       LengthUnit.Meter,
       anchor,
-      LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!),
+      vehiclePoint,
     );
   }
 
@@ -2402,6 +2404,29 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
   }
 
+  List<Marker> _tripVehicleMarkers(
+    List<TripSession> routeTrips,
+    TripSession? selectedTrip,
+  ) {
+    return routeTrips
+        .where((trip) => _tripVehiclePoint(trip) != null)
+        .map(
+          (trip) => Marker(
+            point: _tripVehiclePoint(trip)!,
+            width: trip.id == selectedTrip?.id ? 52 : 44,
+            height: trip.id == selectedTrip?.id ? 52 : 44,
+            child: _PassengerVehicleMarker(
+              color: trip.id == selectedTrip?.id
+                  ? const Color(0xFF0F6A5F)
+                  : const Color(0xFF2157A5),
+              size: trip.id == selectedTrip?.id ? 36 : 30,
+              headingDegrees: _tripVehicleHeading(trip),
+            ),
+          ),
+        )
+        .toList(growable: false);
+  }
+
   Widget _buildPassengerMapSurface({
     required RouteSummaryModel? selectedRoute,
     required TripSession? selectedTrip,
@@ -2410,25 +2435,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final routePath = _routeMapPath(selectedRoute, selectedTrip);
     final tripMarkers = [
       ..._routeLandmarkMarkers(selectedRoute),
-      ...routeTrips
-          .where(
-            (trip) =>
-                trip.jeepneyLatitude != null && trip.jeepneyLongitude != null,
-          )
-          .map(
-            (trip) => Marker(
-              point: LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!),
-              width: trip.id == selectedTrip?.id ? 52 : 44,
-              height: trip.id == selectedTrip?.id ? 52 : 44,
-              child: Icon(
-                Icons.directions_bus_filled,
-                color: trip.id == selectedTrip?.id
-                    ? const Color(0xFF0F6A5F)
-                    : const Color(0xFF2157A5),
-                size: trip.id == selectedTrip?.id ? 36 : 30,
-              ),
-            ),
-          ),
+      ..._tripVehicleMarkers(routeTrips, selectedTrip),
     ];
 
     if (_draftPickupPoint != null) {
@@ -2536,25 +2543,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final routePath = _routeMapPath(selectedRoute, selectedTrip);
     final tripMarkers = [
       ..._routeLandmarkMarkers(selectedRoute),
-      ...routeTrips
-          .where(
-            (trip) =>
-                trip.jeepneyLatitude != null && trip.jeepneyLongitude != null,
-          )
-          .map(
-            (trip) => Marker(
-              point: LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!),
-              width: trip.id == selectedTrip?.id ? 52 : 44,
-              height: trip.id == selectedTrip?.id ? 52 : 44,
-              child: Icon(
-                Icons.directions_bus_filled,
-                color: trip.id == selectedTrip?.id
-                    ? const Color(0xFF0F6A5F)
-                    : const Color(0xFF2157A5),
-                size: trip.id == selectedTrip?.id ? 36 : 30,
-              ),
-            ),
-          ),
+      ..._tripVehicleMarkers(routeTrips, selectedTrip),
     ];
 
     if (_draftPickupPoint != null) {
@@ -2941,14 +2930,18 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
     final trip = _trips[tripIndex];
     final nextPoint = LatLng(latitude, longitude);
-    final currentLatitude = trip.jeepneyLatitude;
-    final currentLongitude = trip.jeepneyLongitude;
-    if (currentLatitude == null || currentLongitude == null) {
-      _setTripMarkerPosition(tripIndex, nextPoint);
+    final currentPoint = _tripVehiclePoint(trip);
+    final currentHeading = _tripVehicleHeading(trip);
+    final updateAt = DateTime.now();
+    if (currentPoint == null) {
+      _setTripMarkerPosition(
+        tripIndex,
+        nextPoint,
+        headingDegrees: currentHeading,
+        lastRealtimeUpdateAt: updateAt,
+      );
       return;
     }
-
-    final currentPoint = LatLng(currentLatitude, currentLongitude);
     final distanceMeters = Geolocator.distanceBetween(
       currentPoint.latitude,
       currentPoint.longitude,
@@ -2957,20 +2950,43 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     );
 
     if (distanceMeters < _tripMarkerJitterMeters) {
+      _setTripVehicleRealtimeTimestamp(trip.id, updateAt);
       return;
     }
+
+    final nextHeading = _resolveTripMarkerHeading(
+      previousPoint: currentPoint,
+      nextPoint: nextPoint,
+      currentHeading: currentHeading,
+    );
 
     if (distanceMeters >= _tripMarkerSnapThresholdMeters) {
-      _setTripMarkerPosition(tripIndex, nextPoint);
+      _setTripMarkerPosition(
+        tripIndex,
+        nextPoint,
+        headingDegrees: nextHeading,
+        lastRealtimeUpdateAt: updateAt,
+      );
       return;
     }
 
-    _tripMarkerAnimations[trip.id] = _TripMarkerAnimation(
-      from: currentPoint,
-      to: nextPoint,
-      startedAt: DateTime.now(),
-      duration: _tripMarkerAnimationDuration(distanceMeters),
-    );
+    setState(() {
+      _tripVehicleStates[trip.id] = _TripVehicleMotionState(
+        renderedPosition: currentPoint,
+        targetPosition: nextPoint,
+        renderedHeading: currentHeading ?? nextHeading,
+        targetHeading: nextHeading ?? currentHeading,
+        lastRealtimeUpdateAt: updateAt,
+      );
+      _tripMarkerAnimations[trip.id] = _TripMarkerAnimation(
+        from: currentPoint,
+        to: nextPoint,
+        fromHeading: currentHeading ?? nextHeading,
+        toHeading: nextHeading ?? currentHeading,
+        startedAt: updateAt,
+        duration: _tripMarkerAnimationDuration(distanceMeters),
+      );
+    });
     _ensureTripMarkerAnimationLoop();
   }
 
@@ -2999,7 +3015,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     return -1;
   }
 
-  void _setTripMarkerPosition(int tripIndex, LatLng point) {
+  void _setTripMarkerPosition(
+    int tripIndex,
+    LatLng point, {
+    double? headingDegrees,
+    DateTime? lastRealtimeUpdateAt,
+  }) {
     if (tripIndex < 0 || tripIndex >= _trips.length || !mounted) {
       return;
     }
@@ -3007,16 +3028,31 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final trip = _trips[tripIndex];
     _tripMarkerAnimations.remove(trip.id);
     setState(() {
-      _trips = [
-        ..._trips.sublist(0, tripIndex),
-        trip.copyWith(
-          jeepneyLatitude: point.latitude,
-          jeepneyLongitude: point.longitude,
-        ),
-        ..._trips.sublist(tripIndex + 1),
-      ];
+      final previousState = _tripVehicleStates[trip.id];
+      final resolvedHeading =
+          headingDegrees ?? previousState?.targetHeading ?? previousState?.renderedHeading;
+      _tripVehicleStates[trip.id] = _TripVehicleMotionState(
+        renderedPosition: point,
+        targetPosition: point,
+        renderedHeading: resolvedHeading,
+        targetHeading: resolvedHeading,
+        lastRealtimeUpdateAt:
+            lastRealtimeUpdateAt ?? previousState?.lastRealtimeUpdateAt,
+      );
     });
     _stopTripMarkerAnimationLoopIfIdle();
+  }
+
+  void _setTripVehicleRealtimeTimestamp(String tripId, DateTime timestamp) {
+    final currentState = _tripVehicleStates[tripId];
+    if (currentState == null) {
+      return;
+    }
+    setState(() {
+      _tripVehicleStates[tripId] = currentState.copyWith(
+        lastRealtimeUpdateAt: timestamp,
+      );
+    });
   }
 
   void _ensureTripMarkerAnimationLoop() {
@@ -3041,14 +3077,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
 
     final now = DateTime.now();
-    final updatedTrips = List<TripSession>.from(_trips);
+    final updatedStates =
+        Map<String, _TripVehicleMotionState>.from(_tripVehicleStates);
     final completedTripIds = <String>[];
     var changed = false;
 
-    for (var index = 0; index < updatedTrips.length; index++) {
-      final trip = updatedTrips[index];
-      final animation = _tripMarkerAnimations[trip.id];
-      if (animation == null) {
+    for (final entry in _tripMarkerAnimations.entries) {
+      final tripId = entry.key;
+      final animation = entry.value;
+      final state = updatedStates[tripId];
+      if (state == null) {
+        completedTripIds.add(tripId);
         continue;
       }
 
@@ -3063,18 +3102,41 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         animation.to,
         easedProgress,
       );
+      final interpolatedHeading =
+          animation.fromHeading == null || animation.toHeading == null
+              ? (animation.toHeading ??
+                  animation.fromHeading ??
+                  state.renderedHeading)
+              : _lerpHeading(
+                  animation.fromHeading!,
+                  animation.toHeading!,
+                  easedProgress,
+                );
 
-      if (trip.jeepneyLatitude != interpolatedPoint.latitude ||
-          trip.jeepneyLongitude != interpolatedPoint.longitude) {
-        updatedTrips[index] = trip.copyWith(
-          jeepneyLatitude: interpolatedPoint.latitude,
-          jeepneyLongitude: interpolatedPoint.longitude,
+      if (state.renderedPosition != interpolatedPoint ||
+          state.renderedHeading != interpolatedHeading) {
+        updatedStates[tripId] = state.copyWith(
+          renderedPosition: interpolatedPoint,
+          renderedHeading: interpolatedHeading,
+          targetPosition: animation.to,
+          targetHeading: animation.toHeading ?? state.targetHeading,
+          lastRealtimeUpdateAt: state.lastRealtimeUpdateAt,
         );
         changed = true;
       }
 
       if (progress >= 1.0) {
-        completedTripIds.add(trip.id);
+        updatedStates[tripId] = updatedStates[tripId]?.copyWith(
+              renderedPosition: animation.to,
+              targetPosition: animation.to,
+              renderedHeading:
+                  animation.toHeading ?? updatedStates[tripId]?.renderedHeading,
+              targetHeading:
+                  animation.toHeading ?? updatedStates[tripId]?.targetHeading,
+            ) ??
+            state;
+        completedTripIds.add(tripId);
+        changed = true;
       }
     }
 
@@ -3086,7 +3148,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
     if (changed && mounted) {
       setState(() {
-        _trips = updatedTrips;
+        _tripVehicleStates
+          ..clear()
+          ..addAll(updatedStates);
       });
     }
 
@@ -3098,7 +3162,93 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     _tripMarkerAnimations.removeWhere(
       (tripId, _) => !activeTripIds.contains(tripId),
     );
+    _tripVehicleStates.removeWhere(
+      (tripId, _) => !activeTripIds.contains(tripId),
+    );
     _stopTripMarkerAnimationLoopIfIdle();
+  }
+
+  void _reconcileTripVehicleStates(List<TripSession> trips) {
+    final activeTripIds = trips.map((trip) => trip.id).toSet();
+    final now = DateTime.now();
+    var changed = false;
+
+    _tripVehicleStates.removeWhere((tripId, _) {
+      final shouldRemove = !activeTripIds.contains(tripId);
+      changed = changed || shouldRemove;
+      return shouldRemove;
+    });
+
+    for (final trip in trips) {
+      final canonicalPoint = _canonicalTripVehiclePoint(trip);
+      final existingState = _tripVehicleStates[trip.id];
+      final preserveLive = _shouldPreserveRealtimeVehicleState(
+        trip.id,
+        now: now,
+      );
+      if (preserveLive) {
+        continue;
+      }
+
+      if (canonicalPoint == null) {
+        if (existingState != null) {
+          _tripVehicleStates.remove(trip.id);
+          _tripMarkerAnimations.remove(trip.id);
+          changed = true;
+        }
+        continue;
+      }
+
+      final nextState = _TripVehicleMotionState(
+        renderedPosition: canonicalPoint,
+        targetPosition: canonicalPoint,
+        renderedHeading: existingState?.renderedHeading,
+        targetHeading:
+            existingState?.targetHeading ?? existingState?.renderedHeading,
+        lastRealtimeUpdateAt: existingState?.lastRealtimeUpdateAt,
+      );
+      if (existingState != nextState) {
+        _tripVehicleStates[trip.id] = nextState;
+        _tripMarkerAnimations.remove(trip.id);
+        changed = true;
+      }
+    }
+
+    if (changed && mounted) {
+      setState(() {});
+    }
+  }
+
+  bool _shouldPreserveRealtimeVehicleState(
+    String tripId, {
+    DateTime? now,
+  }) {
+    if (!_realtimeSocketService.isConnected) {
+      return false;
+    }
+    final currentState = _tripVehicleStates[tripId];
+    final lastRealtimeUpdateAt = currentState?.lastRealtimeUpdateAt;
+    if (lastRealtimeUpdateAt == null) {
+      return false;
+    }
+    return (now ?? DateTime.now()).difference(lastRealtimeUpdateAt) <=
+        _tripRealtimeStaleAfter;
+  }
+
+  LatLng? _canonicalTripVehiclePoint(TripSession trip) {
+    if (trip.jeepneyLatitude == null || trip.jeepneyLongitude == null) {
+      return null;
+    }
+    return LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!);
+  }
+
+  LatLng? _tripVehiclePoint(TripSession trip) {
+    return _tripVehicleStates[trip.id]?.renderedPosition ??
+        _canonicalTripVehiclePoint(trip);
+  }
+
+  double? _tripVehicleHeading(TripSession trip) {
+    return _tripVehicleStates[trip.id]?.renderedHeading;
   }
 
   void _stopTripMarkerAnimationLoopIfIdle() {
@@ -3123,6 +3273,48 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       from.latitude + ((to.latitude - from.latitude) * t),
       from.longitude + ((to.longitude - from.longitude) * t),
     );
+  }
+
+  double? _resolveTripMarkerHeading({
+    required LatLng previousPoint,
+    required LatLng nextPoint,
+    required double? currentHeading,
+  }) {
+    final distanceMeters = Geolocator.distanceBetween(
+      previousPoint.latitude,
+      previousPoint.longitude,
+      nextPoint.latitude,
+      nextPoint.longitude,
+    );
+    if (distanceMeters < 1) {
+      return currentHeading;
+    }
+    return _bearingDegrees(previousPoint, nextPoint);
+  }
+
+  double _bearingDegrees(LatLng from, LatLng to) {
+    final lat1 = from.latitude * math.pi / 180;
+    final lat2 = to.latitude * math.pi / 180;
+    final deltaLng = (to.longitude - from.longitude) * math.pi / 180;
+    final y = math.sin(deltaLng) * math.cos(lat2);
+    final x = math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(deltaLng);
+    final bearing = math.atan2(y, x) * 180 / math.pi;
+    return _normalizeHeading(bearing);
+  }
+
+  double _normalizeHeading(double headingDegrees) {
+    final normalized = headingDegrees % 360;
+    return normalized < 0 ? normalized + 360 : normalized;
+  }
+
+  double _shortestHeadingDelta(double from, double to) {
+    return ((_normalizeHeading(to) - _normalizeHeading(from) + 540) % 360) -
+        180;
+  }
+
+  double _lerpHeading(double from, double to, double t) {
+    return _normalizeHeading(from + (_shortestHeadingDelta(from, to) * t));
   }
 
   double? _parseDouble(dynamic value) {
@@ -3565,15 +3757,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     TripSession? trip,
     PickupRequestModel? booking,
   ) {
-    if (trip?.jeepneyLatitude == null ||
-        trip?.jeepneyLongitude == null ||
+    final jeepneyPoint = trip == null ? null : _tripVehiclePoint(trip);
+    if (jeepneyPoint == null ||
         booking?.pickupLatitude == null ||
         booking?.pickupLongitude == null) {
       return null;
     }
     return _distance.as(
       LengthUnit.Meter,
-      LatLng(trip!.jeepneyLatitude!, trip.jeepneyLongitude!),
+      jeepneyPoint,
       LatLng(booking!.pickupLatitude!, booking.pickupLongitude!),
     );
   }
@@ -3582,15 +3774,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     TripSession? trip,
     RideSessionModel? ride,
   ) {
-    if (trip?.jeepneyLatitude == null ||
-        trip?.jeepneyLongitude == null ||
+    final jeepneyPoint = trip == null ? null : _tripVehiclePoint(trip);
+    if (jeepneyPoint == null ||
         ride?.destinationLatitude == null ||
         ride?.destinationLongitude == null) {
       return null;
     }
     return _distance.as(
       LengthUnit.Meter,
-      LatLng(trip!.jeepneyLatitude!, trip.jeepneyLongitude!),
+      jeepneyPoint,
       LatLng(ride!.destinationLatitude!, ride.destinationLongitude!),
     );
   }
@@ -3630,9 +3822,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     TripSession? trip,
     RouteSummaryModel? route,
   ) {
-    if (trip?.jeepneyLatitude == null ||
-        trip?.jeepneyLongitude == null ||
-        route == null) {
+    final jeepneyPoint = trip == null ? null : _tripVehiclePoint(trip);
+    if (jeepneyPoint == null || route == null) {
       return null;
     }
     final orderedPoints = _orderedRoutePoints(route);
@@ -3641,7 +3832,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
     final projection = _nearestRouteProjection(
       route,
-      LatLng(trip!.jeepneyLatitude!, trip.jeepneyLongitude!),
+      jeepneyPoint,
     );
     if (projection == null) {
       return null;
@@ -6111,14 +6302,72 @@ class _TripMarkerAnimation {
   const _TripMarkerAnimation({
     required this.from,
     required this.to,
+    this.fromHeading,
+    this.toHeading,
     required this.startedAt,
     required this.duration,
   });
 
   final LatLng from;
   final LatLng to;
+  final double? fromHeading;
+  final double? toHeading;
   final DateTime startedAt;
   final Duration duration;
+}
+
+class _TripVehicleMotionState {
+  const _TripVehicleMotionState({
+    required this.renderedPosition,
+    required this.targetPosition,
+    this.renderedHeading,
+    this.targetHeading,
+    this.lastRealtimeUpdateAt,
+  });
+
+  final LatLng renderedPosition;
+  final LatLng targetPosition;
+  final double? renderedHeading;
+  final double? targetHeading;
+  final DateTime? lastRealtimeUpdateAt;
+
+  _TripVehicleMotionState copyWith({
+    LatLng? renderedPosition,
+    LatLng? targetPosition,
+    double? renderedHeading,
+    double? targetHeading,
+    DateTime? lastRealtimeUpdateAt,
+    bool keepLastRealtimeUpdateAt = true,
+  }) {
+    return _TripVehicleMotionState(
+      renderedPosition: renderedPosition ?? this.renderedPosition,
+      targetPosition: targetPosition ?? this.targetPosition,
+      renderedHeading: renderedHeading ?? this.renderedHeading,
+      targetHeading: targetHeading ?? this.targetHeading,
+      lastRealtimeUpdateAt: keepLastRealtimeUpdateAt
+          ? (lastRealtimeUpdateAt ?? this.lastRealtimeUpdateAt)
+          : lastRealtimeUpdateAt,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is _TripVehicleMotionState &&
+        other.renderedPosition == renderedPosition &&
+        other.targetPosition == targetPosition &&
+        other.renderedHeading == renderedHeading &&
+        other.targetHeading == targetHeading &&
+        other.lastRealtimeUpdateAt == lastRealtimeUpdateAt;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+        renderedPosition,
+        targetPosition,
+        renderedHeading,
+        targetHeading,
+        lastRealtimeUpdateAt,
+      );
 }
 
 enum _PassengerBookingMode {
@@ -6249,6 +6498,32 @@ class _PassengerMapPin extends StatelessWidget {
         const SizedBox(height: 4),
         Icon(icon, color: color, size: 36),
       ],
+    );
+  }
+}
+
+class _PassengerVehicleMarker extends StatelessWidget {
+  const _PassengerVehicleMarker({
+    required this.color,
+    required this.size,
+    this.headingDegrees,
+  });
+
+  final Color color;
+  final double size;
+  final double? headingDegrees;
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = Icon(
+      Icons.directions_bus_filled,
+      color: color,
+      size: size,
+    );
+
+    return Transform.rotate(
+      angle: ((headingDegrees ?? 0) * math.pi) / 180,
+      child: icon,
     );
   }
 }

@@ -57,6 +57,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       'driver.dismissed.notifications.v1';
   static const double _vehicleGpsJitterMeters = 2;
   static const double _maxVehicleGpsAccuracyMeters = 20;
+  static const Duration _vehicleMotionTick = Duration(milliseconds: 16);
+  static const Duration _vehicleMotionMinDuration =
+      Duration(milliseconds: 140);
+  static const Duration _vehicleMotionMaxDuration =
+      Duration(milliseconds: 320);
+  static const Duration _driverMapFollowPause = Duration(seconds: 8);
+  static const double _driverMapFollowLerpFactor = 0.22;
+  static const double _driverMapFollowJitterMeters = 2;
+  static const double _driverMapFollowSnapMeters = 45;
+  static const double _vehicleTeleportSnapMeters = 90;
 
   List<TripSession> _trips = [];
   List<RouteSummaryModel> _routes = [];
@@ -76,9 +86,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   String? _statusMessage;
   String _availabilityNote = 'Checking driver availability...';
   LatLng? _vehicleLocation;
+  LatLng? _vehicleTargetLocation;
+  LatLng? _vehicleMotionFromLocation;
+  double? _vehicleHeadingDegrees;
+  double? _vehicleTargetHeadingDegrees;
+  double? _vehicleMotionFromHeadingDegrees;
+  double? _vehicleLastReliableHeadingDegrees;
+  DateTime? _vehicleMotionStartedAt;
+  Duration _vehicleMotionDuration = Duration.zero;
   LocationTrackingService? _locationTrackingService;
   Timer? _liveRefreshTimer;
   Timer? _availabilityTimer;
+  Timer? _vehicleMotionTimer;
   StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
   StreamSubscription<Map<String, dynamic>>? _realtimeOperationsSubscription;
   bool _locationTrackingSyncInFlight = false;
@@ -97,7 +116,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   bool _dismissedNotificationsLoaded = false;
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
   final MapController _driverMapController = MapController();
+  bool _driverMapReady = false;
   LatLng? _lastDriverMapCenter;
+  DateTime? _driverMapFollowPausedUntil;
 
   TripSession? get _focusedTrip {
     for (final trip in _trips) {
@@ -132,6 +153,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _vehicleMotionTimer?.cancel();
     _locationTrackingService?.dispose();
     _liveRefreshTimer?.cancel();
     _availabilityTimer?.cancel();
@@ -1357,30 +1379,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (next == null) {
       return;
     }
-
-    if (_vehicleLocation == null ||
-        Geolocator.distanceBetween(
-              _vehicleLocation!.latitude,
-              _vehicleLocation!.longitude,
-              next.latitude,
-              next.longitude,
-            ) >=
-            1) {
-      setState(() {
-        _vehicleLocation = next;
-        _trips = _trips
-            .map(
-              (trip) => trip.id == _focusedTripId ||
-                      (trip.status == 'active' && _focusedTripId == null)
-                  ? trip.copyWith(
-                      jeepneyLatitude: next.latitude,
-                      jeepneyLongitude: next.longitude,
-                    )
-                  : trip,
-            )
-            .toList(growable: false);
-      });
-    }
+    final currentAnchor = _vehicleTargetLocation ?? _vehicleLocation;
+    final nextHeading = _resolveVehicleHeading(
+      position: position,
+      previousPoint: currentAnchor,
+      nextPoint: next,
+    );
+    _startVehicleMotion(
+      next,
+      headingDegrees: nextHeading,
+    );
 
     if (_statusMessage != null &&
         _statusMessage!.toLowerCase().contains('location')) {
@@ -1389,7 +1397,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   LatLng? _smoothedVehicleLocation(Position position) {
-    final previousLocation = _vehicleLocation;
+    final previousLocation = _vehicleTargetLocation ?? _vehicleLocation;
     final rawNext = LatLng(position.latitude, position.longitude);
     final reportedAccuracy = position.accuracy;
     final driftMeters = previousLocation == null
@@ -1451,26 +1459,276 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     return LatLng(trip.jeepneyLatitude!, trip.jeepneyLongitude!);
   }
 
+  bool get _hasActiveLocalVehicleTracking =>
+      _locationTrackingService?.isTracking == true;
+
   LatLng? _vehicleLocationForTrip(TripSession trip) {
-    return _vehicleLocation ?? _storedVehicleLocation(trip);
+    final storedLocation = _storedVehicleLocation(trip);
+    if (_hasActiveLocalVehicleTracking) {
+      return _vehicleLocation ?? _vehicleTargetLocation ?? storedLocation;
+    }
+    return storedLocation ?? _vehicleLocation ?? _vehicleTargetLocation;
   }
 
   void _syncDriverMapCamera(LatLng target) {
-    final previous = _lastDriverMapCenter;
-    if (previous != null &&
-        (previous.latitude - target.latitude).abs() < 0.00008 &&
-        (previous.longitude - target.longitude).abs() < 0.00008) {
+    final pausedUntil = _driverMapFollowPausedUntil;
+    if (pausedUntil != null && DateTime.now().isBefore(pausedUntil)) {
       return;
     }
 
-    _lastDriverMapCenter = target;
+    if (!_driverMapReady) {
+      _lastDriverMapCenter = target;
+      return;
+    }
+
+    final currentZoom = _driverMapController.camera.zoom;
+    final previous = _lastDriverMapCenter ??
+        (currentZoom == 0 ? target : _driverMapController.camera.center);
+    final distanceMeters = Geolocator.distanceBetween(
+      previous.latitude,
+      previous.longitude,
+      target.latitude,
+      target.longitude,
+    );
+    if (distanceMeters < _driverMapFollowJitterMeters) {
+      return;
+    }
+
+    final nextCenter = distanceMeters >= _driverMapFollowSnapMeters
+        ? target
+        : _lerpLatLng(previous, target, _driverMapFollowLerpFactor);
+    _lastDriverMapCenter = nextCenter;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final zoom = _driverMapController.camera.zoom == 0
           ? 14.2
           : _driverMapController.camera.zoom;
+      _driverMapController.move(nextCenter, zoom);
+    });
+  }
+
+  void _handleDriverMapReady() {
+    _driverMapReady = true;
+    final target = _lastDriverMapCenter;
+    if (target == null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_driverMapReady) return;
+      final zoom =
+          _driverMapController.camera.zoom == 0 ? 14.2 : _driverMapController.camera.zoom;
       _driverMapController.move(target, zoom);
     });
+  }
+
+  void _handleDriverMapPositionChanged(MapCamera camera, bool hasGesture) {
+    _lastDriverMapCenter = camera.center;
+    if (!hasGesture) {
+      return;
+    }
+    _driverMapFollowPausedUntil = DateTime.now().add(_driverMapFollowPause);
+  }
+
+  void _startVehicleMotion(
+    LatLng target, {
+    double? headingDegrees,
+  }) {
+    final currentPoint = _vehicleLocation ?? _vehicleTargetLocation ?? target;
+    final currentHeading = _vehicleHeadingDegrees ??
+        _vehicleTargetHeadingDegrees ??
+        _vehicleLastReliableHeadingDegrees;
+    final resolvedHeading = headingDegrees ?? currentHeading;
+    final distanceMeters = Geolocator.distanceBetween(
+      currentPoint.latitude,
+      currentPoint.longitude,
+      target.latitude,
+      target.longitude,
+    );
+    final headingDelta = (currentHeading == null || resolvedHeading == null)
+        ? 0
+        : _shortestHeadingDelta(currentHeading, resolvedHeading).abs();
+
+    if (_vehicleLocation == null && _vehicleTargetLocation == null) {
+      setState(() {
+        _vehicleLocation = target;
+        _vehicleTargetLocation = target;
+        _vehicleMotionFromLocation = target;
+        _vehicleHeadingDegrees = resolvedHeading;
+        _vehicleTargetHeadingDegrees = resolvedHeading;
+        _vehicleMotionFromHeadingDegrees = resolvedHeading;
+        if (resolvedHeading != null) {
+          _vehicleLastReliableHeadingDegrees = resolvedHeading;
+        }
+      });
+      _syncDriverMapCamera(target);
+      return;
+    }
+
+    if (distanceMeters < 0.8 && headingDelta < 2) {
+      return;
+    }
+
+    if (distanceMeters >= _vehicleTeleportSnapMeters) {
+      setState(() {
+        _vehicleLocation = target;
+        _vehicleTargetLocation = target;
+        _vehicleMotionFromLocation = target;
+        _vehicleHeadingDegrees = resolvedHeading;
+        _vehicleTargetHeadingDegrees = resolvedHeading;
+        _vehicleMotionFromHeadingDegrees = resolvedHeading;
+        if (resolvedHeading != null) {
+          _vehicleLastReliableHeadingDegrees = resolvedHeading;
+        }
+      });
+      _vehicleMotionTimer?.cancel();
+      _vehicleMotionTimer = null;
+      _syncDriverMapCamera(target);
+      return;
+    }
+
+    setState(() {
+      _vehicleMotionFromLocation = currentPoint;
+      _vehicleTargetLocation = target;
+      _vehicleMotionStartedAt = DateTime.now();
+      _vehicleMotionDuration = _vehicleMotionDurationFor(distanceMeters);
+      _vehicleMotionFromHeadingDegrees = currentHeading ?? resolvedHeading;
+      _vehicleTargetHeadingDegrees = resolvedHeading ?? currentHeading;
+      _vehicleLocation = currentPoint;
+      _vehicleHeadingDegrees ??= currentHeading ?? resolvedHeading;
+      if (resolvedHeading != null) {
+        _vehicleLastReliableHeadingDegrees = resolvedHeading;
+      }
+    });
+    _ensureVehicleMotionLoop();
+  }
+
+  void _ensureVehicleMotionLoop() {
+    if (_vehicleMotionTimer != null) {
+      return;
+    }
+    _vehicleMotionTimer = Timer.periodic(_vehicleMotionTick, (_) {
+      if (!mounted) {
+        _vehicleMotionTimer?.cancel();
+        _vehicleMotionTimer = null;
+        return;
+      }
+      _advanceVehicleMotion();
+    });
+  }
+
+  void _advanceVehicleMotion() {
+    final from = _vehicleMotionFromLocation;
+    final to = _vehicleTargetLocation;
+    final startedAt = _vehicleMotionStartedAt;
+    if (from == null || to == null || startedAt == null) {
+      _stopVehicleMotionLoop();
+      return;
+    }
+
+    final durationMicros = _vehicleMotionDuration.inMicroseconds;
+    final elapsedMicros = DateTime.now().difference(startedAt).inMicroseconds;
+    final progress = durationMicros <= 0
+        ? 1.0
+        : (elapsedMicros / durationMicros).clamp(0.0, 1.0).toDouble();
+    final easedProgress = Curves.easeOutCubic.transform(progress);
+    final nextPoint = _lerpLatLng(from, to, easedProgress);
+    final fromHeading = _vehicleMotionFromHeadingDegrees;
+    final toHeading = _vehicleTargetHeadingDegrees;
+    final nextHeading = fromHeading == null || toHeading == null
+        ? (toHeading ?? fromHeading ?? _vehicleHeadingDegrees)
+        : _lerpHeading(fromHeading, toHeading, easedProgress);
+
+    if (_vehicleLocation != nextPoint || _vehicleHeadingDegrees != nextHeading) {
+      setState(() {
+        _vehicleLocation = nextPoint;
+        _vehicleHeadingDegrees = nextHeading;
+        if (nextHeading != null) {
+          _vehicleLastReliableHeadingDegrees = nextHeading;
+        }
+      });
+    }
+    _syncDriverMapCamera(nextPoint);
+
+    if (progress >= 1.0) {
+      setState(() {
+        _vehicleLocation = to;
+        _vehicleMotionFromLocation = to;
+        _vehicleHeadingDegrees = toHeading ?? nextHeading;
+      });
+      _stopVehicleMotionLoop();
+    }
+  }
+
+  void _stopVehicleMotionLoop() {
+    _vehicleMotionTimer?.cancel();
+    _vehicleMotionTimer = null;
+  }
+
+  double? _resolveVehicleHeading({
+    required Position position,
+    required LatLng? previousPoint,
+    required LatLng nextPoint,
+  }) {
+    final reportedHeading = position.heading;
+    if (reportedHeading.isFinite &&
+        position.speed.isFinite &&
+        position.speed > 1.5) {
+      return _normalizeHeading(reportedHeading);
+    }
+    if (previousPoint == null) {
+      return _vehicleLastReliableHeadingDegrees;
+    }
+    final distanceMeters = Geolocator.distanceBetween(
+      previousPoint.latitude,
+      previousPoint.longitude,
+      nextPoint.latitude,
+      nextPoint.longitude,
+    );
+    if (distanceMeters < 1) {
+      return _vehicleLastReliableHeadingDegrees;
+    }
+    return _bearingDegrees(previousPoint, nextPoint);
+  }
+
+  Duration _vehicleMotionDurationFor(double distanceMeters) {
+    final scaledMilliseconds = (120 + (distanceMeters * 10)).round();
+    final clampedMilliseconds = scaledMilliseconds.clamp(
+      _vehicleMotionMinDuration.inMilliseconds,
+      _vehicleMotionMaxDuration.inMilliseconds,
+    );
+    return Duration(milliseconds: clampedMilliseconds);
+  }
+
+  LatLng _lerpLatLng(LatLng from, LatLng to, double t) {
+    return LatLng(
+      from.latitude + ((to.latitude - from.latitude) * t),
+      from.longitude + ((to.longitude - from.longitude) * t),
+    );
+  }
+
+  double _bearingDegrees(LatLng from, LatLng to) {
+    final lat1 = from.latitude * math.pi / 180;
+    final lat2 = to.latitude * math.pi / 180;
+    final deltaLng = (to.longitude - from.longitude) * math.pi / 180;
+    final y = math.sin(deltaLng) * math.cos(lat2);
+    final x = math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(deltaLng);
+    final bearing = math.atan2(y, x) * 180 / math.pi;
+    return _normalizeHeading(bearing);
+  }
+
+  double _normalizeHeading(double headingDegrees) {
+    final normalized = headingDegrees % 360;
+    return normalized < 0 ? normalized + 360 : normalized;
+  }
+
+  double _shortestHeadingDelta(double from, double to) {
+    return ((_normalizeHeading(to) - _normalizeHeading(from) + 540) % 360) -
+        180;
+  }
+
+  double _lerpHeading(double from, double to, double t) {
+    return _normalizeHeading(from + (_shortestHeadingDelta(from, to) * t));
   }
 
   String? _readProfileEntityId(dynamic value) {
@@ -1958,6 +2216,8 @@ class _DriveMapPanel extends StatelessWidget {
     required this.onDismissAlert,
     required this.onDismissRequirementMessage,
     required this.onDismissStatusMessage,
+    required this.onMapReady,
+    required this.onPositionChanged,
     required this.readLiveData,
     this.height,
   });
@@ -1986,6 +2246,8 @@ class _DriveMapPanel extends StatelessWidget {
   final VoidCallback? onDismissAlert;
   final VoidCallback? onDismissRequirementMessage;
   final VoidCallback? onDismissStatusMessage;
+  final VoidCallback onMapReady;
+  final PositionCallback onPositionChanged;
   final _DrivePanelLiveData Function() readLiveData;
   final double? height;
 
@@ -2383,6 +2645,8 @@ class _DriveMapPanel extends StatelessWidget {
                     interactionOptions: const InteractionOptions(
                       flags: InteractiveFlag.all,
                     ),
+                    onMapReady: onMapReady,
+                    onPositionChanged: onPositionChanged,
                   ),
                   children: [
                     TileLayer(
@@ -3213,6 +3477,14 @@ class _DriveMapMarker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final icon = Icon(entry.icon, color: Colors.white, size: 20);
+    final markerIcon = entry.rotateWithHeading && entry.headingDegrees != null
+        ? Transform.rotate(
+            angle: entry.headingDegrees! * math.pi / 180,
+            child: icon,
+          )
+        : icon;
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -3269,7 +3541,7 @@ class _DriveMapMarker extends StatelessWidget {
               ),
             ],
           ),
-          child: Icon(entry.icon, color: Colors.white, size: 20),
+          child: markerIcon,
         ),
       ],
     );
@@ -3292,6 +3564,8 @@ class _DriveMarkerData {
     required this.icon,
     required this.markerColor,
     required this.kind,
+    this.headingDegrees,
+    this.rotateWithHeading = false,
   });
 
   final String label;
@@ -3300,6 +3574,8 @@ class _DriveMarkerData {
   final IconData icon;
   final Color markerColor;
   final _DriveMarkerKind kind;
+  final double? headingDegrees;
+  final bool rotateWithHeading;
 }
 
 class _DriverTripHydration {

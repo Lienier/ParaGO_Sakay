@@ -220,6 +220,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         icon: Icons.directions_bus_filled,
         markerColor: const Color(0xFF2E8B57),
         kind: _DriveMarkerKind.vehicle,
+        headingDegrees: _vehicleHeadingDegrees,
+        rotateWithHeading: true,
       ),
     ];
 
@@ -395,7 +397,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
             : (assignedRoute?.mapPath ?? const <LatLng>[]));
     final markers = <_DriveMarkerData>[];
 
-    if (liveVehicleLocation != null) {
+    if (liveVehicleLocation != null && focusedTrip == null) {
       markers.add(
         _DriveMarkerData(
           label: 'Current location',
@@ -404,6 +406,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           icon: Icons.my_location,
           markerColor: const Color(0xFF1F8FD5),
           kind: _DriveMarkerKind.vehicle,
+          headingDegrees: _vehicleHeadingDegrees,
+          rotateWithHeading: true,
         ),
       );
     }
@@ -426,8 +430,6 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         (routePath.isEmpty
             ? const LatLng(14.6091, 121.0223)
             : routePath[math.min(routePath.length - 1, 2)]);
-
-    _syncDriverMapCamera(mapCenter);
 
     _routeDebugLines(
       focusedTrip: focusedTrip,
@@ -497,6 +499,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       onDismissStatusMessage: visibleStatusMessage == null
           ? null
           : () => _dismissInfoMessage(visibleStatusMessage),
+      onMapReady: _handleDriverMapReady,
+      onPositionChanged: _handleDriverMapPositionChanged,
       readLiveData: () {
         final liveTrip = _focusedTrip;
         final liveRequests = liveTrip == null
