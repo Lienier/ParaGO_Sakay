@@ -12,12 +12,14 @@ class TripSession {
     this.routeCode,
     this.jeepneyPlateNumber,
     this.jeepneyName,
+    this.jeepneyCapacity,
     this.driverName,
     this.jeepneyLatitude,
     this.jeepneyLongitude,
     this.startedAt,
     this.endedAt,
     this.acceptRequests,
+    this.manualOccupancyCount,
     this.occupancyCount,
     this.active,
     this.notes,
@@ -39,12 +41,14 @@ class TripSession {
   final String? routeCode;
   final String? jeepneyPlateNumber;
   final String? jeepneyName;
+  final int? jeepneyCapacity;
   final String? driverName;
   final double? jeepneyLatitude;
   final double? jeepneyLongitude;
   final String? startedAt;
   final String? endedAt;
   final bool? acceptRequests;
+  final int? manualOccupancyCount;
   final int? occupancyCount;
   final bool? active;
   final String? notes;
@@ -75,13 +79,17 @@ class TripSession {
       routeCode: _readMapString(route, const ['code']),
       jeepneyPlateNumber: _readMapString(jeepney, const ['plateNumber']),
       jeepneyName: _readMapString(jeepney, const ['jeepneyName', 'vehicleTag']),
+      jeepneyCapacity: _toInt(
+        jeepney is Map ? jeepney['capacity'] : null,
+      ),
       driverName: _readMapString(driver, const ['fullName', 'name']),
       jeepneyLatitude: jeepneyCoordinates?.$2,
       jeepneyLongitude: jeepneyCoordinates?.$1,
       startedAt: json['startedAt']?.toString(),
       endedAt: json['endedAt']?.toString(),
       acceptRequests: json['acceptRequests'] as bool?,
-      occupancyCount: json['occupancyCount'] as int?,
+      manualOccupancyCount: _toInt(json['manualOccupancyCount']),
+      occupancyCount: _toInt(json['occupancyCount']),
       active: json['active'] as bool?,
       notes: json['notes']?.toString(),
       operatingMode: json['operatingMode']?.toString(),
@@ -122,12 +130,14 @@ class TripSession {
     String? routeCode,
     String? jeepneyPlateNumber,
     String? jeepneyName,
+    int? jeepneyCapacity,
     String? driverName,
     double? jeepneyLatitude,
     double? jeepneyLongitude,
     String? startedAt,
     String? endedAt,
     bool? acceptRequests,
+    int? manualOccupancyCount,
     int? occupancyCount,
     bool? active,
     String? notes,
@@ -150,12 +160,15 @@ class TripSession {
       routeCode: routeCode ?? this.routeCode,
       jeepneyPlateNumber: jeepneyPlateNumber ?? this.jeepneyPlateNumber,
       jeepneyName: jeepneyName ?? this.jeepneyName,
+      jeepneyCapacity: jeepneyCapacity ?? this.jeepneyCapacity,
       driverName: driverName ?? this.driverName,
       jeepneyLatitude: jeepneyLatitude ?? this.jeepneyLatitude,
       jeepneyLongitude: jeepneyLongitude ?? this.jeepneyLongitude,
       startedAt: startedAt ?? this.startedAt,
       endedAt: endedAt ?? this.endedAt,
       acceptRequests: acceptRequests ?? this.acceptRequests,
+      manualOccupancyCount:
+          manualOccupancyCount ?? this.manualOccupancyCount,
       occupancyCount: occupancyCount ?? this.occupancyCount,
       active: active ?? this.active,
       notes: notes ?? this.notes,
@@ -230,5 +243,12 @@ double? _readLongitudeFromPoint(dynamic value) {
 double? _toDouble(dynamic value) {
   if (value is num) return value.toDouble();
   if (value is String) return double.tryParse(value);
+  return null;
+}
+
+int? _toInt(dynamic value) {
+  if (value is int) return value;
+  if (value is num) return value.round();
+  if (value is String) return int.tryParse(value);
   return null;
 }

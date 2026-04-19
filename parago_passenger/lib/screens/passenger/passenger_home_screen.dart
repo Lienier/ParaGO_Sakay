@@ -43,21 +43,34 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const double _passengerGpsJitterMeters = 12;
   static const double _maxPassengerGpsAccuracyMeters = 35;
   static const double _tripMarkerJitterMeters = 1;
-  static const double _tripMarkerSnapThresholdMeters = 35;
+  static const double _tripMarkerSnapThresholdMeters = 90;
+  static const double _tripMarkerSnapSpeedAllowanceMetersPerSecond = 35;
   static const double _autoUnloadDistanceMeters = 120;
   static const int _autoUnloadConsecutiveOutsideChecks = 3;
   static const Duration _autoUnloadSustainedSeparation = Duration(seconds: 60);
-  static const Duration _autoUnloadForceAfterPrompt = Duration(minutes: 2);
   static const Duration _tripMarkerAnimationTick = Duration(milliseconds: 16);
+  static const Duration _tripMarkerAnimationDefaultDuration =
+      Duration(milliseconds: 900);
   static const Duration _tripMarkerAnimationMinDuration =
-      Duration(milliseconds: 80);
+      Duration(milliseconds: 550);
   static const Duration _tripMarkerAnimationMaxDuration =
-      Duration(milliseconds: 220);
+      Duration(milliseconds: 1400);
   static const Duration _tripRealtimeStaleAfter = Duration(seconds: 8);
+  static const double _tripProjectionHandoffThreshold = 0.88;
+  static const Duration _tripProjectionMaxDuration = Duration(seconds: 1);
+  static const double _tripProjectionMaxDistanceMeters = 8;
+  static const double _tripProjectionMinSpeedMetersPerSecond = 0.8;
+  static const int _selectedRouteVisibleTripLimit = 3;
+  static const double _selectedRoutePassedAnchorMeters = 100;
+  static const Duration _passengerMapFollowPause = Duration(seconds: 8);
+  static const Duration _passengerMapFollowThrottle =
+      Duration(milliseconds: 150);
+  static const double _passengerMapFollowLerpFactor = 0.22;
+  static const double _passengerMapFollowJitterMeters = 10;
+  static const double _passengerMapFollowSnapMeters = 45;
   static const double _sheetCollapsedSize = 0.09;
   static const double _sheetPeekSize = 0.38;
   static const double _sheetExpandedSize = 0.90;
-  static const Duration _autoUnloadRetryCooldown = Duration(seconds: 45);
 
   List<TripSession> _trips = [];
   List<RouteSummaryModel> _routes = [];
@@ -84,7 +97,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
   bool _locatingPassenger = false;
-  bool _autoUnloadInFlight = false;
   bool _passengerSheetCollapsed = false;
   bool _showingCachedPassengerSnapshot = false;
   _PassengerBookingMode _bookingMode = _PassengerBookingMode.roadside;
@@ -94,13 +106,16 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   int _pickupLabelLookupSerial = 0;
   int _unloadLabelLookupSerial = 0;
   String? _autoUnloadWindowRideId;
-  String? _lastAutoUnloadRideId;
-  DateTime? _lastAutoUnloadAt;
   DateTime? _lastPassengerSyncAt;
   String? _lastMapPromptMessage;
   Set<String> _knownNotificationIds = <String>{};
-  final Set<String> _autoStopAlertRideIds = <String>{};
+  final Set<String> _destinationReminderRideIds = <String>{};
   final MapController _passengerMapController = MapController();
+  bool _passengerMapReady = false;
+  LatLng? _lastPassengerMapCenter;
+  double? _lastPassengerMapZoom;
+  DateTime? _lastPassengerMapFollowAt;
+  DateTime? _passengerMapFollowPausedUntil;
   final DraggableScrollableController _sheetController =
       DraggableScrollableController();
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
@@ -113,28 +128,36 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   Timer? _mapPromptOverlayTimer;
 
   TripSession? get _selectedTrip {
+    final selectedRoute = _selectedRoute;
+    final selectedRouteId = _selectedRouteId;
+    final onboardTrip = _onboardedTripForCamera();
     final selectedTripId = _selectedTripId;
     if (selectedTripId != null && selectedTripId.isNotEmpty) {
-      for (final trip in _trips) {
-        if (trip.id == selectedTripId) {
+      final trip = _tripById(selectedTripId);
+      if (trip != null) {
+        final keepSelectedTrip = selectedRoute == null ||
+            selectedRouteId == null ||
+            selectedRouteId.isEmpty ||
+            !_tripMatchesRoute(trip, selectedRoute) ||
+            trip.id == onboardTrip?.id ||
+            _isTripEligibleForSelectedRouteDisplay(
+              trip,
+              selectedRoute,
+            );
+        if (keepSelectedTrip) {
           return trip;
         }
       }
     }
-    final selectedRouteId = _selectedRouteId;
+    if (onboardTrip != null &&
+        selectedRoute != null &&
+        _tripMatchesRoute(onboardTrip, selectedRoute)) {
+      return onboardTrip;
+    }
     if (selectedRouteId != null && selectedRouteId.isNotEmpty) {
-      final candidates = _routeTrips(selectedRouteId);
+      final candidates = _selectedRouteDisplayTrips(selectedRouteId);
       if (candidates.isNotEmpty) {
-        final anchor = _draftPickupPoint ?? _routeCenter(_selectedRoute);
-        if (anchor == null) {
-          return candidates.first;
-        }
-        final sorted = List<TripSession>.from(candidates)
-          ..sort((left, right) {
-            return _tripDistanceMeters(left, anchor)
-                .compareTo(_tripDistanceMeters(right, anchor));
-          });
-        return sorted.first;
+        return candidates.first;
       }
     }
     return _trips.isEmpty ? null : _trips.first;
@@ -161,30 +184,13 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final selectedTripId = _selectedTripId;
     if (selectedTripId != null && selectedTripId.isNotEmpty) {
       for (final ride in _rides) {
-        if (ride.tripSessionId == selectedTripId &&
-            ride.status == 'onboard' &&
-            ride.canSendStopAlert != false) {
-          return ride;
-        }
-      }
-      for (final ride in _rides) {
         if (ride.tripSessionId == selectedTripId && ride.status == 'onboard') {
           return ride;
         }
       }
     }
     for (final ride in _rides) {
-      if (ride.status == 'onboard' && ride.canSendStopAlert != false) {
-        return ride;
-      }
-    }
-    for (final ride in _rides) {
       if (ride.status == 'onboard') {
-        return ride;
-      }
-    }
-    for (final ride in _rides) {
-      if (ride.status == 'waiting') {
         return ride;
       }
     }
@@ -230,22 +236,28 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 
   PickupRequestModel? get _selectedTripBooking {
+    final selectedTripId = _selectedTripId;
+    if (selectedTripId != null && selectedTripId.isNotEmpty) {
+      for (final request in _requests) {
+        if (request.tripSessionId == selectedTripId &&
+            (request.status == 'pending' || request.status == 'acknowledged')) {
+          return request;
+        }
+      }
+    }
+
     final selectedRouteId = _selectedRouteId;
     if (selectedRouteId != null && selectedRouteId.isNotEmpty) {
       for (final request in _requests) {
         if (request.routeId == selectedRouteId &&
-            (request.status == 'pending' ||
-                request.status == 'acknowledged' ||
-                request.status == 'completed')) {
+            (request.status == 'pending' || request.status == 'acknowledged')) {
           return request;
         }
       }
     }
 
     for (final request in _requests) {
-      if (request.status == 'pending' ||
-          request.status == 'acknowledged' ||
-          request.status == 'completed') {
+      if (request.status == 'pending' || request.status == 'acknowledged') {
         return request;
       }
     }
@@ -330,6 +342,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         previousRouteId: previousRouteId,
         nextRouteId: nextRouteId,
       );
+      _syncPassengerSelectedTripCamera(force: true);
       _handleRealtimePassengerUpdates(
         notifications: notifications,
         silent: silent,
@@ -364,13 +377,103 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           silent: true,
           forceRefresh: true,
         );
-        await _load(
-          silent: true,
-          preferFresh: !_realtimeSocketService.isConnected,
-        );
+        if (_hasFreshRealtimeVehicleState()) {
+          await _refreshPassengerMetadata(silent: true);
+        } else {
+          await _load(
+            silent: true,
+            preferFresh: !_realtimeSocketService.isConnected,
+          );
+        }
       } finally {
         _silentRefreshActive = false;
       }
+    });
+  }
+
+  Future<void> _refreshPassengerMetadata({bool silent = false}) async {
+    final session = context.read<SessionController>();
+    final passengerService = PassengerService(session.apiClient);
+    final notificationService = NotificationService(session.apiClient);
+    final routeService = RouteService(session.apiClient);
+    final previousRouteId = _selectedRouteId;
+
+    if (!silent) {
+      setState(() => _loading = true);
+    }
+
+    try {
+      final results = await Future.wait<dynamic>([
+        passengerService.getMyPickupRequests(useCache: true),
+        passengerService.getMyRides(useCache: true),
+        notificationService.getMine(useCache: true),
+        routeService.getRoutes(useCache: true),
+      ]);
+
+      final requests = results[0] as List<PickupRequestModel>;
+      final rides = results[1] as List<RideSessionModel>;
+      final notifications = results[2] as List<NotificationModel>;
+      final routes = results[3] as List<RouteSummaryModel>;
+      final selectableRoutes = routes
+          .where((route) => route.status == 'active')
+          .toList(growable: false);
+      final nextRouteId = _selectRouteId(
+        routes: selectableRoutes.isEmpty ? routes : selectableRoutes,
+        trips: _trips,
+        requests: requests,
+        rides: rides,
+      );
+      final nextTripId = _selectTripIdForRoute(
+        trips: _trips,
+        requests: requests,
+        rides: rides,
+        routeId: nextRouteId,
+        anchor: _draftPickupPoint,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _requests = requests;
+        _rides = rides;
+        _notifications = notifications;
+        _routes = routes;
+        _selectedTripId = nextTripId;
+        _selectedRouteId = nextRouteId;
+        _lastPassengerSyncAt = DateTime.now();
+      });
+      _syncRealtimeRouteSubscription(
+        previousRouteId: previousRouteId,
+        nextRouteId: nextRouteId,
+      );
+      _handleRealtimePassengerUpdates(
+        notifications: notifications,
+        silent: silent,
+      );
+      unawaited(_maybeAutoUnloadWhenSeparated());
+      unawaited(_maybeAutoHandleDestinationApproach());
+    } catch (_) {
+      // Keep the current live view stable if metadata refresh fails.
+    } finally {
+      if (mounted && !silent) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  bool _hasFreshRealtimeVehicleState({DateTime? now}) {
+    if (!_realtimeSocketService.isConnected) {
+      return false;
+    }
+    final comparisonTime = now ?? DateTime.now();
+    return _tripVehicleStates.values.any((state) {
+      final lastUpdateAt = state.lastRealtimeUpdateAt;
+      if (lastUpdateAt == null) {
+        return false;
+      }
+      return comparisonTime.difference(lastUpdateAt) <= _tripRealtimeStaleAfter;
     });
   }
 
@@ -817,48 +920,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     _autoUnloadWindowRideId = rideId;
   }
 
-  Future<void> _completeRideAutomatically(
-    RideSessionModel ride, {
-    required String message,
-  }) async {
-    if (_autoUnloadInFlight) {
-      return;
-    }
-
-    _autoUnloadInFlight = true;
-    _lastAutoUnloadRideId = ride.id;
-    _lastAutoUnloadAt = DateTime.now();
-
-    try {
-      final session = context.read<SessionController>();
-      final passengerService = PassengerService(session.apiClient);
-      await passengerService.completeRideSession(ride.id);
-      if (!mounted) {
-        return;
-      }
-      await _load(silent: true);
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _statusMessage = message;
-        _syncMessage = message;
-      });
-      _resetAutoUnloadWindow(rideId: ride.id);
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
-      );
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() => _statusMessage = ActionFeedback.messageOf(error));
-    } finally {
-      _autoUnloadInFlight = false;
-    }
-  }
-
   Future<void> _maybeAutoUnloadWhenSeparated() async {
     final ride = _activeRide;
     if (!mounted || ride == null || ride.status != 'onboard') {
@@ -874,18 +935,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final jeepneyPoint = trip == null ? null : _tripVehiclePoint(trip);
     if (trip == null || jeepneyPoint == null) {
       _resetAutoUnloadWindow(rideId: ride.id);
-      return;
-    }
-
-    if (_autoUnloadInFlight) {
-      return;
-    }
-
-    final lastAttemptRideId = _lastAutoUnloadRideId;
-    final lastAttemptAt = _lastAutoUnloadAt;
-    if (lastAttemptRideId == ride.id &&
-        lastAttemptAt != null &&
-        DateTime.now().difference(lastAttemptAt) < _autoUnloadRetryCooldown) {
       return;
     }
 
@@ -918,35 +967,21 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       return;
     }
 
-    var confirmed = false;
-    if (_autoUnloadPromptedAt == null) {
-      _autoUnloadPromptedAt = now;
-      final roundedDistance = distanceMeters.round();
-      confirmed = await _showUnloadConfirmationDialog(
-        title: 'You seem far from the jeepney',
-        message:
-            'You are about $roundedDistance meters away from your jeepney. If you already unloaded, confirm now to close this ride session.',
-        confirmLabel: 'Yes, close ride',
-      );
-      if (!mounted) {
-        return;
-      }
-    }
-
-    final promptedAt = _autoUnloadPromptedAt;
-    final allowForcedCompletion = promptedAt != null &&
-        DateTime.now().difference(promptedAt) >= _autoUnloadForceAfterPrompt;
-    if (!confirmed && !allowForcedCompletion) {
+    if (_autoUnloadPromptedAt != null) {
       return;
     }
 
+    _autoUnloadPromptedAt = now;
     final roundedDistance = distanceMeters.round();
-    final message = confirmed
-        ? 'Ride closed after you confirmed unload at about $roundedDistance meters away from the jeepney.'
-        : 'Ride closed automatically after sustained separation of about $roundedDistance meters from the jeepney.';
-    await _completeRideAutomatically(
-      ride,
-      message: message,
+    final message =
+        'You are about $roundedDistance meters away from the jeepney. If you already got off, use "I unloaded" to close the ride manually.';
+    setState(() {
+      _statusMessage = message;
+      _syncMessage = message;
+    });
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
     );
   }
 
@@ -976,72 +1011,22 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       destinationPoint,
     );
 
-    if (ride.canSendStopAlert != false &&
-        jeepneyToDestinationMeters <= 120 &&
-        !_autoStopAlertRideIds.contains(ride.id)) {
-      _autoStopAlertRideIds.add(ride.id);
-      try {
-        final session = context.read<SessionController>();
-        final alerts = StopAlertService(session.apiClient);
-        await alerts.sendStopAlert(
-          tripSessionId: ride.tripSessionId,
-          stopRef: ride.destinationStopRef ?? 'Saved destination',
-          note:
-              'Automatically sent when the jeepney neared your saved destination.',
-          lat: ride.destinationLatitude,
-          lng: ride.destinationLongitude,
-        );
-        if (!mounted) {
-          return;
-        }
-        await _load(silent: true);
-        if (!mounted) {
-          return;
-        }
-        final message =
-            'Automatic para alert sent for ${ride.destinationStopRef ?? 'your saved destination'}.';
-        setState(() {
-          _statusMessage = message;
-          _syncMessage = message;
-        });
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message)),
-        );
-      } catch (_) {
-        _autoStopAlertRideIds.remove(ride.id);
-      }
-    }
-
-    final passengerLocation = await _ensureCurrentPassengerLocation(
-      silent: true,
-      triggerAutoUnload: false,
-    );
-    if (!mounted || passengerLocation == null) {
+    if (jeepneyToDestinationMeters > 120 ||
+        _destinationReminderRideIds.contains(ride.id)) {
       return;
     }
 
-    final passengerToDestinationMeters = _distance.as(
-      LengthUnit.Meter,
-      passengerLocation,
-      destinationPoint,
-    );
-    final passengerToJeepneyMeters = _distance.as(
-      LengthUnit.Meter,
-      passengerLocation,
-      jeepneyPoint,
-    );
-    final nearDestination =
-        passengerToDestinationMeters <= 45 && jeepneyToDestinationMeters <= 120;
-    final safelySeparated = passengerToJeepneyMeters >= 35;
-    if (!nearDestination || !safelySeparated) {
-      return;
-    }
-
-    await _completeRideAutomatically(
-      ride,
-      message:
-          'Ride closed automatically after you reached ${ride.destinationStopRef ?? 'your saved destination'}.',
+    _destinationReminderRideIds.add(ride.id);
+    final message = ride.canSendStopAlert == false
+        ? 'You are near ${ride.destinationStopRef ?? 'your saved destination'}. Unload manually once you get off.'
+        : 'You are near ${ride.destinationStopRef ?? 'your saved destination'}. Send a para alert when ready, then use "I unloaded" after getting off.';
+    setState(() {
+      _statusMessage = message;
+      _syncMessage = message;
+    });
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
     );
   }
 
@@ -1352,6 +1337,108 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         .toList(growable: false);
   }
 
+  LatLng? _selectedRouteDisplayAnchor(
+    RouteSummaryModel? route, {
+    LatLng? overrideAnchor,
+  }) {
+    return overrideAnchor ??
+        _draftPickupPoint ??
+        _currentPassengerLocation ??
+        _routeCenter(route);
+  }
+
+  List<TripSession> _selectedRouteDisplayTrips(
+    String routeId, {
+    LatLng? anchor,
+  }) {
+    return _selectedRouteDisplayTripsFrom(
+      _trips,
+      routeId,
+      anchor: anchor,
+    );
+  }
+
+  List<TripSession> _selectedRouteDisplayTripsFrom(
+    List<TripSession> trips,
+    String routeId, {
+    LatLng? anchor,
+  }) {
+    final route = _routeById(routeId);
+    if (route == null) {
+      return const <TripSession>[];
+    }
+    final comparisonAnchor = _selectedRouteDisplayAnchor(
+      route,
+      overrideAnchor: anchor,
+    );
+    final candidates = trips
+        .where(
+          (trip) => _isTripEligibleForSelectedRouteDisplay(
+            trip,
+            route,
+            anchor: comparisonAnchor,
+          ),
+        )
+        .toList(growable: false);
+    if (comparisonAnchor == null) {
+      return candidates
+          .take(_selectedRouteVisibleTripLimit)
+          .toList(growable: false);
+    }
+    final sortedCandidates = List<TripSession>.from(candidates)
+      ..sort((left, right) {
+        return _tripDistanceMeters(left, comparisonAnchor)
+            .compareTo(_tripDistanceMeters(right, comparisonAnchor));
+      });
+    return sortedCandidates
+        .take(_selectedRouteVisibleTripLimit)
+        .toList(growable: false);
+  }
+
+  bool _isTripEligibleForSelectedRouteDisplay(
+    TripSession trip,
+    RouteSummaryModel? route, {
+    LatLng? anchor,
+  }) {
+    if (!_tripIsLive(trip) || !_tripMatchesRoute(trip, route)) {
+      return false;
+    }
+    final vehiclePoint = _tripVehiclePoint(trip);
+    if (vehiclePoint == null) {
+      return false;
+    }
+    final comparisonAnchor = anchor ?? _selectedRouteDisplayAnchor(route);
+    if (comparisonAnchor == null) {
+      return true;
+    }
+    return !_hasTripPassedAnchorByMoreThanThreshold(
+      route,
+      anchor: comparisonAnchor,
+      vehiclePoint: vehiclePoint,
+    );
+  }
+
+  bool _hasTripPassedAnchorByMoreThanThreshold(
+    RouteSummaryModel? route, {
+    required LatLng anchor,
+    required LatLng vehiclePoint,
+  }) {
+    final anchorProjection = _nearestRouteProjection(route, anchor);
+    final vehicleProjection = _nearestRouteProjection(route, vehiclePoint);
+    if (anchorProjection == null || vehicleProjection == null) {
+      return false;
+    }
+    if (vehicleProjection.progress <= anchorProjection.progress) {
+      return false;
+    }
+    final traveledDistance = _routeDistanceBetweenProgresses(
+      route,
+      anchorProjection.progress,
+      vehicleProjection.progress,
+    );
+    return traveledDistance > _selectedRoutePassedAnchorMeters;
+  }
+
   String? _selectRouteId({
     required List<RouteSummaryModel> routes,
     required List<TripSession> trips,
@@ -1399,21 +1486,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     if (routeId == null || routeId.isEmpty) {
       return null;
     }
-    final route = _routeById(routeId);
-    final candidates = trips
-        .where((trip) => _tripIsLive(trip) && _tripMatchesRoute(trip, route))
-        .toList();
+    final candidates = _selectedRouteDisplayTripsFrom(
+      trips,
+      routeId,
+      anchor: anchor,
+    );
     if (candidates.isEmpty) {
       return null;
     }
-    final comparisonAnchor = anchor ?? _routeCenter(_routeById(routeId));
-    if (comparisonAnchor == null) {
-      return candidates.first.id;
-    }
-    candidates.sort((left, right) {
-      return _tripDistanceMeters(left, comparisonAnchor)
-          .compareTo(_tripDistanceMeters(right, comparisonAnchor));
-    });
     return candidates.first.id;
   }
 
@@ -1619,7 +1699,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _currentPassengerLocationAt = DateTime.now();
       });
       if (recenterMap || (!silent && previousLocation == null)) {
-        _passengerMapController.move(next, 16);
+        _syncPassengerMapCamera(next, preferredZoom: 16, force: true);
       }
       if (triggerAutoUnload) {
         unawaited(_maybeAutoUnloadWhenSeparated());
@@ -2408,7 +2488,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     List<TripSession> routeTrips,
     TripSession? selectedTrip,
   ) {
-    return routeTrips
+    final visibleTrips = List<TripSession>.from(routeTrips);
+    final onboardTrip = _onboardedTripForCamera();
+    if (onboardTrip != null &&
+        _tripVehiclePoint(onboardTrip) != null &&
+        visibleTrips.every((trip) => trip.id != onboardTrip.id)) {
+      visibleTrips.add(onboardTrip);
+    }
+    return visibleTrips
         .where((trip) => _tripVehiclePoint(trip) != null)
         .map(
           (trip) => Marker(
@@ -2490,6 +2577,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
               initialZoom: _currentPassengerLocation == null
                   ? (selectedRoute == null ? 13 : 14)
                   : 16,
+              onMapReady: _handlePassengerMapReady,
+              onPositionChanged: _handlePassengerMapPositionChanged,
               onTap: (_, point) => _onPassengerMapTap(point),
             ),
             children: [
@@ -2683,6 +2772,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                     initialZoom: _currentPassengerLocation == null
                         ? (selectedRoute == null ? 13 : 14)
                         : 16,
+                    onMapReady: _handlePassengerMapReady,
+                    onPositionChanged: _handlePassengerMapPositionChanged,
                     onTap: (_, point) => _onPassengerMapTap(point),
                   ),
                   children: [
@@ -2932,13 +3023,28 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final nextPoint = LatLng(latitude, longitude);
     final currentPoint = _tripVehiclePoint(trip);
     final currentHeading = _tripVehicleHeading(trip);
-    final updateAt = DateTime.now();
+    final receivedAt = DateTime.now();
+    final sampleAt = _parseRealtimeSampleTime(event['timestamp'], receivedAt);
+    final previousState = _tripVehicleStates[trip.id];
+    final sampleGap = _motionSampleGap(
+      sampleAt: sampleAt,
+      previousSampleAt: previousState?.lastAuthoritativeSampleAt,
+      defaultDuration: _tripMarkerAnimationDefaultDuration,
+      minDuration: _tripMarkerAnimationMinDuration,
+      maxDuration: _tripMarkerAnimationMaxDuration,
+    );
     if (currentPoint == null) {
       _setTripMarkerPosition(
         tripIndex,
         nextPoint,
         headingDegrees: currentHeading,
-        lastRealtimeUpdateAt: updateAt,
+        lastRealtimeUpdateAt: receivedAt,
+        sampleAt: sampleAt,
+        expectedSampleGap: sampleGap,
+      );
+      _syncPassengerSelectedTripCamera(
+        tripId: trip.id,
+        target: nextPoint,
       );
       return;
     }
@@ -2950,7 +3056,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     );
 
     if (distanceMeters < _tripMarkerJitterMeters) {
-      _setTripVehicleRealtimeTimestamp(trip.id, updateAt);
+      _setTripVehicleRealtimeTimestamp(
+        trip.id,
+        receivedAt,
+        sampleAt: sampleAt,
+        expectedSampleGap: sampleGap,
+      );
       return;
     }
 
@@ -2960,15 +3071,33 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       currentHeading: currentHeading,
     );
 
-    if (distanceMeters >= _tripMarkerSnapThresholdMeters) {
+    if (_shouldSnapTripMarkerPosition(
+      distanceMeters: distanceMeters,
+      sampleGap: sampleGap,
+    )) {
       _setTripMarkerPosition(
         tripIndex,
         nextPoint,
         headingDegrees: nextHeading,
-        lastRealtimeUpdateAt: updateAt,
+        lastRealtimeUpdateAt: receivedAt,
+        sampleAt: sampleAt,
+        expectedSampleGap: sampleGap,
+        speedMetersPerSecond:
+            _metersPerSecond(distanceMeters, sampleGap) ?? 0,
+        bearingDegrees: nextHeading,
+      );
+      _syncPassengerSelectedTripCamera(
+        tripId: trip.id,
+        target: nextPoint,
       );
       return;
     }
+
+    final animationDuration = _tripMarkerAnimationDuration(
+      distanceMeters: distanceMeters,
+      sampleGap: sampleGap,
+    );
+    final speedMetersPerSecond = _metersPerSecond(distanceMeters, sampleGap);
 
     setState(() {
       _tripVehicleStates[trip.id] = _TripVehicleMotionState(
@@ -2976,17 +3105,29 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         targetPosition: nextPoint,
         renderedHeading: currentHeading ?? nextHeading,
         targetHeading: nextHeading ?? currentHeading,
-        lastRealtimeUpdateAt: updateAt,
+        lastRealtimeUpdateAt: receivedAt,
+        previousAuthoritativeSampleAt: previousState?.lastAuthoritativeSampleAt,
+        lastAuthoritativeSampleAt: sampleAt,
+        expectedSampleGap: sampleGap,
+        lastReliableSpeedMetersPerSecond: speedMetersPerSecond,
+        lastReliableBearingDegrees: nextHeading ?? currentHeading,
+        isProjected: false,
+        projectionHandoffStarted: false,
       );
       _tripMarkerAnimations[trip.id] = _TripMarkerAnimation(
         from: currentPoint,
         to: nextPoint,
         fromHeading: currentHeading ?? nextHeading,
         toHeading: nextHeading ?? currentHeading,
-        startedAt: updateAt,
-        duration: _tripMarkerAnimationDuration(distanceMeters),
+        startedAt: receivedAt,
+        duration: animationDuration,
+        isProjection: false,
       );
     });
+    _syncPassengerSelectedTripCamera(
+      tripId: trip.id,
+      target: currentPoint,
+    );
     _ensureTripMarkerAnimationLoop();
   }
 
@@ -3020,6 +3161,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     LatLng point, {
     double? headingDegrees,
     DateTime? lastRealtimeUpdateAt,
+    DateTime? sampleAt,
+    Duration? expectedSampleGap,
+    double? speedMetersPerSecond,
+    double? bearingDegrees,
   }) {
     if (tripIndex < 0 || tripIndex >= _trips.length || !mounted) {
       return;
@@ -3029,8 +3174,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     _tripMarkerAnimations.remove(trip.id);
     setState(() {
       final previousState = _tripVehicleStates[trip.id];
-      final resolvedHeading =
-          headingDegrees ?? previousState?.targetHeading ?? previousState?.renderedHeading;
+      final resolvedHeading = headingDegrees ??
+          previousState?.targetHeading ??
+          previousState?.renderedHeading;
       _tripVehicleStates[trip.id] = _TripVehicleMotionState(
         renderedPosition: point,
         targetPosition: point,
@@ -3038,12 +3184,33 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         targetHeading: resolvedHeading,
         lastRealtimeUpdateAt:
             lastRealtimeUpdateAt ?? previousState?.lastRealtimeUpdateAt,
+        previousAuthoritativeSampleAt: previousState?.lastAuthoritativeSampleAt,
+        lastAuthoritativeSampleAt:
+            sampleAt ?? previousState?.lastAuthoritativeSampleAt,
+        expectedSampleGap:
+            expectedSampleGap ??
+            previousState?.expectedSampleGap ??
+            _tripMarkerAnimationDefaultDuration,
+        lastReliableSpeedMetersPerSecond:
+            speedMetersPerSecond ??
+            previousState?.lastReliableSpeedMetersPerSecond,
+        lastReliableBearingDegrees:
+            bearingDegrees ??
+            resolvedHeading ??
+            previousState?.lastReliableBearingDegrees,
+        isProjected: false,
+        projectionHandoffStarted: false,
       );
     });
     _stopTripMarkerAnimationLoopIfIdle();
   }
 
-  void _setTripVehicleRealtimeTimestamp(String tripId, DateTime timestamp) {
+  void _setTripVehicleRealtimeTimestamp(
+    String tripId,
+    DateTime timestamp, {
+    DateTime? sampleAt,
+    Duration? expectedSampleGap,
+  }) {
     final currentState = _tripVehicleStates[tripId];
     if (currentState == null) {
       return;
@@ -3051,6 +3218,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     setState(() {
       _tripVehicleStates[tripId] = currentState.copyWith(
         lastRealtimeUpdateAt: timestamp,
+        previousAuthoritativeSampleAt: currentState.lastAuthoritativeSampleAt,
+        lastAuthoritativeSampleAt:
+            sampleAt ?? currentState.lastAuthoritativeSampleAt,
+        expectedSampleGap:
+            expectedSampleGap ?? currentState.expectedSampleGap,
+        lastReliableSpeedMetersPerSecond: 0,
+        isProjected: false,
+        projectionHandoffStarted: false,
       );
     });
   }
@@ -3080,6 +3255,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final updatedStates =
         Map<String, _TripVehicleMotionState>.from(_tripVehicleStates);
     final completedTripIds = <String>[];
+    final projectionStarts = <_TripProjectionMotion>[];
+    final focusedTripId = _selectedTrip?.id;
+    LatLng? followTarget;
     var changed = false;
 
     for (final entry in _tripMarkerAnimations.entries) {
@@ -3096,12 +3274,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       final progress = durationMicros <= 0
           ? 1.0
           : (elapsedMicros / durationMicros).clamp(0.0, 1.0).toDouble();
-      final easedProgress = Curves.easeOutCubic.transform(progress);
       final interpolatedPoint = _lerpLatLng(
         animation.from,
         animation.to,
-        easedProgress,
+        progress,
       );
+      final headingProgress = Curves.easeOutCubic.transform(progress);
       final interpolatedHeading =
           animation.fromHeading == null || animation.toHeading == null
               ? (animation.toHeading ??
@@ -3110,31 +3288,74 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
               : _lerpHeading(
                   animation.fromHeading!,
                   animation.toHeading!,
-                  easedProgress,
+                  headingProgress,
                 );
 
-      if (state.renderedPosition != interpolatedPoint ||
-          state.renderedHeading != interpolatedHeading) {
-        updatedStates[tripId] = state.copyWith(
+      if (!animation.isProjection &&
+          !state.projectionHandoffStarted &&
+          progress >= _tripProjectionHandoffThreshold) {
+        final handoffState = state.copyWith(
           renderedPosition: interpolatedPoint,
           renderedHeading: interpolatedHeading,
           targetPosition: animation.to,
           targetHeading: animation.toHeading ?? state.targetHeading,
-          lastRealtimeUpdateAt: state.lastRealtimeUpdateAt,
+          isProjected: false,
+          projectionHandoffStarted: true,
         );
+        final projection = _startTripProjection(
+          tripId: tripId,
+          state: handoffState,
+          authoritativeTargetPoint: animation.to,
+          startedAt: now,
+          fromPoint: interpolatedPoint,
+          fromHeading: interpolatedHeading,
+          remainingAuthoritativeDuration: Duration(
+            microseconds: math.max(durationMicros - elapsedMicros, 0),
+          ),
+        );
+        updatedStates[tripId] = handoffState;
+        changed = true;
+        if (projection != null) {
+          projectionStarts.add(projection);
+          continue;
+        }
+      }
+
+      final currentState = updatedStates[tripId] ?? state;
+
+      if (currentState.renderedPosition != interpolatedPoint ||
+          currentState.renderedHeading != interpolatedHeading) {
+        updatedStates[tripId] = currentState.copyWith(
+          renderedPosition: interpolatedPoint,
+          renderedHeading: interpolatedHeading,
+          targetPosition: animation.to,
+          targetHeading: animation.toHeading ?? currentState.targetHeading,
+          lastRealtimeUpdateAt: currentState.lastRealtimeUpdateAt,
+          isProjected: animation.isProjection,
+          projectionHandoffStarted: currentState.projectionHandoffStarted,
+        );
+        if (focusedTripId == tripId) {
+          followTarget = interpolatedPoint;
+        }
         changed = true;
       }
 
       if (progress >= 1.0) {
-        updatedStates[tripId] = updatedStates[tripId]?.copyWith(
+        final completedState = updatedStates[tripId]?.copyWith(
               renderedPosition: animation.to,
               targetPosition: animation.to,
               renderedHeading:
                   animation.toHeading ?? updatedStates[tripId]?.renderedHeading,
               targetHeading:
                   animation.toHeading ?? updatedStates[tripId]?.targetHeading,
-            ) ??
-            state;
+              isProjected: animation.isProjection,
+              projectionHandoffStarted: true,
+        ) ??
+            currentState;
+        updatedStates[tripId] = completedState;
+        if (focusedTripId == tripId) {
+          followTarget = animation.to;
+        }
         completedTripIds.add(tripId);
         changed = true;
       }
@@ -3145,6 +3366,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _tripMarkerAnimations.remove(tripId);
       }
     }
+    if (projectionStarts.isNotEmpty) {
+      for (final projection in projectionStarts) {
+        _tripMarkerAnimations[projection.tripId] = projection.animation;
+      }
+    }
 
     if (changed && mounted) {
       setState(() {
@@ -3152,6 +3378,13 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           ..clear()
           ..addAll(updatedStates);
       });
+    }
+
+    if (followTarget != null) {
+      _syncPassengerSelectedTripCamera(
+        tripId: focusedTripId,
+        target: followTarget,
+      );
     }
 
     _stopTripMarkerAnimationLoopIfIdle();
@@ -3206,6 +3439,18 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         targetHeading:
             existingState?.targetHeading ?? existingState?.renderedHeading,
         lastRealtimeUpdateAt: existingState?.lastRealtimeUpdateAt,
+        previousAuthoritativeSampleAt:
+            existingState?.previousAuthoritativeSampleAt,
+        lastAuthoritativeSampleAt: existingState?.lastAuthoritativeSampleAt,
+        expectedSampleGap:
+            existingState?.expectedSampleGap ??
+            _tripMarkerAnimationDefaultDuration,
+        lastReliableSpeedMetersPerSecond:
+            existingState?.lastReliableSpeedMetersPerSecond,
+        lastReliableBearingDegrees:
+            existingState?.lastReliableBearingDegrees,
+        isProjected: false,
+        projectionHandoffStarted: false,
       );
       if (existingState != nextState) {
         _tripVehicleStates[trip.id] = nextState;
@@ -3259,19 +3504,182 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     _tripMarkerAnimationTimer = null;
   }
 
-  Duration _tripMarkerAnimationDuration(double distanceMeters) {
-    final scaledMilliseconds = (distanceMeters * 6).round();
-    final clampedMilliseconds = scaledMilliseconds.clamp(
+  Duration _tripMarkerAnimationDuration({
+    required double distanceMeters,
+    required Duration sampleGap,
+  }) {
+    final cadenceMilliseconds = (sampleGap.inMilliseconds * 0.98).round();
+    final distanceMilliseconds = (420 + (distanceMeters * 16)).round();
+    final clampedMilliseconds = (cadenceMilliseconds > 0
+            ? cadenceMilliseconds
+            : math.max(
+                distanceMilliseconds,
+                _tripMarkerAnimationDefaultDuration.inMilliseconds,
+              ))
+        .clamp(
       _tripMarkerAnimationMinDuration.inMilliseconds,
       _tripMarkerAnimationMaxDuration.inMilliseconds,
     );
     return Duration(milliseconds: clampedMilliseconds);
   }
 
+  Duration _motionSampleGap({
+    required DateTime sampleAt,
+    required DateTime? previousSampleAt,
+    required Duration defaultDuration,
+    required Duration minDuration,
+    required Duration maxDuration,
+  }) {
+    if (previousSampleAt == null) {
+      return defaultDuration;
+    }
+    final rawGap = sampleAt.difference(previousSampleAt);
+    final gapMilliseconds = rawGap.inMilliseconds;
+    if (gapMilliseconds <= 0) {
+      return defaultDuration;
+    }
+    return Duration(
+      milliseconds: gapMilliseconds.clamp(
+        minDuration.inMilliseconds,
+        maxDuration.inMilliseconds,
+      ),
+    );
+  }
+
+  bool _shouldSnapTripMarkerPosition({
+    required double distanceMeters,
+    required Duration sampleGap,
+  }) {
+    final gapSeconds = sampleGap.inMilliseconds / 1000;
+    final cadenceAwareThreshold = gapSeconds.isFinite && gapSeconds > 0
+        ? gapSeconds * _tripMarkerSnapSpeedAllowanceMetersPerSecond
+        : _tripMarkerSnapThresholdMeters;
+    final snapThreshold = math.max(
+      _tripMarkerSnapThresholdMeters,
+      cadenceAwareThreshold,
+    );
+    return distanceMeters >= snapThreshold;
+  }
+
+  DateTime _parseRealtimeSampleTime(dynamic value, DateTime fallback) {
+    if (value is DateTime) {
+      return value.toLocal();
+    }
+    if (value is String) {
+      final parsed = DateTime.tryParse(value);
+      if (parsed != null) {
+        return parsed.toLocal();
+      }
+    }
+    return fallback;
+  }
+
+  double? _metersPerSecond(double distanceMeters, Duration sampleGap) {
+    final seconds = sampleGap.inMilliseconds / 1000;
+    if (!seconds.isFinite || seconds <= 0) {
+      return null;
+    }
+    final metersPerSecond = distanceMeters / seconds;
+    return metersPerSecond.isFinite ? metersPerSecond : null;
+  }
+
+  _TripProjectionMotion? _startTripProjection({
+    required String tripId,
+    required _TripVehicleMotionState state,
+    required LatLng authoritativeTargetPoint,
+    required DateTime startedAt,
+    required LatLng fromPoint,
+    required double? fromHeading,
+    required Duration remainingAuthoritativeDuration,
+  }) {
+    final bearingDegrees =
+        state.lastReliableBearingDegrees ?? state.targetHeading ?? fromHeading;
+    final speedMetersPerSecond = state.lastReliableSpeedMetersPerSecond;
+    if (bearingDegrees == null ||
+        speedMetersPerSecond == null ||
+        !speedMetersPerSecond.isFinite ||
+        speedMetersPerSecond < _tripProjectionMinSpeedMetersPerSecond) {
+      return null;
+    }
+
+    final baseProjectionDuration = state.expectedSampleGap <
+            _tripProjectionMaxDuration
+        ? state.expectedSampleGap
+        : _tripProjectionMaxDuration;
+    final projectionDistanceMeters = math.min(
+      _tripProjectionMaxDistanceMeters,
+      speedMetersPerSecond * (baseProjectionDuration.inMilliseconds / 1000),
+    );
+    if (projectionDistanceMeters < _tripMarkerJitterMeters) {
+      return null;
+    }
+
+    final to = _offsetLatLng(
+      authoritativeTargetPoint,
+      bearingDegrees,
+      projectionDistanceMeters,
+    );
+    final projectionDuration =
+        remainingAuthoritativeDuration + baseProjectionDuration;
+    final animation = _TripMarkerAnimation(
+      from: fromPoint,
+      to: to,
+      fromHeading: fromHeading ?? state.targetHeading ?? state.renderedHeading,
+      toHeading: bearingDegrees,
+      startedAt: startedAt,
+      duration: projectionDuration,
+      isProjection: true,
+    );
+    final nextState = state.copyWith(
+      renderedPosition: fromPoint,
+      targetPosition: to,
+      renderedHeading:
+          fromHeading ?? state.targetHeading ?? state.renderedHeading,
+      targetHeading: bearingDegrees,
+      isProjected: true,
+      projectionHandoffStarted: true,
+    );
+    return _TripProjectionMotion(
+      tripId: tripId,
+      state: nextState,
+      animation: animation,
+    );
+  }
+
   LatLng _lerpLatLng(LatLng from, LatLng to, double t) {
     return LatLng(
       from.latitude + ((to.latitude - from.latitude) * t),
       from.longitude + ((to.longitude - from.longitude) * t),
+    );
+  }
+
+  LatLng _offsetLatLng(
+    LatLng origin,
+    double bearingDegrees,
+    double distanceMeters,
+  ) {
+    const earthRadiusMeters = 6371000.0;
+    final angularDistance = distanceMeters / earthRadiusMeters;
+    final bearing = bearingDegrees * math.pi / 180;
+    final lat1 = origin.latitude * math.pi / 180;
+    final lon1 = origin.longitude * math.pi / 180;
+    final sinLat1 = math.sin(lat1);
+    final cosLat1 = math.cos(lat1);
+    final sinAngularDistance = math.sin(angularDistance);
+    final cosAngularDistance = math.cos(angularDistance);
+    final lat2 = math.asin(
+      sinLat1 * cosAngularDistance +
+          cosLat1 * sinAngularDistance * math.cos(bearing),
+    );
+    final lon2 = lon1 +
+        math.atan2(
+          math.sin(bearing) * sinAngularDistance * cosLat1,
+          cosAngularDistance - sinLat1 * math.sin(lat2),
+        );
+
+    return LatLng(
+      lat2 * 180 / math.pi,
+      lon2 * 180 / math.pi,
     );
   }
 
@@ -3561,12 +3969,136 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     // Subscribe to new route for real-time location updates
     _realtimeSocketService.subscribeToRoute(routeId);
 
-    final center = _routeCenter(nextRoute);
+    final onboardTrip = _onboardedTripForCamera();
+    final onboardTripPoint =
+        onboardTrip == null ? null : _tripVehiclePoint(onboardTrip);
+    final center = onboardTripPoint ?? _routeCenter(nextRoute);
     if (center != null) {
-      _passengerMapController.move(center, 14);
+      _syncPassengerMapCamera(
+        center,
+        preferredZoom: onboardTripPoint == null ? 14 : 15,
+        force: true,
+      );
     }
     _showMapPromptNotification(route: nextRoute, force: true);
     _expandPassengerSheet();
+  }
+
+  void _handlePassengerMapReady() {
+    _passengerMapReady = true;
+    final target = _lastPassengerMapCenter;
+    if (target == null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_passengerMapReady) {
+        return;
+      }
+      final zoom = _resolvedPassengerMapZoom();
+      _passengerMapController.move(target, zoom);
+    });
+  }
+
+  void _handlePassengerMapPositionChanged(MapCamera camera, bool hasGesture) {
+    _lastPassengerMapCenter = camera.center;
+    _lastPassengerMapZoom = camera.zoom == 0 ? _lastPassengerMapZoom : camera.zoom;
+    if (!hasGesture) {
+      return;
+    }
+    _passengerMapFollowPausedUntil =
+        DateTime.now().add(_passengerMapFollowPause);
+  }
+
+  void _syncPassengerMapCamera(
+    LatLng target, {
+    double? preferredZoom,
+    bool force = false,
+  }) {
+    final now = DateTime.now();
+    final pausedUntil = _passengerMapFollowPausedUntil;
+    if (!force && pausedUntil != null && now.isBefore(pausedUntil)) {
+      return;
+    }
+
+    if (!_passengerMapReady) {
+      _lastPassengerMapCenter = target;
+      _lastPassengerMapZoom = preferredZoom ?? _lastPassengerMapZoom;
+      return;
+    }
+
+    final currentZoom = _passengerMapController.camera.zoom;
+    final previous = _lastPassengerMapCenter ??
+        (currentZoom == 0 ? target : _passengerMapController.camera.center);
+    final distanceMeters = Geolocator.distanceBetween(
+      previous.latitude,
+      previous.longitude,
+      target.latitude,
+      target.longitude,
+    );
+    if (!force && distanceMeters < _passengerMapFollowJitterMeters) {
+      return;
+    }
+    if (!force &&
+        distanceMeters < _passengerMapFollowSnapMeters &&
+        _lastPassengerMapFollowAt != null &&
+        now.difference(_lastPassengerMapFollowAt!) <
+            _passengerMapFollowThrottle) {
+      return;
+    }
+
+    final nextCenter = force || distanceMeters >= _passengerMapFollowSnapMeters
+        ? target
+        : _lerpLatLng(previous, target, _passengerMapFollowLerpFactor);
+    _lastPassengerMapCenter = nextCenter;
+    _lastPassengerMapFollowAt = now;
+    if (preferredZoom != null) {
+      _lastPassengerMapZoom = preferredZoom;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_passengerMapReady) {
+        return;
+      }
+      _passengerMapController.move(
+        nextCenter,
+        preferredZoom ?? _resolvedPassengerMapZoom(),
+      );
+    });
+  }
+
+  double _resolvedPassengerMapZoom() {
+    final currentZoom = _passengerMapController.camera.zoom;
+    if (currentZoom != 0) {
+      return currentZoom;
+    }
+    return _lastPassengerMapZoom ?? (_currentPassengerLocation == null ? 14 : 16);
+  }
+
+  void _syncPassengerSelectedTripCamera({
+    String? tripId,
+    LatLng? target,
+    bool force = false,
+  }) {
+    final onboardTrip = _onboardedTripForCamera();
+    if (onboardTrip == null) {
+      return;
+    }
+    if (tripId != null && onboardTrip.id != tripId) {
+      return;
+    }
+    final followTarget = target ?? _tripVehiclePoint(onboardTrip);
+    if (followTarget == null) {
+      return;
+    }
+    _syncPassengerMapCamera(followTarget, force: force);
+  }
+
+  TripSession? _onboardedTripForCamera() {
+    final activeRide = _activeRide;
+    if (activeRide == null || activeRide.status != 'onboard') {
+      return null;
+    }
+    return _tripById(activeRide.tripSessionId);
   }
 
   String _mapPromptMessage(RouteSummaryModel? selectedRoute) {
@@ -5341,7 +5873,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final selectedBooking = _selectedTripBooking;
     final routeTrips = selectedRoute == null
         ? const <TripSession>[]
-        : _routeTrips(selectedRoute.id);
+        : _selectedRouteDisplayTrips(selectedRoute.id);
     final quickRoutes = (availableRoutes.isEmpty ? _routes : availableRoutes)
         .take(4)
         .toList(growable: false);
@@ -6306,6 +6838,7 @@ class _TripMarkerAnimation {
     this.toHeading,
     required this.startedAt,
     required this.duration,
+    this.isProjection = false,
   });
 
   final LatLng from;
@@ -6314,6 +6847,7 @@ class _TripMarkerAnimation {
   final double? toHeading;
   final DateTime startedAt;
   final Duration duration;
+  final bool isProjection;
 }
 
 class _TripVehicleMotionState {
@@ -6323,6 +6857,13 @@ class _TripVehicleMotionState {
     this.renderedHeading,
     this.targetHeading,
     this.lastRealtimeUpdateAt,
+    this.previousAuthoritativeSampleAt,
+    this.lastAuthoritativeSampleAt,
+    this.expectedSampleGap = const Duration(milliseconds: 900),
+    this.lastReliableSpeedMetersPerSecond,
+    this.lastReliableBearingDegrees,
+    this.isProjected = false,
+    this.projectionHandoffStarted = false,
   });
 
   final LatLng renderedPosition;
@@ -6330,6 +6871,13 @@ class _TripVehicleMotionState {
   final double? renderedHeading;
   final double? targetHeading;
   final DateTime? lastRealtimeUpdateAt;
+  final DateTime? previousAuthoritativeSampleAt;
+  final DateTime? lastAuthoritativeSampleAt;
+  final Duration expectedSampleGap;
+  final double? lastReliableSpeedMetersPerSecond;
+  final double? lastReliableBearingDegrees;
+  final bool isProjected;
+  final bool projectionHandoffStarted;
 
   _TripVehicleMotionState copyWith({
     LatLng? renderedPosition,
@@ -6337,6 +6885,13 @@ class _TripVehicleMotionState {
     double? renderedHeading,
     double? targetHeading,
     DateTime? lastRealtimeUpdateAt,
+    DateTime? previousAuthoritativeSampleAt,
+    DateTime? lastAuthoritativeSampleAt,
+    Duration? expectedSampleGap,
+    double? lastReliableSpeedMetersPerSecond,
+    double? lastReliableBearingDegrees,
+    bool? isProjected,
+    bool? projectionHandoffStarted,
     bool keepLastRealtimeUpdateAt = true,
   }) {
     return _TripVehicleMotionState(
@@ -6347,6 +6902,19 @@ class _TripVehicleMotionState {
       lastRealtimeUpdateAt: keepLastRealtimeUpdateAt
           ? (lastRealtimeUpdateAt ?? this.lastRealtimeUpdateAt)
           : lastRealtimeUpdateAt,
+      previousAuthoritativeSampleAt:
+          previousAuthoritativeSampleAt ?? this.previousAuthoritativeSampleAt,
+      lastAuthoritativeSampleAt:
+          lastAuthoritativeSampleAt ?? this.lastAuthoritativeSampleAt,
+      expectedSampleGap: expectedSampleGap ?? this.expectedSampleGap,
+      lastReliableSpeedMetersPerSecond:
+          lastReliableSpeedMetersPerSecond ??
+          this.lastReliableSpeedMetersPerSecond,
+      lastReliableBearingDegrees:
+          lastReliableBearingDegrees ?? this.lastReliableBearingDegrees,
+      isProjected: isProjected ?? this.isProjected,
+      projectionHandoffStarted:
+          projectionHandoffStarted ?? this.projectionHandoffStarted,
     );
   }
 
@@ -6357,7 +6925,15 @@ class _TripVehicleMotionState {
         other.targetPosition == targetPosition &&
         other.renderedHeading == renderedHeading &&
         other.targetHeading == targetHeading &&
-        other.lastRealtimeUpdateAt == lastRealtimeUpdateAt;
+        other.lastRealtimeUpdateAt == lastRealtimeUpdateAt &&
+        other.previousAuthoritativeSampleAt == previousAuthoritativeSampleAt &&
+        other.lastAuthoritativeSampleAt == lastAuthoritativeSampleAt &&
+        other.expectedSampleGap == expectedSampleGap &&
+        other.lastReliableSpeedMetersPerSecond ==
+            lastReliableSpeedMetersPerSecond &&
+        other.lastReliableBearingDegrees == lastReliableBearingDegrees &&
+        other.isProjected == isProjected &&
+        other.projectionHandoffStarted == projectionHandoffStarted;
   }
 
   @override
@@ -6367,7 +6943,26 @@ class _TripVehicleMotionState {
         renderedHeading,
         targetHeading,
         lastRealtimeUpdateAt,
+        previousAuthoritativeSampleAt,
+        lastAuthoritativeSampleAt,
+        expectedSampleGap,
+        lastReliableSpeedMetersPerSecond,
+        lastReliableBearingDegrees,
+        isProjected,
+        projectionHandoffStarted,
       );
+}
+
+class _TripProjectionMotion {
+  const _TripProjectionMotion({
+    required this.tripId,
+    required this.state,
+    required this.animation,
+  });
+
+  final String tripId;
+  final _TripVehicleMotionState state;
+  final _TripMarkerAnimation animation;
 }
 
 enum _PassengerBookingMode {

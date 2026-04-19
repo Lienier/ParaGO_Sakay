@@ -1,5 +1,6 @@
 const express = require('express');
 const Driver = require('../models/driver');
+const RideSession = require('../models/rideSession');
 const TripSession = require('../models/tripSession');
 const Jeepney = require('../models/jeepney');
 const Route = require('../models/route');
@@ -385,6 +386,69 @@ router.patch(
     trip.acceptRequests = Boolean(req.body.acceptRequests);
     await trip.save();
     return ok(res, trip, 'Trip availability updated');
+  })
+);
+
+router.patch(
+  '/:id/occupancy',
+  authenticate,
+  authorize(DRIVER),
+  asyncHandler(async (req, res) => {
+    ensureObjectId(req.params.id, 'trip id');
+    const trip = await requireTrip(req.params.id);
+    await ensureDriverAssignedToTrip(req.user, trip);
+
+    if (trip.status !== 'active') {
+      throw new ApiError(409, 'Only active trips can update occupancy');
+    }
+
+    const requestedManualOccupancy = Number(req.body?.manualOccupancyCount);
+    if (!Number.isInteger(requestedManualOccupancy) || requestedManualOccupancy < 0) {
+      throw new ApiError(
+        400,
+        'manualOccupancyCount must be a whole number at or above zero'
+      );
+    }
+
+    const jeepney = await Jeepney.findById(trip.jeepneyId).select(
+      'capacity status plateNumber jeepneyName vehicleTag'
+    );
+    if (!jeepney) {
+      throw new ApiError(404, 'Jeepney not found');
+    }
+
+    const capacity = Number(jeepney.capacity);
+    const onboardRideCount = await RideSession.countDocuments({
+      tripSessionId: trip._id,
+      status: 'onboard',
+    });
+    const nextOccupancyCount = onboardRideCount + requestedManualOccupancy;
+    if (
+      Number.isFinite(capacity) &&
+      capacity > 0 &&
+      nextOccupancyCount > capacity
+    ) {
+      throw new ApiError(
+        409,
+        `Occupancy cannot exceed jeepney capacity of ${capacity}`
+      );
+    }
+
+    trip.manualOccupancyCount = requestedManualOccupancy;
+    trip.occupancyCount = nextOccupancyCount;
+    if (
+      Number.isFinite(capacity) &&
+      capacity > 0 &&
+      nextOccupancyCount >= capacity
+    ) {
+      trip.acceptRequests = false;
+    }
+    await trip.save();
+
+    const populatedTrip = await TripSession.findById(trip._id)
+      .populate('jeepneyId driverId routeId');
+
+    return ok(res, populatedTrip || trip, 'Trip occupancy updated');
   })
 );
 

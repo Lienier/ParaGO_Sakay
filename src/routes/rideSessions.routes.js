@@ -1,5 +1,6 @@
 const express = require('express');
 const RideSession = require('../models/rideSession');
+const Driver = require('../models/driver');
 const Passenger = require('../models/passenger');
 const StopAlert = require('../models/stopAlert');
 const TripSession = require('../models/tripSession');
@@ -86,7 +87,7 @@ router.patch(
       });
     }
     if (session.status === 'completed') {
-      throw new ApiError(409, 'Ride session already completed');
+      return ok(res, session, 'Ride session already completed');
     }
     if (session.status !== 'onboard') {
       throw new ApiError(409, 'Only onboard ride sessions can be completed');
@@ -104,17 +105,33 @@ router.patch(
       update.$unset = { destinationLocation: 1 };
     }
 
-    const completedSession = await RideSession.findByIdAndUpdate(
-      session._id,
+    let completedSession = await RideSession.findOneAndUpdate(
+      {
+        _id: session._id,
+        status: 'onboard',
+      },
       update,
       { new: true }
     );
     if (!completedSession) {
-      throw new ApiError(404, 'Ride session not found');
+      const latestSession = await requireRideSession(req.params.id);
+      if (latestSession.status === 'completed') {
+        return ok(res, latestSession, 'Ride session already completed');
+      }
+      if (latestSession.status !== 'onboard') {
+        throw new ApiError(409, 'Only onboard ride sessions can be completed');
+      }
+      throw new ApiError(409, 'Ride session completion is already in progress');
     }
-    await TripSession.findByIdAndUpdate(session.tripSessionId, {
-      $inc: { occupancyCount: -1 },
-    });
+    await TripSession.updateOne(
+      {
+        _id: session.tripSessionId,
+        occupancyCount: { $gt: 0 },
+      },
+      {
+        $inc: { occupancyCount: -1 },
+      }
+    );
     await StopAlert.updateMany(
       {
         rideSessionId: session._id,
@@ -144,6 +161,22 @@ router.patch(
       },
       category: 'ride',
     });
+    if (trip.driverId && req.user.role === PASSENGER) {
+      const driver = await Driver.findById(trip.driverId).select('userId');
+      await publishNotification({
+        userId: driver?.userId,
+        type: 'ride_completed',
+        title: 'Passenger unloaded',
+        body: 'A passenger closed their ride session from the passenger app.',
+        payload: {
+          rideSessionId: completedSession._id.toString(),
+          tripSessionId: completedSession.tripSessionId.toString(),
+          previousStatus,
+          rideSession: serializeRideSession(completedSession),
+        },
+        category: 'ride',
+      });
+    }
     return ok(res, completedSession, 'Ride session completed');
   })
 );

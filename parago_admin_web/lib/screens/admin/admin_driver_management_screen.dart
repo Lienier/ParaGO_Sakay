@@ -720,21 +720,10 @@ class _AdminDriverManagementScreenState
           if (widget.embedded) ...[
             Align(
               alignment: Alignment.centerRight,
-              child: Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: _loading ? null : _load,
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Refresh'),
-                  ),
-                  FilledButton.icon(
-                    onPressed: _loading ? null : _openCreateSheet,
-                    icon: const Icon(Icons.person_add_alt_1),
-                    label: const Text('Create driver'),
-                  ),
-                ],
+              child: FilledButton.icon(
+                onPressed: _loading ? null : _openCreateSheet,
+                icon: const Icon(Icons.person_add_alt_1),
+                label: const Text('Create driver'),
               ),
             ),
             const SizedBox(height: 12),
@@ -969,12 +958,6 @@ class _AdminDriverManagementScreenState
     return Scaffold(
       appBar: AppBar(
         title: const Text('Driver Management'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loading ? null : _load,
-          ),
-        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _loading ? null : _openCreateSheet,

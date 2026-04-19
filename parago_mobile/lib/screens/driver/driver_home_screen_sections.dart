@@ -94,9 +94,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
 
   int _displayedOnboardCount(TripSession? trip, List<RideSessionModel> rides) {
     if (trip == null) return 0;
-    final base = _baseOnboardCount(trip, rides);
-    final delta = _manualOnboardAdjustments[trip.id] ?? 0;
-    return math.max(0, base + delta);
+    return _baseOnboardCount(trip, rides);
   }
 
   RouteSummaryModel? _routeSummaryForTrip(TripSession trip) {
@@ -369,6 +367,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         _visibleInfoMessage(_driverOperationsBannerMessage(focusedTrip));
     final visibleStatusMessage = _visibleInfoMessage(_statusMessage);
     final displayedOnboard = _displayedOnboardCount(focusedTrip, focusedRides);
+    final focusedTripCountBusy =
+        focusedTrip != null && _isOccupancySyncInFlight(focusedTrip.id);
     final activeAlerts = focusedAlerts
         .where(
           (alert) =>
@@ -456,16 +456,15 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           ? (assignedRoute?.label ?? 'Metro overview')
           : _routeLabel(focusedTrip),
       displayedOnboard: displayedOnboard,
-      manualAdjustment: focusedTrip == null
-          ? 0
-          : (_manualOnboardAdjustments[focusedTrip.id] ?? 0),
+      seatCapacity: focusedTrip?.jeepneyCapacity,
+      manualPassengerCount: _manualOnboardCount(focusedTrip),
       routePath: routePath,
       markers: markers,
       activeDestinationAlerts: activeAlerts,
-      onIncrement: focusedTrip == null
+      onIncrement: focusedTrip == null || focusedTripCountBusy
           ? null
           : () => _changePassengerCount(focusedTrip.id, 1),
-      onDecrement: focusedTrip == null
+      onDecrement: focusedTrip == null || focusedTripCountBusy
           ? null
           : () => _changePassengerCount(focusedTrip.id, -1),
       onStartTrip: _loading ||
@@ -532,6 +531,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         final liveOperationsMessage =
             _visibleInfoMessage(_driverOperationsBannerMessage(liveTrip));
         final liveStatusMessage = _visibleInfoMessage(_statusMessage);
+        final liveTripCountBusy =
+            liveTrip != null && _isOccupancySyncInFlight(liveTrip.id);
 
         return _DrivePanelLiveData(
           trip: liveTrip,
@@ -543,9 +544,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           requirementMessage: liveOperationsMessage,
           statusMessage: liveStatusMessage,
           displayedOnboard: _displayedOnboardCount(liveTrip, liveRides),
-          manualAdjustment: liveTrip == null
-              ? 0
-              : (_manualOnboardAdjustments[liveTrip.id] ?? 0),
+          seatCapacity: liveTrip?.jeepneyCapacity,
+          manualPassengerCount: _manualOnboardCount(liveTrip),
           activePickupCount: liveRequests
               .where(
                 (request) => _DriverHomeScreenState._pickupStatuses.contains(
@@ -554,10 +554,10 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               )
               .length,
           activeDestinationAlerts: liveActiveAlerts,
-          onIncrement: liveTrip == null
+          onIncrement: liveTrip == null || liveTripCountBusy
               ? null
               : () => _changePassengerCount(liveTrip.id, 1),
-          onDecrement: liveTrip == null
+          onDecrement: liveTrip == null || liveTripCountBusy
               ? null
               : () => _changePassengerCount(liveTrip.id, -1),
           onStartTrip: _loading ||
@@ -712,7 +712,9 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                 }
               }
               final canCompleteUnload =
-                  matchingRide != null && matchingRide.status == 'onboard';
+                  matchingRide != null &&
+                  matchingRide.status == 'onboard' &&
+                  alert.status != 'dismissed';
 
               return _DriverActionCard(
                 title: alert.stopRef,
@@ -781,10 +783,12 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               .contains(alert.status),
         )
         .length;
-    final totalOnboard = _tripRides.values
-        .expand((entries) => entries)
-        .where((ride) => ride.status == 'onboard')
-        .length;
+    final totalOnboard = _trips.fold<int>(0, (sum, trip) {
+      if (trip.status != 'active') {
+        return sum;
+      }
+      return sum + _baseOnboardCount(trip, _tripRides[trip.id] ?? const []);
+    });
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),

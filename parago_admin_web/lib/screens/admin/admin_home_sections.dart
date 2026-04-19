@@ -82,13 +82,7 @@ class _AdminOverviewPage extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
         children: [
-          const _AdminHero(
-            title: 'Operations overview',
-            subtitle:
-                'See the live trip counts, pending pickups, onboard rides, and a focused passenger flow report from one place.',
-          ),
           if (loading) ...[
-            const SizedBox(height: 16),
             const LinearProgressIndicator(),
           ],
           if (error != null) ...[

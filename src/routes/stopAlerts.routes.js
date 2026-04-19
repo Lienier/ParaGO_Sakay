@@ -100,12 +100,44 @@ router.patch(
     const driver = req.user.role === DRIVER
       ? await ensureDriverAssignedToTrip(req.user, trip)
       : null;
+    if (alert.status === 'acknowledged') {
+      return ok(res, alert, 'Stop alert already acknowledged');
+    }
+    if (alert.status === 'dismissed') {
+      throw new ApiError(409, 'Cannot acknowledge a dismissed stop alert');
+    }
 
     const previousStatus = alert.status;
-    alert.status = 'acknowledged';
-    alert.acknowledgedAt = new Date();
-    alert.acknowledgedBy = driver?._id;
-    await alert.save();
+    const acknowledgedAt = new Date();
+    let acknowledgedAlert = await StopAlert.findOneAndUpdate(
+      {
+        _id: alert._id,
+        status: { $in: ['sent', 'seen'] },
+      },
+      {
+        $set: {
+          status: 'acknowledged',
+          acknowledgedAt,
+          acknowledgedBy: driver?._id,
+        },
+      },
+      {
+        new: true,
+      }
+    );
+    if (!acknowledgedAlert) {
+      const latestAlert = await StopAlert.findById(req.params.id);
+      if (!latestAlert) {
+        throw new ApiError(404, 'Stop alert not found');
+      }
+      if (latestAlert.status === 'acknowledged') {
+        return ok(res, latestAlert, 'Stop alert already acknowledged');
+      }
+      if (latestAlert.status === 'dismissed') {
+        throw new ApiError(409, 'Cannot acknowledge a dismissed stop alert');
+      }
+      throw new ApiError(409, 'Stop alert acknowledgement is already in progress');
+    }
 
     const passenger = await Passenger.findById(alert.passengerId).select('userId');
     await publishNotification({
@@ -114,15 +146,15 @@ router.patch(
       title: 'Stop alert acknowledged',
       body: `${req.user.fullName || 'Driver'} is preparing to help stopping soon.`,
       payload: {
-        stopAlertId: alert._id.toString(),
-        tripSessionId: alert.tripSessionId.toString(),
+        stopAlertId: acknowledgedAlert._id.toString(),
+        tripSessionId: acknowledgedAlert.tripSessionId.toString(),
         previousStatus,
-        stopAlert: serializeStopAlert(alert),
+        stopAlert: serializeStopAlert(acknowledgedAlert),
       },
       category: 'ride',
     });
 
-    return ok(res, alert, 'Stop alert acknowledged');
+    return ok(res, acknowledgedAlert, 'Stop alert acknowledged');
   })
 );
 

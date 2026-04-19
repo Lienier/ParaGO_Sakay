@@ -6,6 +6,7 @@ import '../../core/utils/parago_format.dart';
 import '../../models/transport/route_summary.dart';
 import '../../services/route_service.dart';
 import '../../services/session_controller.dart';
+import 'admin_route_builder_screen.dart';
 import 'admin_route_landmark_editor_screen.dart';
 
 class AdminRouteManagementScreen extends StatefulWidget {
@@ -121,6 +122,21 @@ class _AdminRouteManagementScreenState
       ),
     );
     if (!mounted) {
+      return;
+    }
+    await _load();
+    widget.onChanged?.call();
+  }
+
+  Future<void> _openRouteBuilder(RouteSummaryModel route) async {
+    final updated = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => AdminRouteBuilderScreen(
+          initialRoute: route,
+        ),
+      ),
+    );
+    if (!mounted || updated != true) {
       return;
     }
     await _load();
@@ -265,17 +281,6 @@ class _AdminRouteManagementScreenState
             ),
           ),
           const SizedBox(height: 12),
-          if (widget.embedded) ...[
-            Align(
-              alignment: Alignment.centerRight,
-              child: OutlinedButton.icon(
-                onPressed: _loading ? null : _load,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Refresh routes'),
-              ),
-            ),
-            const SizedBox(height: 12),
-          ],
           if (_error != null) ...[
             Text(
               _error!,
@@ -310,7 +315,7 @@ class _AdminRouteManagementScreenState
             emptyMessage: 'No active routes.',
             routes: activeRoutes,
             busyRouteId: _busyRouteId,
-            onEditRoute: null,
+            onEditRoute: _openRouteBuilder,
             onEditLandmarks: _openLandmarkEditor,
             onDeactivate: _deactivateRoute,
           ),
@@ -320,7 +325,7 @@ class _AdminRouteManagementScreenState
             emptyMessage: 'No inactive routes.',
             routes: inactiveRoutes,
             busyRouteId: _busyRouteId,
-            onEditRoute: null,
+            onEditRoute: _openRouteBuilder,
             onEditLandmarks: _openLandmarkEditor,
             onDeactivate: null,
           ),
@@ -541,6 +546,13 @@ class _RouteRow extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
+              if (onEditRoute != null)
+                FilledButton.icon(
+                  onPressed: () => onEditRoute!(route),
+                  style: compactFilledStyle,
+                  icon: const Icon(Icons.edit_road_outlined),
+                  label: const Text('Edit route'),
+                ),
               OutlinedButton.icon(
                 onPressed: () => onEditLandmarks(route),
                 style: compactOutlinedStyle,
@@ -557,7 +569,7 @@ class _RouteRow extends StatelessWidget {
                           height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Text('Delete'),
+                      : const Text('Deactivate'),
                 ),
             ],
           ),

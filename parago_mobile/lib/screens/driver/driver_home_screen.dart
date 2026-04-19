@@ -57,14 +57,22 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       'driver.dismissed.notifications.v1';
   static const double _vehicleGpsJitterMeters = 2;
   static const double _maxVehicleGpsAccuracyMeters = 20;
+  static const Duration _vehicleMotionDefaultDuration =
+      Duration(milliseconds: 900);
   static const Duration _vehicleMotionTick = Duration(milliseconds: 16);
   static const Duration _vehicleMotionMinDuration =
-      Duration(milliseconds: 140);
+      Duration(milliseconds: 550);
   static const Duration _vehicleMotionMaxDuration =
-      Duration(milliseconds: 320);
+      Duration(milliseconds: 1400);
+  static const double _vehicleProjectionHandoffThreshold = 0.88;
+  static const Duration _vehicleProjectionMaxDuration = Duration(seconds: 1);
+  static const double _vehicleProjectionMaxDistanceMeters = 8;
+  static const double _vehicleProjectionMinSpeedMetersPerSecond = 0.8;
   static const Duration _driverMapFollowPause = Duration(seconds: 8);
+  static const Duration _driverMapFollowThrottle =
+      Duration(milliseconds: 150);
   static const double _driverMapFollowLerpFactor = 0.22;
-  static const double _driverMapFollowJitterMeters = 2;
+  static const double _driverMapFollowJitterMeters = 10;
   static const double _driverMapFollowSnapMeters = 45;
   static const double _vehicleTeleportSnapMeters = 90;
 
@@ -75,7 +83,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Map<String, List<PickupRequestModel>> _tripRequests = {};
   Map<String, List<StopAlertModel>> _tripAlerts = {};
   Map<String, List<RideSessionModel>> _tripRides = {};
-  Map<String, int> _manualOnboardAdjustments = {};
+  Set<String> _occupancySyncTripIds = <String>{};
   Map<String, dynamic> _driverProfile = {};
   String? _assignedRouteId;
   String? _focusedTripId;
@@ -88,12 +96,20 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   LatLng? _vehicleLocation;
   LatLng? _vehicleTargetLocation;
   LatLng? _vehicleMotionFromLocation;
+  LatLng? _vehicleLastAuthoritativeLocation;
   double? _vehicleHeadingDegrees;
   double? _vehicleTargetHeadingDegrees;
   double? _vehicleMotionFromHeadingDegrees;
   double? _vehicleLastReliableHeadingDegrees;
+  double? _vehicleLastReliableSpeedMetersPerSecond;
+  double? _vehicleLastReliableBearingDegrees;
   DateTime? _vehicleMotionStartedAt;
+  DateTime? _vehicleLastAuthoritativeSampleAt;
+  DateTime? _vehiclePreviousAuthoritativeSampleAt;
   Duration _vehicleMotionDuration = Duration.zero;
+  Duration _vehicleExpectedSampleGap = _vehicleMotionDefaultDuration;
+  bool _vehicleMotionIsProjected = false;
+  bool _vehicleProjectionHandoffStarted = false;
   LocationTrackingService? _locationTrackingService;
   Timer? _liveRefreshTimer;
   Timer? _availabilityTimer;
@@ -118,6 +134,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   final MapController _driverMapController = MapController();
   bool _driverMapReady = false;
   LatLng? _lastDriverMapCenter;
+  DateTime? _lastDriverMapFollowAt;
   DateTime? _driverMapFollowPausedUntil;
 
   TripSession? get _focusedTrip {
@@ -588,10 +605,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         _tripRides = focusedHydration.ridesByTrip;
         _focusedTripId =
             (nextFocus == null || nextFocus.isEmpty) ? null : nextFocus;
-        _manualOnboardAdjustments = {
-          for (final trip in trips)
-            trip.id: _manualOnboardAdjustments[trip.id] ?? 0,
-        };
       });
       _applyAutomaticAvailabilityState(session, hasInternet: true);
       unawaited(_syncAutomaticAvailability(session));
@@ -903,6 +916,23 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
             _knownActiveStopAlertIds = {..._knownActiveStopAlertIds, alert.id};
           }
           break;
+        case 'ride_completed':
+          final ride = _readDriverRideSession(notification.payload);
+          if (ride == null) {
+            needsFallback = true;
+            return;
+          }
+          _tripRides = _upsertTripRides(_tripRides, ride);
+          _tripAlerts = _dismissTripAlertsForRide(
+            _tripAlerts,
+            rideSessionId: ride.id,
+          );
+          _knownActiveStopAlertIds = _tripAlerts.values
+              .expand((items) => items)
+              .where((alert) => _activeAlertStatuses.contains(alert.status))
+              .map((alert) => alert.id)
+              .toSet();
+          break;
       }
     });
 
@@ -966,6 +996,61 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     return next;
   }
 
+  Map<String, List<RideSessionModel>> _upsertTripRides(
+    Map<String, List<RideSessionModel>> source,
+    RideSessionModel ride,
+  ) {
+    final next = <String, List<RideSessionModel>>{
+      for (final entry in source.entries) entry.key: List.of(entry.value),
+    };
+    final tripRides = List<RideSessionModel>.from(
+      next[ride.tripSessionId] ?? const <RideSessionModel>[],
+    );
+    final existingIndex = tripRides.indexWhere((item) => item.id == ride.id);
+    if (existingIndex >= 0) {
+      tripRides[existingIndex] = ride;
+    } else {
+      tripRides.insert(0, ride);
+    }
+    tripRides.sort((a, b) {
+      final endedComparison = (b.endedAt ?? '').compareTo(a.endedAt ?? '');
+      if (endedComparison != 0) {
+        return endedComparison;
+      }
+      return (b.boardedAt ?? '').compareTo(a.boardedAt ?? '');
+    });
+    next[ride.tripSessionId] = tripRides;
+    return next;
+  }
+
+  Map<String, List<StopAlertModel>> _dismissTripAlertsForRide(
+    Map<String, List<StopAlertModel>> source, {
+    required String rideSessionId,
+  }) {
+    final next = <String, List<StopAlertModel>>{};
+    for (final entry in source.entries) {
+      next[entry.key] = entry.value
+          .map((alert) => alert.rideSessionId == rideSessionId
+              ? StopAlertModel(
+                  id: alert.id,
+                  passengerId: alert.passengerId,
+                  tripSessionId: alert.tripSessionId,
+                  routeId: alert.routeId,
+                  rideSessionId: alert.rideSessionId,
+                  status: 'dismissed',
+                  stopRef: alert.stopRef,
+                  note: alert.note,
+                  latitude: alert.latitude,
+                  longitude: alert.longitude,
+                  createdAt: alert.createdAt,
+                  acknowledgedAt: alert.acknowledgedAt,
+                )
+              : alert)
+          .toList(growable: false);
+    }
+    return next;
+  }
+
   PickupRequestModel? _readDriverPickupRequest(Map<String, dynamic> payload) {
     final raw = payload['request'];
     if (raw is Map<String, dynamic>) {
@@ -986,6 +1071,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     }
     if (raw is Map) {
       return StopAlertModel.fromJson(
+        raw.map((key, value) => MapEntry(key.toString(), value)),
+      );
+    }
+    return null;
+  }
+
+  RideSessionModel? _readDriverRideSession(Map<String, dynamic> payload) {
+    final raw = payload['rideSession'];
+    if (raw is Map<String, dynamic>) {
+      return RideSessionModel.fromJson(raw);
+    }
+    if (raw is Map) {
+      return RideSessionModel.fromJson(
         raw.map((key, value) => MapEntry(key.toString(), value)),
       );
     }
@@ -1375,11 +1473,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return;
     }
 
+    final receivedAt = DateTime.now();
+    final sampleAt = _positionSampleTime(position, receivedAt);
     final next = _smoothedVehicleLocation(position);
     if (next == null) {
       return;
     }
-    final currentAnchor = _vehicleTargetLocation ?? _vehicleLocation;
+    final currentAnchor = _vehicleLastAuthoritativeLocation ??
+        _vehicleTargetLocation ??
+        _vehicleLocation;
     final nextHeading = _resolveVehicleHeading(
       position: position,
       previousPoint: currentAnchor,
@@ -1388,6 +1490,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _startVehicleMotion(
       next,
       headingDegrees: nextHeading,
+      sampleAt: sampleAt,
+      startedAt: receivedAt,
     );
 
     if (_statusMessage != null &&
@@ -1471,8 +1575,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   void _syncDriverMapCamera(LatLng target) {
+    final now = DateTime.now();
     final pausedUntil = _driverMapFollowPausedUntil;
-    if (pausedUntil != null && DateTime.now().isBefore(pausedUntil)) {
+    if (pausedUntil != null && now.isBefore(pausedUntil)) {
       return;
     }
 
@@ -1493,11 +1598,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (distanceMeters < _driverMapFollowJitterMeters) {
       return;
     }
+    if (distanceMeters < _driverMapFollowSnapMeters &&
+        _lastDriverMapFollowAt != null &&
+        now.difference(_lastDriverMapFollowAt!) < _driverMapFollowThrottle) {
+      return;
+    }
 
     final nextCenter = distanceMeters >= _driverMapFollowSnapMeters
         ? target
         : _lerpLatLng(previous, target, _driverMapFollowLerpFactor);
     _lastDriverMapCenter = nextCenter;
+    _lastDriverMapFollowAt = now;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final zoom = _driverMapController.camera.zoom == 0
@@ -1532,8 +1643,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   void _startVehicleMotion(
     LatLng target, {
     double? headingDegrees,
+    required DateTime sampleAt,
+    required DateTime startedAt,
   }) {
     final currentPoint = _vehicleLocation ?? _vehicleTargetLocation ?? target;
+    final previousAuthoritativePoint =
+        _vehicleLastAuthoritativeLocation ?? currentPoint;
     final currentHeading = _vehicleHeadingDegrees ??
         _vehicleTargetHeadingDegrees ??
         _vehicleLastReliableHeadingDegrees;
@@ -1544,6 +1659,23 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       target.latitude,
       target.longitude,
     );
+    final authoritativeDistanceMeters = Geolocator.distanceBetween(
+      previousAuthoritativePoint.latitude,
+      previousAuthoritativePoint.longitude,
+      target.latitude,
+      target.longitude,
+    );
+    final sampleGap = _motionSampleGap(
+      sampleAt: sampleAt,
+      previousSampleAt:
+          _vehicleLastAuthoritativeSampleAt ??
+          _vehiclePreviousAuthoritativeSampleAt,
+      defaultDuration: _vehicleMotionDefaultDuration,
+      minDuration: _vehicleMotionMinDuration,
+      maxDuration: _vehicleMotionMaxDuration,
+    );
+    final speedMetersPerSecond =
+        _metersPerSecond(authoritativeDistanceMeters, sampleGap);
     final headingDelta = (currentHeading == null || resolvedHeading == null)
         ? 0
         : _shortestHeadingDelta(currentHeading, resolvedHeading).abs();
@@ -1558,13 +1690,31 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         _vehicleMotionFromHeadingDegrees = resolvedHeading;
         if (resolvedHeading != null) {
           _vehicleLastReliableHeadingDegrees = resolvedHeading;
+          _vehicleLastReliableBearingDegrees = resolvedHeading;
         }
+        _vehicleLastAuthoritativeLocation = target;
+        _vehiclePreviousAuthoritativeSampleAt = _vehicleLastAuthoritativeSampleAt;
+        _vehicleLastAuthoritativeSampleAt = sampleAt;
+        _vehicleExpectedSampleGap = sampleGap;
+        _vehicleLastReliableSpeedMetersPerSecond = speedMetersPerSecond;
+        _vehicleMotionIsProjected = false;
+        _vehicleProjectionHandoffStarted = false;
       });
       _syncDriverMapCamera(target);
       return;
     }
 
     if (distanceMeters < 0.8 && headingDelta < 2) {
+      _vehiclePreviousAuthoritativeSampleAt = _vehicleLastAuthoritativeSampleAt;
+      _vehicleLastAuthoritativeSampleAt = sampleAt;
+      _vehicleLastAuthoritativeLocation = target;
+      _vehicleExpectedSampleGap = sampleGap;
+      _vehicleLastReliableSpeedMetersPerSecond = 0;
+      if (resolvedHeading != null) {
+        _vehicleLastReliableBearingDegrees = resolvedHeading;
+      }
+      _vehicleMotionIsProjected = false;
+      _vehicleProjectionHandoffStarted = false;
       return;
     }
 
@@ -1578,7 +1728,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         _vehicleMotionFromHeadingDegrees = resolvedHeading;
         if (resolvedHeading != null) {
           _vehicleLastReliableHeadingDegrees = resolvedHeading;
+          _vehicleLastReliableBearingDegrees = resolvedHeading;
         }
+        _vehicleLastAuthoritativeLocation = target;
+        _vehiclePreviousAuthoritativeSampleAt = _vehicleLastAuthoritativeSampleAt;
+        _vehicleLastAuthoritativeSampleAt = sampleAt;
+        _vehicleExpectedSampleGap = sampleGap;
+        _vehicleLastReliableSpeedMetersPerSecond = speedMetersPerSecond;
+        _vehicleMotionIsProjected = false;
+        _vehicleProjectionHandoffStarted = false;
       });
       _vehicleMotionTimer?.cancel();
       _vehicleMotionTimer = null;
@@ -1589,15 +1747,26 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     setState(() {
       _vehicleMotionFromLocation = currentPoint;
       _vehicleTargetLocation = target;
-      _vehicleMotionStartedAt = DateTime.now();
-      _vehicleMotionDuration = _vehicleMotionDurationFor(distanceMeters);
+      _vehicleMotionStartedAt = startedAt;
+      _vehicleMotionDuration = _vehicleMotionDurationFor(
+        distanceMeters: authoritativeDistanceMeters,
+        sampleGap: sampleGap,
+      );
       _vehicleMotionFromHeadingDegrees = currentHeading ?? resolvedHeading;
       _vehicleTargetHeadingDegrees = resolvedHeading ?? currentHeading;
       _vehicleLocation = currentPoint;
       _vehicleHeadingDegrees ??= currentHeading ?? resolvedHeading;
       if (resolvedHeading != null) {
         _vehicleLastReliableHeadingDegrees = resolvedHeading;
+        _vehicleLastReliableBearingDegrees = resolvedHeading;
       }
+      _vehicleLastAuthoritativeLocation = target;
+      _vehiclePreviousAuthoritativeSampleAt = _vehicleLastAuthoritativeSampleAt;
+      _vehicleLastAuthoritativeSampleAt = sampleAt;
+      _vehicleExpectedSampleGap = sampleGap;
+      _vehicleLastReliableSpeedMetersPerSecond = speedMetersPerSecond;
+      _vehicleMotionIsProjected = false;
+      _vehicleProjectionHandoffStarted = false;
     });
     _ensureVehicleMotionLoop();
   }
@@ -1630,13 +1799,30 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     final progress = durationMicros <= 0
         ? 1.0
         : (elapsedMicros / durationMicros).clamp(0.0, 1.0).toDouble();
-    final easedProgress = Curves.easeOutCubic.transform(progress);
-    final nextPoint = _lerpLatLng(from, to, easedProgress);
+    final nextPoint = _lerpLatLng(from, to, progress);
     final fromHeading = _vehicleMotionFromHeadingDegrees;
     final toHeading = _vehicleTargetHeadingDegrees;
+    final headingProgress = Curves.easeOutCubic.transform(progress);
     final nextHeading = fromHeading == null || toHeading == null
         ? (toHeading ?? fromHeading ?? _vehicleHeadingDegrees)
-        : _lerpHeading(fromHeading, toHeading, easedProgress);
+        : _lerpHeading(fromHeading, toHeading, headingProgress);
+
+    if (!_vehicleMotionIsProjected &&
+        !_vehicleProjectionHandoffStarted &&
+        progress >= _vehicleProjectionHandoffThreshold) {
+      _vehicleProjectionHandoffStarted = true;
+      if (_startProjectedVehicleMotion(
+        startedAt: DateTime.now(),
+        authoritativeTargetPoint: to,
+        fromPoint: nextPoint,
+        fromHeading: nextHeading,
+        remainingAuthoritativeDuration: Duration(
+          microseconds: math.max(durationMicros - elapsedMicros, 0),
+        ),
+      )) {
+        return;
+      }
+    }
 
     if (_vehicleLocation != nextPoint || _vehicleHeadingDegrees != nextHeading) {
       setState(() {
@@ -1650,10 +1836,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _syncDriverMapCamera(nextPoint);
 
     if (progress >= 1.0) {
+      final finishedHeading = toHeading ?? nextHeading;
       setState(() {
         _vehicleLocation = to;
         _vehicleMotionFromLocation = to;
-        _vehicleHeadingDegrees = toHeading ?? nextHeading;
+        _vehicleHeadingDegrees = finishedHeading;
+        if (finishedHeading != null) {
+          _vehicleLastReliableHeadingDegrees = finishedHeading;
+        }
       });
       _stopVehicleMotionLoop();
     }
@@ -1662,6 +1852,55 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   void _stopVehicleMotionLoop() {
     _vehicleMotionTimer?.cancel();
     _vehicleMotionTimer = null;
+  }
+
+  bool _startProjectedVehicleMotion({
+    required DateTime startedAt,
+    required LatLng authoritativeTargetPoint,
+    required LatLng fromPoint,
+    required double? fromHeading,
+    required Duration remainingAuthoritativeDuration,
+  }) {
+    final bearingDegrees = _vehicleLastReliableBearingDegrees ?? fromHeading;
+    final speedMetersPerSecond = _vehicleLastReliableSpeedMetersPerSecond;
+    if (bearingDegrees == null ||
+        speedMetersPerSecond == null ||
+        !speedMetersPerSecond.isFinite ||
+        speedMetersPerSecond < _vehicleProjectionMinSpeedMetersPerSecond) {
+      return false;
+    }
+
+    final baseProjectionDuration = _vehicleExpectedSampleGap <
+            _vehicleProjectionMaxDuration
+        ? _vehicleExpectedSampleGap
+        : _vehicleProjectionMaxDuration;
+    final projectionDistanceMeters = math.min(
+      _vehicleProjectionMaxDistanceMeters,
+      speedMetersPerSecond * (baseProjectionDuration.inMilliseconds / 1000),
+    );
+    if (projectionDistanceMeters < _vehicleGpsJitterMeters) {
+      return false;
+    }
+
+    final projectedPoint = _offsetLatLng(
+      authoritativeTargetPoint,
+      bearingDegrees,
+      projectionDistanceMeters,
+    );
+    final projectionDuration =
+        remainingAuthoritativeDuration + baseProjectionDuration;
+    setState(() {
+      _vehicleMotionFromLocation = fromPoint;
+      _vehicleTargetLocation = projectedPoint;
+      _vehicleMotionStartedAt = startedAt;
+      _vehicleMotionDuration = projectionDuration;
+      _vehicleMotionFromHeadingDegrees = fromHeading ?? bearingDegrees;
+      _vehicleTargetHeadingDegrees = bearingDegrees;
+      _vehicleLocation = fromPoint;
+      _vehicleMotionIsProjected = true;
+      _vehicleProjectionHandoffStarted = true;
+    });
+    return true;
   }
 
   double? _resolveVehicleHeading({
@@ -1690,19 +1929,96 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     return _bearingDegrees(previousPoint, nextPoint);
   }
 
-  Duration _vehicleMotionDurationFor(double distanceMeters) {
-    final scaledMilliseconds = (120 + (distanceMeters * 10)).round();
-    final clampedMilliseconds = scaledMilliseconds.clamp(
+  Duration _vehicleMotionDurationFor({
+    required double distanceMeters,
+    required Duration sampleGap,
+  }) {
+    final cadenceMilliseconds = (sampleGap.inMilliseconds * 0.98).round();
+    final distanceMilliseconds = (420 + (distanceMeters * 16)).round();
+    final clampedMilliseconds = (cadenceMilliseconds > 0
+            ? cadenceMilliseconds
+            : math.max(
+                distanceMilliseconds,
+                _vehicleMotionDefaultDuration.inMilliseconds,
+              ))
+        .clamp(
       _vehicleMotionMinDuration.inMilliseconds,
       _vehicleMotionMaxDuration.inMilliseconds,
     );
     return Duration(milliseconds: clampedMilliseconds);
   }
 
+  Duration _motionSampleGap({
+    required DateTime sampleAt,
+    required DateTime? previousSampleAt,
+    required Duration defaultDuration,
+    required Duration minDuration,
+    required Duration maxDuration,
+  }) {
+    if (previousSampleAt == null) {
+      return defaultDuration;
+    }
+    final rawGap = sampleAt.difference(previousSampleAt);
+    final gapMilliseconds = rawGap.inMilliseconds;
+    if (gapMilliseconds <= 0) {
+      return defaultDuration;
+    }
+    return Duration(
+      milliseconds: gapMilliseconds.clamp(
+        minDuration.inMilliseconds,
+        maxDuration.inMilliseconds,
+      ),
+    );
+  }
+
+  DateTime _positionSampleTime(Position position, DateTime fallback) {
+    final timestamp = position.timestamp;
+    return timestamp.toLocal();
+  }
+
+  double? _metersPerSecond(double distanceMeters, Duration sampleGap) {
+    final seconds = sampleGap.inMilliseconds / 1000;
+    if (!seconds.isFinite || seconds <= 0) {
+      return null;
+    }
+    final metersPerSecond = distanceMeters / seconds;
+    return metersPerSecond.isFinite ? metersPerSecond : null;
+  }
+
   LatLng _lerpLatLng(LatLng from, LatLng to, double t) {
     return LatLng(
       from.latitude + ((to.latitude - from.latitude) * t),
       from.longitude + ((to.longitude - from.longitude) * t),
+    );
+  }
+
+  LatLng _offsetLatLng(
+    LatLng origin,
+    double bearingDegrees,
+    double distanceMeters,
+  ) {
+    const earthRadiusMeters = 6371000.0;
+    final angularDistance = distanceMeters / earthRadiusMeters;
+    final bearing = bearingDegrees * math.pi / 180;
+    final lat1 = origin.latitude * math.pi / 180;
+    final lon1 = origin.longitude * math.pi / 180;
+    final sinLat1 = math.sin(lat1);
+    final cosLat1 = math.cos(lat1);
+    final sinAngularDistance = math.sin(angularDistance);
+    final cosAngularDistance = math.cos(angularDistance);
+    final lat2 = math.asin(
+      sinLat1 * cosAngularDistance +
+          cosLat1 * sinAngularDistance * math.cos(bearing),
+    );
+    final lon2 = lon1 +
+        math.atan2(
+          math.sin(bearing) * sinAngularDistance * cosLat1,
+          cosAngularDistance - sinLat1 * math.sin(lat2),
+        );
+
+    return LatLng(
+      lat2 * 180 / math.pi,
+      lon2 * 180 / math.pi,
     );
   }
 
@@ -1954,21 +2270,104 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     });
   }
 
-  void _changePassengerCount(String tripId, int delta) {
+  bool _isOccupancySyncInFlight(String tripId) {
+    return _occupancySyncTripIds.contains(tripId);
+  }
+
+  void _replaceTripSnapshot(TripSession updatedTrip) {
+    _trips = _trips
+        .map((trip) => trip.id == updatedTrip.id ? updatedTrip : trip)
+        .toList(growable: false);
+  }
+
+  int _manualOnboardCount(TripSession? trip) {
+    final value = trip?.manualOccupancyCount;
+    return value == null || value < 0 ? 0 : value;
+  }
+
+  Future<void> _changePassengerCount(String tripId, int delta) async {
     final trip = _trips
         .cast<TripSession?>()
         .firstWhere((item) => item?.id == tripId, orElse: () => _focusedTrip);
-    if (trip == null) return;
+    if (trip == null || delta == 0 || _isOccupancySyncInFlight(tripId)) {
+      return;
+    }
+
+    final rides = _tripRides[tripId] ?? const <RideSessionModel>[];
+    final currentManualCount = _manualOnboardCount(trip);
+    final nextManualCount = math.max(0, currentManualCount + delta);
+    if (nextManualCount == currentManualCount) {
+      return;
+    }
+
+    final appOnboardCount =
+        rides.where((ride) => ride.status == 'onboard').length;
+    final nextCount = appOnboardCount + nextManualCount;
+    final seatCapacity = trip.jeepneyCapacity;
+    if (delta > 0 &&
+        seatCapacity != null &&
+        seatCapacity > 0 &&
+        nextCount > seatCapacity) {
+      final message = 'Jeep capacity is $seatCapacity. Increase blocked.';
+      if (!mounted) {
+        return;
+      }
+      setState(() => _statusMessage = message);
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.hideCurrentSnackBar();
+      messenger?.showSnackBar(SnackBar(content: Text(message)));
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    final session = context.read<SessionController>();
+    final tripService = TripService(session.apiClient);
 
     setState(() {
-      final current = _manualOnboardAdjustments[tripId] ?? 0;
-      final updated = current + delta;
-      final rides = _tripRides[tripId] ?? const <RideSessionModel>[];
-      final base = _baseOnboardCount(trip, rides);
-      _manualOnboardAdjustments[tripId] = math.max(-base, updated);
-      _statusMessage =
-          'Passenger counter adjusted manually for the active drive screen.';
+      _occupancySyncTripIds = {..._occupancySyncTripIds, tripId};
+      _statusMessage = 'Updating passenger count...';
     });
+
+    try {
+      final updatedTrip = await tripService.updateTripManualOccupancy(
+        tripId,
+        nextManualCount,
+      );
+      if (!mounted) {
+        return;
+      }
+      final syncIds = {..._occupancySyncTripIds}..remove(tripId);
+      final updatedCapacity = updatedTrip.jeepneyCapacity;
+      final autoPaused = updatedTrip.acceptRequests == false &&
+          updatedCapacity != null &&
+          updatedCapacity > 0 &&
+          updatedTrip.occupancyCount != null &&
+          updatedTrip.occupancyCount! >= updatedCapacity;
+      final successMessage = autoPaused
+          ? 'Jeep is now full. New pickup requests were paused automatically.'
+          : 'Walk-in passenger count updated.';
+      setState(() {
+        _replaceTripSnapshot(updatedTrip);
+        _occupancySyncTripIds = syncIds;
+        _statusMessage = successMessage;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      final syncIds = {..._occupancySyncTripIds}..remove(tripId);
+      final message = ActionFeedback.messageOf(error);
+      setState(() {
+        _occupancySyncTripIds = syncIds;
+        _statusMessage = message;
+      });
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.hideCurrentSnackBar();
+      messenger?.showSnackBar(SnackBar(content: Text(message)));
+    }
   }
 
   String _routeLabel(TripSession trip) {
@@ -2157,7 +2556,8 @@ class _DrivePanelLiveData {
     required this.requirementMessage,
     required this.statusMessage,
     required this.displayedOnboard,
-    required this.manualAdjustment,
+    required this.seatCapacity,
+    required this.manualPassengerCount,
     required this.activePickupCount,
     required this.activeDestinationAlerts,
     required this.onIncrement,
@@ -2177,7 +2577,8 @@ class _DrivePanelLiveData {
   final String? requirementMessage;
   final String? statusMessage;
   final int displayedOnboard;
-  final int manualAdjustment;
+  final int? seatCapacity;
+  final int manualPassengerCount;
   final int activePickupCount;
   final List<StopAlertModel> activeDestinationAlerts;
   final VoidCallback? onIncrement;
@@ -2203,7 +2604,8 @@ class _DriveMapPanel extends StatelessWidget {
     required this.activePickupCount,
     required this.routeLabel,
     required this.displayedOnboard,
-    required this.manualAdjustment,
+    required this.seatCapacity,
+    required this.manualPassengerCount,
     required this.routePath,
     required this.markers,
     required this.activeDestinationAlerts,
@@ -2233,7 +2635,8 @@ class _DriveMapPanel extends StatelessWidget {
   final int activePickupCount;
   final String routeLabel;
   final int displayedOnboard;
-  final int manualAdjustment;
+  final int? seatCapacity;
+  final int manualPassengerCount;
   final List<LatLng> routePath;
   final List<_DriveMarkerData> markers;
   final List<StopAlertModel> activeDestinationAlerts;
@@ -2275,7 +2678,8 @@ class _DriveMapPanel extends StatelessWidget {
               final isOnline = live.isOnline;
               final availabilityNote = live.availabilityNote;
               final displayedOnboard = live.displayedOnboard;
-              final manualAdjustment = live.manualAdjustment;
+              final seatCapacity = live.seatCapacity;
+              final manualPassengerCount = live.manualPassengerCount;
               final activePickupCount = live.activePickupCount;
               final activeDestinationAlerts = live.activeDestinationAlerts;
               final onIncrement = live.onIncrement;
@@ -2432,11 +2836,9 @@ class _DriveMapPanel extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(999),
                               ),
                               child: Text(
-                                manualAdjustment == 0
-                                    ? 'manual 0'
-                                    : manualAdjustment > 0
-                                        ? 'manual +$manualAdjustment'
-                                        : 'manual $manualAdjustment',
+                                seatCapacity == null || seatCapacity <= 0
+                                    ? 'capacity open'
+                                    : '$displayedOnboard / $seatCapacity seats',
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontWeight: FontWeight.w700,
@@ -2444,6 +2846,15 @@ class _DriveMapPanel extends StatelessWidget {
                               ),
                             ),
                           ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Walk-in passengers: $manualPassengerCount',
+                          style:
+                              Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    color: Colors.white70,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                         ),
                         const SizedBox(height: 16),
                         Container(

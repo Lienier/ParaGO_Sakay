@@ -157,6 +157,9 @@ const emitNotificationCreated = (notification) => {
 };
 
 const emitOperationsChanged = (payload = {}) => {
+  if (payload?.userId) {
+    emitToUser(payload.userId, 'ops.changed', payload);
+  }
   emitToRole('admin', 'ops.changed', payload);
 };
 

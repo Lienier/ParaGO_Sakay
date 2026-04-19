@@ -5,6 +5,7 @@ const PickupRequest = require('../models/pickupRequest');
 const TripSession = require('../models/tripSession');
 const RideSession = require('../models/rideSession');
 const Driver = require('../models/driver');
+const Jeepney = require('../models/jeepney');
 const { publishNotification } = require('./notificationPublisher');
 const {
   serializePickupRequest,
@@ -61,6 +62,19 @@ const validateBoardingAttempt = async ({
   const trip = await TripSession.findById(tripSessionId);
   if (!trip || trip.status !== 'active') {
     throw new ApiError(409, 'Trip session is not active');
+  }
+
+  const jeepney = await Jeepney.findById(trip.jeepneyId).select('capacity');
+  const seatCapacity = Number(jeepney?.capacity);
+  const occupiedSeats = Number.isFinite(Number(trip.occupancyCount))
+    ? Number(trip.occupancyCount)
+    : 0;
+  if (
+    Number.isFinite(seatCapacity) &&
+    seatCapacity > 0 &&
+    occupiedSeats >= seatCapacity
+  ) {
+    throw new ApiError(409, 'Trip is already at full capacity');
   }
 
   if (

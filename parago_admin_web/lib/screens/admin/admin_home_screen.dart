@@ -236,36 +236,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     return const <String, dynamic>{};
   }
 
-  String _sectionTitle(_AdminWorkspaceSection section) {
-    switch (section) {
-      case _AdminWorkspaceSection.overview:
-        return 'Operations Overview';
-      case _AdminWorkspaceSection.drivers:
-        return 'Driver Management';
-      case _AdminWorkspaceSection.routeBuilder:
-        return 'Route Builder';
-      case _AdminWorkspaceSection.routes:
-        return 'Route Management';
-      case _AdminWorkspaceSection.fareSettings:
-        return 'Fare Settings';
-    }
-  }
-
-  String _sectionSubtitle(_AdminWorkspaceSection section) {
-    switch (section) {
-      case _AdminWorkspaceSection.overview:
-        return 'Live operations metrics with a focused passenger boarding and unload report.';
-      case _AdminWorkspaceSection.drivers:
-        return 'Create driver accounts, assign jeepneys, and schedule trips from one workspace.';
-      case _AdminWorkspaceSection.routeBuilder:
-        return 'Create or update route geometry directly on the map with offline-ready snapshots.';
-      case _AdminWorkspaceSection.routes:
-        return 'Edit active routes, landmark drop-off points, and per-landmark fares.';
-      case _AdminWorkspaceSection.fareSettings:
-        return 'Configure base fares, distance rates, and fare rules for your routes.';
-    }
-  }
-
   Widget _buildWorkspaceContent() {
     switch (_selectedSection) {
       case _AdminWorkspaceSection.overview:
@@ -384,23 +354,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                       );
                     },
                     labelType: NavigationRailLabelType.all,
-                    leading: Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 16, 12, 12),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const CircleAvatar(
-                            radius: 24,
-                            child: Icon(Icons.alt_route_outlined),
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            'Console',
-                            style: Theme.of(context).textTheme.labelLarge,
-                          ),
-                        ],
-                      ),
-                    ),
                     destinations: [
                       for (final section in _AdminWorkspaceSection.values)
                         NavigationRailDestination(
@@ -413,50 +366,12 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(20),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(24),
-                              border: Border.all(
-                                color: Colors.black.withValues(alpha: 0.06),
-                              ),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _sectionTitle(_selectedSection),
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .headlineSmall
-                                      ?.copyWith(
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  _sectionSubtitle(_selectedSection),
-                                  style: Theme.of(context).textTheme.bodyMedium,
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Expanded(
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(28),
-                              child: ColoredBox(
-                                color: Colors.white.withValues(alpha: 0.72),
-                                child: content,
-                              ),
-                            ),
-                          ),
-                        ],
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(28),
+                        child: ColoredBox(
+                          color: Colors.white.withValues(alpha: 0.72),
+                          child: content,
+                        ),
                       ),
                     ),
                   ),
@@ -473,29 +388,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                     onSelect: (section) {
                       setState(() => _selectedSection = section);
                     },
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(22),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _sectionTitle(_selectedSection),
-                          style:
-                              Theme.of(context).textTheme.titleLarge?.copyWith(
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(_sectionSubtitle(_selectedSection)),
-                      ],
-                    ),
                   ),
                   const SizedBox(height: 12),
                   Expanded(
@@ -545,7 +437,7 @@ class _AdminHeaderBrand extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
-                'ParaGO! Admin',
+                'SAKAY! Admin',
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.w800,

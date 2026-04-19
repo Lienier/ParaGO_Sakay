@@ -19,6 +19,7 @@ class TripSession {
     this.startedAt,
     this.endedAt,
     this.acceptRequests,
+    this.manualOccupancyCount,
     this.occupancyCount,
     this.active,
     this.notes,
@@ -47,6 +48,7 @@ class TripSession {
   final String? startedAt;
   final String? endedAt;
   final bool? acceptRequests;
+  final int? manualOccupancyCount;
   final int? occupancyCount;
   final bool? active;
   final String? notes;
@@ -86,6 +88,7 @@ class TripSession {
       startedAt: json['startedAt']?.toString(),
       endedAt: json['endedAt']?.toString(),
       acceptRequests: json['acceptRequests'] as bool?,
+      manualOccupancyCount: _toInt(json['manualOccupancyCount']),
       occupancyCount: _toInt(json['occupancyCount']),
       active: json['active'] as bool?,
       notes: json['notes']?.toString(),
@@ -133,6 +136,7 @@ class TripSession {
     String? startedAt,
     String? endedAt,
     bool? acceptRequests,
+    int? manualOccupancyCount,
     int? occupancyCount,
     bool? active,
     String? notes,
@@ -162,6 +166,8 @@ class TripSession {
       startedAt: startedAt ?? this.startedAt,
       endedAt: endedAt ?? this.endedAt,
       acceptRequests: acceptRequests ?? this.acceptRequests,
+      manualOccupancyCount:
+          manualOccupancyCount ?? this.manualOccupancyCount,
       occupancyCount: occupancyCount ?? this.occupancyCount,
       active: active ?? this.active,
       notes: notes ?? this.notes,

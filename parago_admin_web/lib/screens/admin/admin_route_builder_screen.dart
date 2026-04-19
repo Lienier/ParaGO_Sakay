@@ -338,15 +338,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     });
   }
 
-  void _clearPreviewOnly() {
-    setState(() {
-      _previewSnapshot = null;
-      _offlinePreview = false;
-      _message = 'Route preview cleared. Move a pin or build again.';
-      _mapVersion += 1;
-    });
-  }
-
   Future<void> _clearGuidePoints() async {
     if (_guidePoints.isEmpty) {
       return;
@@ -614,27 +605,18 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final existing = _resolvedExistingRoute;
+    final isEditing = existing != null;
 
     final body = RefreshIndicator(
       onRefresh: _loadRoutes,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
         children: [
-          if (widget.embedded) ...[
-            Align(
-              alignment: Alignment.centerRight,
-              child: OutlinedButton.icon(
-                onPressed: _loadingRoutes ? null : _loadRoutes,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Refresh routes'),
-              ),
-            ),
-            const SizedBox(height: 12),
-          ],
           Form(
             key: _formKey,
             child: LayoutBuilder(
-              builder: (context, constraints) => _buildRouteDetailsCard(theme),
+              builder: (context, constraints) =>
+                  _buildRouteDetailsCard(theme, existing),
             ),
           ),
           const SizedBox(height: 16),
@@ -694,25 +676,50 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Build Route'),
+        title: Text(isEditing ? 'Update Route' : 'Build Route'),
       ),
       body: body,
     );
   }
 
-  Widget _buildRouteDetailsCard(ThemeData theme) {
+  Widget _buildRouteDetailsCard(
+    ThemeData theme,
+    RouteSummaryModel? existing,
+  ) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Route details', style: theme.textTheme.titleLarge),
+            Text(
+              existing == null ? 'Route details' : 'Update route details',
+              style: theme.textTheme.titleLarge,
+            ),
             const SizedBox(height: 8),
             Text(
-              'Pin the start and end points directly on OpenStreetMap, then save the exact same route geometry for online and offline use.',
+              existing == null
+                  ? 'Pin the start and end points directly on OpenStreetMap, then save the exact same route geometry for online and offline use.'
+                  : 'You are editing ${existing.label}. Adjust the pins, guide points, route details, or fare settings, then update the saved geometry.',
               style: theme.textTheme.bodyMedium,
             ),
+            if (existing != null) ...[
+              const SizedBox(height: 14),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F6A5F).withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Text(
+                  'Editing existing route: ${existing.label}',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 18),
             LayoutBuilder(
               builder: (context, constraints) {
@@ -823,7 +830,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
                   width: tileWidth(1),
                   child: _PinActionTile(
                     title: 'Place Start Pin',
-                    subtitle: 'Switch map taps to the start marker',
+                    subtitle: 'Tap the map to place the start pin',
                     icon: Icons.flag_circle_outlined,
                     selected: _placementMode == _PinPlacementMode.start,
                     accent: const Color(0xFF0F6A5F),
@@ -832,6 +839,22 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
                         _placementMode = _PinPlacementMode.start;
                         _message =
                             'Tap the map to place or move the start pin.';
+                      });
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: tileWidth(1),
+                  child: _PinActionTile(
+                    title: 'Place End Pin',
+                    subtitle: 'Tap the map to place the end pin',
+                    icon: Icons.location_on_outlined,
+                    selected: _placementMode == _PinPlacementMode.end,
+                    accent: const Color(0xFF8A3B5D),
+                    onTap: () {
+                      setState(() {
+                        _placementMode = _PinPlacementMode.end;
+                        _message = 'Tap the map to place or move the end pin.';
                       });
                     },
                   ),
@@ -856,34 +879,8 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
                 SizedBox(
                   width: tileWidth(1),
                   child: _PinActionTile(
-                    title: 'Place End Pin',
-                    subtitle: 'Switch map taps to the destination marker',
-                    icon: Icons.location_on_outlined,
-                    selected: _placementMode == _PinPlacementMode.end,
-                    accent: const Color(0xFF8A3B5D),
-                    onTap: () {
-                      setState(() {
-                        _placementMode = _PinPlacementMode.end;
-                        _message = 'Tap the map to place or move the end pin.';
-                      });
-                    },
-                  ),
-                ),
-                SizedBox(
-                  width: tileWidth(1),
-                  child: _PinActionTile(
-                    title: 'Clear Route Only',
-                    subtitle: 'Keep pins but remove live route geometry',
-                    icon: Icons.layers_clear_outlined,
-                    accent: const Color(0xFF2157A5),
-                    onTap: _clearPreviewOnly,
-                  ),
-                ),
-                SizedBox(
-                  width: tileWidth(1),
-                  child: _PinActionTile(
-                    title: 'Reset All Pins',
-                    subtitle: 'Clear both pins and the preview route',
+                    title: 'Clear All',
+                    subtitle: 'Clear pins, guide points, and preview route',
                     icon: Icons.restart_alt,
                     accent: const Color(0xFFE29B2D),
                     onTap: _clearPins,
@@ -1043,11 +1040,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
               spacing: 12,
               runSpacing: 12,
               children: [
-                OutlinedButton.icon(
-                  onPressed: _buildingRoute ? null : () => _buildLiveRoute(),
-                  icon: const Icon(Icons.route_outlined),
-                  label: const Text('Refresh Live Route'),
-                ),
                 FilledButton.icon(
                   onPressed: _savingRoute ? null : _saveRoute,
                   icon: _savingRoute

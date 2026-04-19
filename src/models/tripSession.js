@@ -25,6 +25,7 @@ const tripSessionSchema = new Schema(
     startedAt: { type: Date },
     endedAt: { type: Date },
     acceptRequests: { type: Boolean, default: true },
+    manualOccupancyCount: { type: Number, default: 0, min: 0 },
     occupancyCount: { type: Number, default: 0, min: 0 },
     active: { type: Boolean, default: false },
     notes: { type: String, trim: true },

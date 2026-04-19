@@ -65,4 +65,16 @@ class TripService {
     );
     return TripSession.fromJson(response['data'] as Map<String, dynamic>);
   }
+
+  Future<TripSession> updateTripManualOccupancy(
+    String tripId,
+    int manualOccupancyCount,
+  ) async {
+    final response = await _client.request(
+      method: 'PATCH',
+      path: '/trips/$tripId/occupancy',
+      body: {'manualOccupancyCount': manualOccupancyCount},
+    );
+    return TripSession.fromJson(response['data'] as Map<String, dynamic>);
+  }
 }
