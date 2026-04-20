@@ -141,6 +141,16 @@ const validateBoardingAttempt = async ({
     tripSessionId,
     pickupRequestId: pickupRequest._id,
     pickupType,
+    boardingStopRef: String(
+      pickupRequest.terminalStopRef ||
+          pickupRequest.stopRef ||
+          pickupRequest.fareSnapshot?.boardingStopRef ||
+          ''
+    ).trim(),
+    boardingLocation: {
+      type: 'Point',
+      coordinates: [Number(lngPickup), Number(latPickup)],
+    },
     destinationStopRef: normalizedDestinationStopRef,
     destinationLocation: {
       type: 'Point',

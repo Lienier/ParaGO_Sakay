@@ -5,12 +5,11 @@ const Jeepney = require('../models/jeepney');
 const asyncHandler = require('../utils/asyncHandler');
 const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
-const { DRIVER, ADMIN } = require('../constants/roles');
+const { DRIVER } = require('../constants/roles');
 const { ok } = require('../utils/response');
 const ApiError = require('../utils/apiError');
 const { ensureLatLng } = require('../utils/validators');
 const { hasOwn } = require('../utils/object');
-const validateObjectId = require('../middlewares/validateObjectId');
 const { requireCurrentDriver } = require('../services/routeContext.service');
 const { emitJeepneyLocationUpdate } = require('../realtime/socketServer');
 
@@ -21,8 +20,22 @@ router.get(
   authenticate,
   authorize(DRIVER),
   asyncHandler(async (req, res) => {
-    const profile = await requireCurrentDriver(req.user);
-    return ok(res, profile, 'Driver profile');
+    const profile = await requireCurrentDriver(req.user, {
+      populate: {
+        path: 'userId',
+        select: 'status',
+      },
+    });
+    const raw =
+      typeof profile.toObject === 'function' ? profile.toObject() : profile;
+    return ok(
+      res,
+      {
+        ...raw,
+        accountStatus: profile.userId?.status?.toString() ?? req.user.status ?? 'unknown',
+      },
+      'Driver profile'
+    );
   })
 );
 
@@ -180,19 +193,5 @@ for (const method of locationMethods) {
     asyncHandler(updateDriverJeepneyLocation)
   );
 }
-
-router.patch(
-  '/:id/verify',
-  authenticate,
-  authorize(ADMIN),
-  validateObjectId(),
-  asyncHandler(async (req, res) => {
-    const profile = await Driver.findById(req.params.id);
-    if (!profile) throw new ApiError(404, 'Driver profile not found');
-    profile.isVerified = req.body.isVerified ?? true;
-    await profile.save();
-    return ok(res, profile, 'Driver verification updated');
-  })
-);
 
 module.exports = router;

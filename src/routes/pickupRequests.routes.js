@@ -58,21 +58,22 @@ const router = express.Router();
 
 const isFinitePositiveNumber = (value) =>
   Number.isFinite(Number(value)) && Number(value) > 0;
+const normalizeStatus = (value) => String(value || '').trim().toLowerCase();
 
 const pointCoordinates = (value) =>
   Array.isArray(value?.coordinates) && value.coordinates.length >= 2
     ? [Number(value.coordinates[0]), Number(value.coordinates[1])]
     : null;
 
-const ensureDriverCanHandlePickup = ({ driver, trip }) => {
+const ensureDriverCanHandlePickup = ({ driver, trip, accountStatus }) => {
   if (!driver) {
     throw new ApiError(403, 'Driver profile missing');
   }
-  if (driver.status !== 'active') {
+  if (normalizeStatus(accountStatus) !== 'active') {
     throw new ApiError(403, 'Driver account must be active to handle pickups');
   }
-  if (!driver.isVerified) {
-    throw new ApiError(403, 'Driver must be verified to handle pickups');
+  if (driver.status !== 'active') {
+    throw new ApiError(403, 'Driver must be online to handle pickups');
   }
   if (!driver.assignedJeepneyId) {
     throw new ApiError(403, 'Driver must be assigned to a jeepney before handling pickups');
@@ -165,7 +166,14 @@ const resolveEligibleTripForRoute = async ({
     acceptRequests: true,
     ...(excludeTripIds.length > 0 ? { _id: { $nin: excludeTripIds } } : {}),
   })
-    .populate('driverId', 'userId isVerified status')
+    .populate({
+      path: 'driverId',
+      select: 'userId status',
+      populate: {
+        path: 'userId',
+        select: 'status',
+      },
+    })
     .populate('jeepneyId', 'capacity status lastKnownLocation plateNumber jeepneyName')
     .sort({ startedAt: -1, createdAt: -1 });
 
@@ -180,7 +188,12 @@ const resolveEligibleTripForRoute = async ({
     const driver = trip.driverId;
     const jeepney = trip.jeepneyId;
     const tripOperatingMode = String(trip.operatingMode || 'route');
-    if (!driver || !driver.userId || !driver.isVerified || driver.status !== 'active') {
+    if (
+      !driver ||
+      !driver.userId ||
+      normalizeStatus(driver.userId.status) !== 'active' ||
+      driver.status !== 'active'
+    ) {
       continue;
     }
     if (!jeepney || jeepney.status !== 'active' || !isFinitePositiveNumber(jeepney.capacity)) {
@@ -521,7 +534,11 @@ router.patch(
       driver = await ensureDriverAssignedToTrip(req.user, trip, {
         forbiddenMessage: 'You are not assigned to this request',
       });
-      ensureDriverCanHandlePickup({ driver, trip });
+      ensureDriverCanHandlePickup({
+        driver,
+        trip,
+        accountStatus: req.user.status,
+      });
     }
     if (!trip.driverId) {
       throw new ApiError(409, 'Trip driver missing');
@@ -613,7 +630,11 @@ router.patch(
       const driver = await ensureDriverAssignedToTrip(req.user, trip, {
         forbiddenMessage: 'You are not assigned to this request',
       });
-      ensureDriverCanHandlePickup({ driver, trip });
+      ensureDriverCanHandlePickup({
+        driver,
+        trip,
+        accountStatus: req.user.status,
+      });
     }
     const rideSession = await RideSession.findOne({
       pickupRequestId: request._id,

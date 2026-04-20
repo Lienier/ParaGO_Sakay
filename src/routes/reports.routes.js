@@ -57,9 +57,14 @@ const buildDailyTimeline = ({ from, to, boardedRows, unloadedRows }) => {
 const normalizeTopLocationRows = (rows = []) =>
   rows
     .map((entry) => {
-      const coordinates = Array.isArray(entry?._id?.coordinates)
+      const embeddedCoordinates = Array.isArray(entry?._id?.coordinates)
         ? entry._id.coordinates.map((value) => Number(value))
         : [];
+      const explicitLongitude = Number(entry?.longitude);
+      const explicitLatitude = Number(entry?.latitude);
+      const coordinates = embeddedCoordinates.length >= 2
+          ? embeddedCoordinates
+          : [explicitLongitude, explicitLatitude];
       if (coordinates.length < 2) {
         return null;
       }
@@ -68,7 +73,10 @@ const normalizeTopLocationRows = (rows = []) =>
         return null;
       }
       return {
-        label: entry?._id?.label?.toString() || 'Unknown location',
+        label:
+          entry?._id?.label?.toString() ||
+          entry?._id?.toString() ||
+          'Unknown location',
         count: Number(entry.count || 0),
         location: {
           latitude,
@@ -253,15 +261,38 @@ router.get(
         {
           $unwind: {
             path: '$pickupRequest',
-            preserveNullAndEmptyArrays: false,
+            preserveNullAndEmptyArrays: true,
           },
         },
         {
           $project: {
             label: {
-              $ifNull: ['$pickupRequest.stopRef', '$fareSnapshot.boardingStopRef'],
+              $ifNull: [
+                '$boardingStopRef',
+                {
+                  $ifNull: [
+                    '$pickupRequest.terminalStopRef',
+                    {
+                      $ifNull: [
+                        '$pickupRequest.stopRef',
+                        '$fareSnapshot.boardingStopRef',
+                      ],
+                    },
+                  ],
+                },
+              ],
             },
-            coordinates: '$pickupRequest.pickupLocation.coordinates',
+            coordinates: {
+              $ifNull: [
+                '$boardingLocation.coordinates',
+                {
+                  $ifNull: [
+                    '$pickupRequest.terminalLocation.coordinates',
+                    '$pickupRequest.pickupLocation.coordinates',
+                  ],
+                },
+              ],
+            },
           },
         },
         {
@@ -272,15 +303,14 @@ router.get(
         },
         {
           $group: {
-            _id: {
-              label: '$label',
-              coordinates: '$coordinates',
-            },
+            _id: '$label',
             count: { $sum: 1 },
+            longitude: { $avg: { $arrayElemAt: ['$coordinates', 0] } },
+            latitude: { $avg: { $arrayElemAt: ['$coordinates', 1] } },
           },
         },
-        { $sort: { count: -1, '_id.label': 1 } },
-        { $limit: 6 },
+        { $sort: { count: -1, _id: 1 } },
+        { $limit: 30 },
       ]),
       RideSession.aggregate([
         { $match: unloadedMatch },
@@ -300,15 +330,14 @@ router.get(
         },
         {
           $group: {
-            _id: {
-              label: '$label',
-              coordinates: '$coordinates',
-            },
+            _id: '$label',
             count: { $sum: 1 },
+            longitude: { $avg: { $arrayElemAt: ['$coordinates', 0] } },
+            latitude: { $avg: { $arrayElemAt: ['$coordinates', 1] } },
           },
         },
-        { $sort: { count: -1, '_id.label': 1 } },
-        { $limit: 6 },
+        { $sort: { count: -1, _id: 1 } },
+        { $limit: 30 },
       ]),
     ]);
 

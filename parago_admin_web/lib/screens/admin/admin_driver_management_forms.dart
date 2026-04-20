@@ -9,7 +9,7 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
       isScrollControlled: true,
       builder: (sheetContext) {
         return StatefulBuilder(
-          builder: (context, modalSetState) => Padding(
+          builder: (context, _) => Padding(
             padding: EdgeInsets.only(
               left: 16,
               right: 16,
@@ -159,12 +159,6 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                     ],
                     onChanged: (value) => _createStatus = value ?? 'active',
                   ),
-                  SwitchListTile(
-                    value: _createVerified,
-                    onChanged: (value) =>
-                        modalSetState(() => _createVerified = value),
-                    title: const Text('Verified'),
-                  ),
                   const SizedBox(height: 10),
                   FilledButton(
                     onPressed:
@@ -200,7 +194,6 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
       'deactivated' => 'deactivated',
       _ => 'active',
     };
-    _verifiedSelection.value = driver['isVerified'] == true;
 
     await showModalBottomSheet(
       context: context,
@@ -325,15 +318,6 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                   ),
                 ),
                 const SizedBox(height: 10),
-                ValueListenableBuilder<bool>(
-                  valueListenable: _verifiedSelection,
-                  builder: (_, isChecked, __) => SwitchListTile(
-                    value: isChecked,
-                    onChanged: (value) => _verifiedSelection.value = value,
-                    title: const Text('Verified'),
-                  ),
-                ),
-                const SizedBox(height: 8),
                 FilledButton(
                   onPressed: _saving ? null : () => _updateDriver(driver),
                   child: const Text('Save changes'),

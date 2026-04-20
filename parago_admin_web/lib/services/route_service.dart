@@ -42,4 +42,8 @@ class RouteService {
     );
     return RouteSummaryModel.fromJson(response['data'] as Map<String, dynamic>);
   }
+
+  Future<RouteSummaryModel> reactivateRoute(String routeId) {
+    return updateRoute(routeId, {'status': 'active'});
+  }
 }

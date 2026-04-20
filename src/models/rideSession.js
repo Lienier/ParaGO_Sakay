@@ -25,6 +25,15 @@ const rideSessionSchema = new Schema(
       enum: ['roadside', 'terminal'],
       default: 'roadside',
     },
+    boardingStopRef: { type: String, trim: true },
+    boardingLocation: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point',
+      },
+      coordinates: { type: [Number] },
+    },
     // Enforced at boarding validation time so legacy ride sessions can still be updated safely.
     destinationStopRef: { type: String, trim: true },
     destinationLocation: {
@@ -50,6 +59,7 @@ const rideSessionSchema = new Schema(
 
 rideSessionSchema.index({ passengerId: 1, tripSessionId: 1, status: 1 });
 rideSessionSchema.index({ tripSessionId: 1, status: 1 });
+rideSessionSchema.index({ boardingLocation: '2dsphere' });
 rideSessionSchema.index({ destinationLocation: '2dsphere' });
 
 module.exports = mongoose.model('RideSession', rideSessionSchema);

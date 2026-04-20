@@ -10,7 +10,6 @@ const driverSchema = new Schema(
     phone: { type: String, trim: true },
     assignedJeepneyId: { type: Schema.Types.ObjectId, ref: 'Jeepney' },
     assignedRouteId: { type: Schema.Types.ObjectId, ref: 'Route' },
-    isVerified: { type: Boolean, default: false },
     status: {
       type: String,
       enum: ['active', 'inactive'],
@@ -34,7 +33,6 @@ const driverSchema = new Schema(
 );
 
 driverSchema.index({ assignedRouteId: 1, status: 1 });
-driverSchema.index({ assignedJeepneyId: 1, isVerified: 1 });
 driverSchema.index({ assignedRouteId: 1, operatingMode: 1, terminalQueueStatus: 1 });
 
 module.exports = mongoose.model('Driver', driverSchema);

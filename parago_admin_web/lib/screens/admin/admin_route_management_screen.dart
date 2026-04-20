@@ -115,6 +115,53 @@ class _AdminRouteManagementScreenState
     }
   }
 
+  Future<void> _reactivateRoute(RouteSummaryModel route) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Reactivate route'),
+        content: Text(
+          'Make ${route.label} available again in active route choices?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Reactivate'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    if (!mounted) return;
+
+    final session = context.read<SessionController>();
+    final routeService = RouteService(session.apiClient);
+
+    setState(() => _busyRouteId = route.id);
+    try {
+      await ActionFeedback.run<void>(
+        context: context,
+        loadingMessage: 'Reactivating route...',
+        successMessage: '${route.code} reactivated.',
+        action: () => routeService.reactivateRoute(route.id),
+        onSuccess: (_) async {
+          if (!mounted) return;
+          await _load();
+          widget.onChanged?.call();
+        },
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _busyRouteId = null);
+      }
+    }
+  }
+
   Future<void> _openLandmarkEditor(RouteSummaryModel route) async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
@@ -318,6 +365,7 @@ class _AdminRouteManagementScreenState
             onEditRoute: _openRouteBuilder,
             onEditLandmarks: _openLandmarkEditor,
             onDeactivate: _deactivateRoute,
+            onActivate: null,
           ),
           const SizedBox(height: 18),
           _RouteSection(
@@ -328,6 +376,7 @@ class _AdminRouteManagementScreenState
             onEditRoute: _openRouteBuilder,
             onEditLandmarks: _openLandmarkEditor,
             onDeactivate: null,
+            onActivate: _reactivateRoute,
           ),
         ],
       ),
@@ -355,6 +404,7 @@ class _RouteSection extends StatelessWidget {
     this.onEditRoute,
     required this.onEditLandmarks,
     required this.onDeactivate,
+    required this.onActivate,
   });
 
   final String title;
@@ -364,6 +414,7 @@ class _RouteSection extends StatelessWidget {
   final ValueChanged<RouteSummaryModel>? onEditRoute;
   final ValueChanged<RouteSummaryModel> onEditLandmarks;
   final ValueChanged<RouteSummaryModel>? onDeactivate;
+  final ValueChanged<RouteSummaryModel>? onActivate;
 
   int _gridColumns(double maxWidth) {
     final columns = (maxWidth / 300).floor();
@@ -405,6 +456,7 @@ class _RouteSection extends StatelessWidget {
                             onEditRoute: onEditRoute,
                             onEditLandmarks: onEditLandmarks,
                             onDeactivate: onDeactivate,
+                            onActivate: onActivate,
                           ),
                         ),
                     ],
@@ -425,6 +477,7 @@ class _RouteRow extends StatelessWidget {
     this.onEditRoute,
     required this.onEditLandmarks,
     required this.onDeactivate,
+    required this.onActivate,
   });
 
   final RouteSummaryModel route;
@@ -432,6 +485,7 @@ class _RouteRow extends StatelessWidget {
   final ValueChanged<RouteSummaryModel>? onEditRoute;
   final ValueChanged<RouteSummaryModel> onEditLandmarks;
   final ValueChanged<RouteSummaryModel>? onDeactivate;
+  final ValueChanged<RouteSummaryModel>? onActivate;
 
   @override
   Widget build(BuildContext context) {
@@ -570,6 +624,18 @@ class _RouteRow extends StatelessWidget {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Text('Deactivate'),
+                ),
+              if (onActivate != null)
+                FilledButton.tonal(
+                  onPressed: busy ? null : () => onActivate!(route),
+                  style: compactFilledStyle,
+                  child: busy
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Reactivate'),
                 ),
             ],
           ),

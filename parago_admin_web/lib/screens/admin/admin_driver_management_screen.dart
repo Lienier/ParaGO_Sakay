@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 
 import '../../core/utils/action_feedback.dart';
 import '../../models/transport/route_summary.dart';
-import '../../models/trip/trip_session.dart';
 import '../../services/admin_service.dart';
 import '../../services/route_service.dart';
 import '../../services/session_controller.dart';
@@ -50,16 +49,13 @@ class _AdminDriverManagementScreenState
   final ValueNotifier<String?> _routeSelection = ValueNotifier<String?>(null);
   final ValueNotifier<String> _statusSelection =
       ValueNotifier<String>('active');
-  final ValueNotifier<bool> _verifiedSelection = ValueNotifier<bool>(false);
 
   List<dynamic> _drivers = [];
   List<RouteSummaryModel> _routes = [];
-  List<TripSession> _trips = [];
 
   Timer? _presenceRefreshTimer;
   bool _loading = false;
   bool _saving = false;
-  String? _schedulingDriverId;
   String? _error;
   String _statusFilter = 'all';
 
@@ -72,7 +68,6 @@ class _AdminDriverManagementScreenState
   String? _createRouteId;
   String? _createJeepneyPlateNumber;
   String? _createJeepneyCapacity;
-  bool _createVerified = false;
   String _createStatus = 'active';
 
   @override
@@ -98,7 +93,6 @@ class _AdminDriverManagementScreenState
     _editJeepneyCapacityCtrl.dispose();
     _routeSelection.dispose();
     _statusSelection.dispose();
-    _verifiedSelection.dispose();
     super.dispose();
   }
 
@@ -131,10 +125,6 @@ class _AdminDriverManagementScreenState
   bool _hasRoute(String? routeId) {
     if (routeId == null || routeId.isEmpty) return false;
     return _routes.any((route) => route.id == routeId);
-  }
-
-  bool _routeHasTerminalStop(RouteSummaryModel route) {
-    return route.stopPoints.isNotEmpty;
   }
 
   Map<String, dynamic> _driverRoute(Map<String, dynamic> driver) {
@@ -212,8 +202,6 @@ class _AdminDriverManagementScreenState
         return accountStatus == 'suspended';
       case 'account_deactivated':
         return accountStatus == 'deactivated';
-      case 'verified':
-        return driver['isVerified'] == true;
       case 'unassigned':
         return _nullableIdOf(driver['assignedRouteId']) == null;
       default:
@@ -240,30 +228,6 @@ class _AdminDriverManagementScreenState
     final legacy = _textOf(driver['status']).toLowerCase();
     if (legacy == 'active') return 'online';
     return 'offline';
-  }
-
-  DateTime? _lastSeenAtOf(Map<String, dynamic> driver) {
-    final raw = driver['lastSeenAt'];
-    if (raw == null) return null;
-    return DateTime.tryParse(raw.toString())?.toLocal();
-  }
-
-  String _lastSeenLabel(DateTime? value) {
-    if (value == null) {
-      return 'No recent heartbeat';
-    }
-    final delta = DateTime.now().difference(value);
-    if (delta.inSeconds < 60) {
-      final seconds = delta.inSeconds.clamp(0, 59);
-      return '$seconds sec ago';
-    }
-    if (delta.inMinutes < 60) {
-      return '${delta.inMinutes} min ago';
-    }
-    if (delta.inHours < 24) {
-      return '${delta.inHours} hr ago';
-    }
-    return '${delta.inDays} day${delta.inDays == 1 ? '' : 's'} ago';
   }
 
   Color _accountStatusColor(String status) {
@@ -306,14 +270,12 @@ class _AdminDriverManagementScreenState
       final results = await Future.wait<dynamic>([
         admin.getDrivers(),
         routeService.getRoutes(),
-        admin.getTrips(),
       ]);
 
       if (!mounted) return;
       setState(() {
         _drivers = results[0] as List<dynamic>;
         _routes = results[1] as List<RouteSummaryModel>;
-        _trips = results[2] as List<TripSession>;
         _error = null;
       });
     } catch (error) {
@@ -322,212 +284,6 @@ class _AdminDriverManagementScreenState
     } finally {
       if (mounted && !silent) {
         setState(() => _loading = false);
-      }
-    }
-  }
-
-  TripSession? _openTripForDriver(String driverId) {
-    if (driverId.isEmpty) return null;
-    for (final trip in _trips) {
-      if (trip.driverId == driverId &&
-          (trip.status == 'scheduled' || trip.status == 'active')) {
-        return trip;
-      }
-    }
-    return null;
-  }
-
-  String? _scheduleTripBlockReason(Map<String, dynamic> driver) {
-    final driverId = _idOf(driver['_id']);
-    if (driverId.isEmpty) {
-      return 'Driver profile is missing.';
-    }
-
-    final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
-    final jeepneyId = _nullableIdOf(jeepney);
-    if (jeepneyId == null) {
-      return 'Assign a jeepney first.';
-    }
-    if (_textOf(jeepney?['status']).toLowerCase() != 'active') {
-      return 'Assigned jeepney must be active.';
-    }
-
-    final openTrip = _openTripForDriver(driverId);
-    if (openTrip != null) {
-      return 'Driver already has a ${openTrip.status} trip.';
-    }
-
-    return null;
-  }
-
-  Future<void> _scheduleTrip(Map<String, dynamic> driver) async {
-    final blockReason = _scheduleTripBlockReason(driver);
-    if (blockReason != null) {
-      if (!mounted) return;
-      await ActionFeedback.showInfoDialog(
-        context,
-        title: 'Trip cannot be scheduled',
-        message: blockReason,
-      );
-      return;
-    }
-
-    final activeRoutes = _routes
-        .where((route) => route.status.toLowerCase() == 'active')
-        .toList(growable: false);
-    if (activeRoutes.isEmpty) {
-      if (!mounted) return;
-      await ActionFeedback.showInfoDialog(
-        context,
-        title: 'Trip cannot be scheduled',
-        message: 'No active route is available for scheduling.',
-      );
-      return;
-    }
-
-    final defaultRoute = _driverRoute(driver);
-    String selectedRouteId =
-        _nullableIdOf(defaultRoute) ?? activeRoutes.first.id;
-    String operatingMode = 'route';
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        final selectedRoute = _routes.firstWhere(
-          (route) => route.id == selectedRouteId,
-          orElse: () => activeRoutes.first,
-        );
-        final terminalAvailable = _routeHasTerminalStop(selectedRoute);
-        final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
-        return AlertDialog(
-          title: const Text('Schedule trip'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Create a scheduled trip for ${_driverDisplayName(driver)} using '
-                '${jeepney?['plateNumber'] ?? 'the assigned jeepney'}.',
-              ),
-              const SizedBox(height: 16),
-              StatefulBuilder(
-                builder: (context, setInnerState) =>
-                    DropdownButtonFormField<String>(
-                  initialValue: selectedRouteId,
-                  decoration: const InputDecoration(labelText: 'Route'),
-                  items: [
-                    for (final route in activeRoutes)
-                      DropdownMenuItem(
-                        value: route.id,
-                        child: Text('${route.code} - ${route.name}'),
-                      ),
-                  ],
-                  onChanged: (value) {
-                    if (value == null || value.isEmpty) return;
-                    final match = activeRoutes.firstWhere(
-                      (route) => route.id == value,
-                      orElse: () => activeRoutes.first,
-                    );
-                    setInnerState(() {
-                      selectedRouteId = value;
-                      if (!_routeHasTerminalStop(match) &&
-                          operatingMode == 'terminal_queue') {
-                        operatingMode = 'route';
-                      }
-                    });
-                  },
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Selected route: ${selectedRoute.code} - ${selectedRoute.name}',
-              ),
-              const SizedBox(height: 12),
-              StatefulBuilder(
-                builder: (context, setInnerState) =>
-                    DropdownButtonFormField<String>(
-                  initialValue: operatingMode,
-                  decoration:
-                      const InputDecoration(labelText: 'Operating mode'),
-                  items: [
-                    DropdownMenuItem(
-                      value: 'route',
-                      child: Text('Direct to route'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'terminal_queue',
-                      enabled: terminalAvailable,
-                      child: Text('Join terminal queue'),
-                    ),
-                  ],
-                  onChanged: (value) {
-                    if (value == null || value.isEmpty) return;
-                    setInnerState(() => operatingMode = value);
-                  },
-                ),
-              ),
-              if (!terminalAvailable) ...[
-                const SizedBox(height: 8),
-                const Text(
-                  'Terminal queue is unavailable for this route until a terminal stop is configured.',
-                ),
-              ],
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Schedule'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (confirmed != true) {
-      return;
-    }
-    if (!mounted) {
-      return;
-    }
-
-    final session = context.read<SessionController>();
-    final admin = AdminService(session.apiClient);
-    final driverId = _idOf(driver['_id']);
-    final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
-    final jeepneyId = _nullableIdOf(jeepney)!;
-    final selectedRoute = _routes.firstWhere(
-      (route) => route.id == selectedRouteId,
-      orElse: () => activeRoutes.first,
-    );
-    final routeId = selectedRoute.id;
-
-    setState(() => _schedulingDriverId = driverId);
-    try {
-      await ActionFeedback.run<dynamic>(
-        context: context,
-        loadingMessage: 'Scheduling trip...',
-        successMessage:
-            'Trip scheduled for ${_driverDisplayName(driver)} (${selectedRoute.code} - ${selectedRoute.name}) in ${operatingMode == 'terminal_queue' ? 'terminal queue' : 'route'} mode.',
-        action: () => admin.createTrip(
-          driverId: driverId,
-          jeepneyId: jeepneyId,
-          routeId: routeId,
-          operatingMode: operatingMode,
-        ),
-        onSuccess: (_) async {
-          if (!mounted) return;
-          await _load();
-          widget.onChanged?.call();
-        },
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _schedulingDriverId = null);
       }
     }
   }
@@ -542,7 +298,6 @@ class _AdminDriverManagementScreenState
     _createRouteId = null;
     _createJeepneyPlateNumber = null;
     _createJeepneyCapacity = null;
-    _createVerified = false;
     _createStatus = 'active';
     _createLicenseCtrl.clear();
     _createEmployeeCtrl.clear();
@@ -574,7 +329,6 @@ class _AdminDriverManagementScreenState
           routeId: _createRouteId,
           jeepneyPlateNumber: _createJeepneyPlateNumber!.trim(),
           jeepneyCapacity: int.parse(_createJeepneyCapacity!.trim()),
-          isVerified: _createVerified,
           status: _createStatus,
         ),
         onSuccess: (_) async {
@@ -611,7 +365,6 @@ class _AdminDriverManagementScreenState
           licenseNumber: _nullableText(_editLicenseCtrl.text),
           employeeNumber: _nullableText(_editEmployeeCtrl.text),
           phone: _nullableText(_editPhoneCtrl.text),
-          isVerified: _verifiedSelection.value,
           assignedRouteId: _routeSelection.value,
           status: _statusSelection.value,
           jeepneyPlateNumber: _editJeepneyPlateCtrl.text.trim(),
@@ -641,8 +394,6 @@ class _AdminDriverManagementScreenState
     final userEmail = _driverEmail(driver);
     final accountStatus = _accountStatusOf(driver);
     final presenceStatus = _presenceStatusOf(driver);
-    final lastSeenAt = _lastSeenAtOf(driver);
-    final isVerified = driver['isVerified'] == true;
     final license = _textOf(driver['licenseNumber']);
     final employee = _textOf(driver['employeeNumber']);
     final phone = _textOf(driver['phone']);
@@ -651,19 +402,9 @@ class _AdminDriverManagementScreenState
         ? 'Unassigned route'
         : '${routeData['code'] ?? ''} ${routeData['name']}'.trim();
     final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
-    final driverId = _idOf(driver['_id']);
-    final openTrip = _openTripForDriver(driverId);
-    final scheduleBlockReason = _scheduleTripBlockReason(driver);
-    final schedulingThisDriver = _schedulingDriverId == driverId;
     final jeepneyPlate =
         jeepney?['plateNumber']?.toString() ?? 'No jeepney assigned';
     final jeepneyCapacity = jeepney?['capacity']?.toString() ?? '';
-    final compactButtonStyle = OutlinedButton.styleFrom(
-      minimumSize: const Size(0, 40),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      visualDensity: VisualDensity.compact,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
     final compactTextButtonStyle = TextButton.styleFrom(
       minimumSize: const Size(0, 40),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -713,10 +454,6 @@ class _AdminDriverManagementScreenState
                   label: 'presence: ${_statusLabel(presenceStatus)}',
                   color: _presenceStatusColor(presenceStatus),
                 ),
-                _Badge(
-                  label: isVerified ? 'verified' : 'not verified',
-                  color: isVerified ? Colors.blue : Colors.grey,
-                ),
               ],
             ),
             const SizedBox(height: 10),
@@ -727,52 +464,11 @@ class _AdminDriverManagementScreenState
             infoLine('Jeepney plate', jeepneyPlate),
             if (jeepneyCapacity.isNotEmpty)
               infoLine('Capacity', jeepneyCapacity),
-            infoLine('Last heartbeat', _lastSeenLabel(lastSeenAt)),
-            const SizedBox(height: 6),
-            infoLine(
-              'Trip status',
-              openTrip == null
-                  ? 'No scheduled trip'
-                  : _statusLabel(openTrip.status),
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            if (scheduleBlockReason != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                scheduleBlockReason,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.error,
-                      fontWeight: FontWeight.w600,
-                    ),
-              ),
-            ],
             const SizedBox(height: 10),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                OutlinedButton.icon(
-                  onPressed: schedulingThisDriver || scheduleBlockReason != null
-                      ? null
-                      : () => _scheduleTrip(driver),
-                  style: compactButtonStyle,
-                  icon: schedulingThisDriver
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.playlist_add_check_circle_outlined),
-                  label: Text(
-                    schedulingThisDriver
-                        ? 'Scheduling...'
-                        : openTrip == null
-                            ? 'Schedule trip'
-                            : 'Trip ready',
-                  ),
-                ),
                 TextButton.icon(
                   onPressed: () => _openEditSheet(driver),
                   style: compactTextButtonStyle,
@@ -805,8 +501,6 @@ class _AdminDriverManagementScreenState
     final activeAccountCount = allDrivers
         .where((driver) => _accountStatusOf(driver) == 'active')
         .length;
-    final verifiedCount =
-        allDrivers.where((driver) => driver['isVerified'] == true).length;
     final unassignedCount = allDrivers
         .where((driver) => _nullableIdOf(driver['assignedRouteId']) == null)
         .length;
@@ -847,10 +541,6 @@ class _AdminDriverManagementScreenState
                       _DriverMetricChip(
                         label: 'Active accounts',
                         value: activeAccountCount.toString(),
-                      ),
-                      _DriverMetricChip(
-                        label: 'Verified',
-                        value: verifiedCount.toString(),
                       ),
                       _DriverMetricChip(
                         label: 'Unassigned',
@@ -899,10 +589,6 @@ class _AdminDriverManagementScreenState
                           DropdownMenuItem(
                             value: 'account_deactivated',
                             child: Text('Deactivated accounts'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'verified',
-                            child: Text('Verified only'),
                           ),
                           DropdownMenuItem(
                             value: 'unassigned',

@@ -867,7 +867,7 @@ class _ChartLegend extends StatelessWidget {
   }
 }
 
-class _PassengerFlowTopStopsCard extends StatelessWidget {
+class _PassengerFlowTopStopsCard extends StatefulWidget {
   const _PassengerFlowTopStopsCard({
     required this.title,
     required this.emptyLabel,
@@ -881,7 +881,44 @@ class _PassengerFlowTopStopsCard extends StatelessWidget {
   final Color accent;
 
   @override
+  State<_PassengerFlowTopStopsCard> createState() =>
+      _PassengerFlowTopStopsCardState();
+}
+
+class _PassengerFlowTopStopsCardState extends State<_PassengerFlowTopStopsCard> {
+  static const _itemsPerPage = 5;
+
+  int _page = 0;
+
+  @override
+  void didUpdateWidget(covariant _PassengerFlowTopStopsCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final maxPage = _pageCount(widget.stops) - 1;
+    if (_page > maxPage) {
+      _page = maxPage < 0 ? 0 : maxPage;
+    }
+  }
+
+  int _pageCount(List<_PassengerFlowLocation> stops) {
+    if (stops.isEmpty) {
+      return 1;
+    }
+    return ((stops.length - 1) ~/ _itemsPerPage) + 1;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final totalPages = _pageCount(widget.stops);
+    final currentPage = widget.stops.isEmpty
+        ? 0
+        : _page.clamp(0, totalPages - 1).toInt();
+    final start = currentPage * _itemsPerPage;
+    final visibleStops = widget.stops
+        .skip(start)
+        .take(_itemsPerPage)
+        .toList(growable: false);
+    final end = widget.stops.isEmpty ? 0 : start + visibleStops.length;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(18),
@@ -893,26 +930,27 @@ class _PassengerFlowTopStopsCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            title,
+            widget.title,
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w800,
                 ),
           ),
           const SizedBox(height: 12),
-          if (stops.isEmpty)
-            Text(emptyLabel)
+          if (widget.stops.isEmpty)
+            Text(widget.emptyLabel)
           else
             Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (var index = 0; index < stops.length; index += 1) ...[
+                for (var index = 0; index < visibleStops.length; index += 1) ...[
                   Row(
                     children: [
                       CircleAvatar(
                         radius: 14,
-                        backgroundColor: accent.withValues(alpha: 0.12),
-                        foregroundColor: accent,
+                        backgroundColor: widget.accent.withValues(alpha: 0.12),
+                        foregroundColor: widget.accent,
                         child: Text(
-                          '${index + 1}',
+                          '${start + index + 1}',
                           style: const TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w800,
@@ -922,7 +960,7 @@ class _PassengerFlowTopStopsCard extends StatelessWidget {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          stops[index].label,
+                          visibleStops[index].label,
                           style:
                               Theme.of(context).textTheme.bodyMedium?.copyWith(
                                     fontWeight: FontWeight.w600,
@@ -931,14 +969,60 @@ class _PassengerFlowTopStopsCard extends StatelessWidget {
                       ),
                       const SizedBox(width: 12),
                       Text(
-                        '${stops[index].count}',
+                        '${visibleStops[index].count}',
                         style: Theme.of(context).textTheme.labelLarge?.copyWith(
                               fontWeight: FontWeight.w800,
                             ),
                       ),
                     ],
                   ),
-                  if (index < stops.length - 1) const SizedBox(height: 10),
+                  if (index < visibleStops.length - 1) const SizedBox(height: 10),
+                ],
+                if (widget.stops.length > _itemsPerPage) ...[
+                  const SizedBox(height: 14),
+                  Text(
+                    'Showing ${start + 1}-$end of ${widget.stops.length}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: currentPage == 0
+                              ? null
+                              : () {
+                                  setState(() {
+                                    _page = currentPage - 1;
+                                  });
+                                },
+                          icon: const Icon(Icons.chevron_left),
+                          label: const Text('Previous'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: currentPage >= totalPages - 1
+                              ? null
+                              : () {
+                                  setState(() {
+                                    _page = currentPage + 1;
+                                  });
+                                },
+                          icon: const Icon(Icons.chevron_right),
+                          label: const Text('Next'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Page ${currentPage + 1} of $totalPages',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ],
               ],
             ),

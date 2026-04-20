@@ -25,6 +25,7 @@ const {
 
 const router = express.Router();
 const terminalQueueCreateRetryLimit = 4;
+const normalizeStatus = (value) => String(value || '').trim().toLowerCase();
 
 const buildRoutePathSnapshot = (route) => {
   const coordinates = Array.isArray(route?.path?.coordinates)
@@ -227,11 +228,11 @@ router.post(
 
     if (req.user.role === DRIVER) {
       const driver = await requireCurrentDriver(req.user);
-      if (driver.status !== 'active') {
+      if (normalizeStatus(req.user.status) !== 'active') {
         throw new ApiError(403, 'Driver account must be active to create trips');
       }
-      if (!driver.isVerified) {
-        throw new ApiError(403, 'Driver must be verified before creating trips');
+      if (driver.status !== 'active') {
+        throw new ApiError(403, 'Driver must be online to create trips');
       }
       if (
         driver.assignedJeepneyId &&
@@ -275,11 +276,11 @@ router.patch(
     }
     if (req.user.role === DRIVER) {
       const driver = await requireCurrentDriver(req.user);
-      if (driver.status !== 'active') {
+      if (normalizeStatus(req.user.status) !== 'active') {
         throw new ApiError(403, 'Driver account must be active to start a trip');
       }
-      if (!driver.isVerified) {
-        throw new ApiError(403, 'Driver must be verified to start a trip');
+      if (driver.status !== 'active') {
+        throw new ApiError(403, 'Driver must be online to start a trip');
       }
       if (
         driver.assignedJeepneyId &&

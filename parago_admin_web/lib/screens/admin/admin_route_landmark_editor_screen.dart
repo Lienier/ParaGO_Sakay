@@ -30,12 +30,15 @@ class _AdminRouteLandmarkEditorScreenState
     extends State<AdminRouteLandmarkEditorScreen> {
   static const _defaultCenter = LatLng(14.6091, 121.0223);
   static const _snapToleranceMeters = 150.0;
+  static const _landmarksPerPage = 6;
 
   final Distance _distance = const Distance();
+  final TextEditingController _landmarkSearchCtrl = TextEditingController();
 
   late List<_EditableRouteLandmark> _landmarks;
   bool _saving = false;
   bool _moveMode = false;
+  int _landmarkPage = 0;
   String? _selectedLandmarkId;
   String? _message;
 
@@ -51,6 +54,12 @@ class _AdminRouteLandmarkEditorScreenState
           position: widget.route.stopPoints[index].position,
         ),
     ];
+  }
+
+  @override
+  void dispose() {
+    _landmarkSearchCtrl.dispose();
+    super.dispose();
   }
 
   _EditableRouteLandmark? get _selectedLandmark {
@@ -159,6 +168,7 @@ class _AdminRouteLandmarkEditorScreenState
     setState(() {
       _landmarks = _sortedLandmarks([..._landmarks, landmark]);
       _selectedLandmarkId = landmark.id;
+      _syncLandmarkPage(preferredLandmarkId: landmark.id);
       _message = '${landmark.name} added. Save to publish the landmark.';
     });
   }
@@ -190,6 +200,7 @@ class _AdminRouteLandmarkEditorScreenState
             .toList(growable: false),
       );
       _selectedLandmarkId = landmark.id;
+      _syncLandmarkPage(preferredLandmarkId: landmark.id);
       _message = '${draft.name} updated. Save to sync it for this route.';
     });
   }
@@ -225,6 +236,7 @@ class _AdminRouteLandmarkEditorScreenState
       if (_selectedLandmarkId == landmark.id) {
         _selectedLandmarkId = _landmarks.isEmpty ? null : _landmarks.first.id;
       }
+      _syncLandmarkPage();
       _message = '${landmark.name} removed. Save to update the route.';
     });
   }
@@ -489,10 +501,68 @@ class _AdminRouteLandmarkEditorScreenState
     return '${point.latitude.toStringAsFixed(5)}, ${point.longitude.toStringAsFixed(5)}';
   }
 
+  List<_EditableRouteLandmark> _filteredLandmarks() {
+    final query = _landmarkSearchCtrl.text.trim().toLowerCase();
+    if (query.isEmpty) {
+      return _landmarks;
+    }
+    return _landmarks.where((landmark) {
+      final code = landmark.code?.trim().toLowerCase() ?? '';
+      final coordinates = _formatCoordinate(landmark.position).toLowerCase();
+      return landmark.name.toLowerCase().contains(query) ||
+          code.contains(query) ||
+          coordinates.contains(query);
+    }).toList(growable: false);
+  }
+
+  int _landmarkPageCount(List<_EditableRouteLandmark> landmarks) {
+    if (landmarks.isEmpty) {
+      return 1;
+    }
+    return ((landmarks.length - 1) ~/ _landmarksPerPage) + 1;
+  }
+
+  void _syncLandmarkPage({String? preferredLandmarkId}) {
+    final filteredLandmarks = _filteredLandmarks();
+    if (filteredLandmarks.isEmpty) {
+      _landmarkPage = 0;
+      return;
+    }
+
+    final targetId = preferredLandmarkId ?? _selectedLandmarkId;
+    if (targetId != null) {
+      final selectedIndex = filteredLandmarks.indexWhere(
+        (landmark) => landmark.id == targetId,
+      );
+      if (selectedIndex >= 0) {
+        _landmarkPage = selectedIndex ~/ _landmarksPerPage;
+        return;
+      }
+    }
+
+    final maxPage = _landmarkPageCount(filteredLandmarks) - 1;
+    _landmarkPage = _landmarkPage.clamp(0, maxPage).toInt();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final selectedLandmark = _selectedLandmark;
+    final filteredLandmarks = _filteredLandmarks();
+    final totalPages = _landmarkPageCount(filteredLandmarks);
+    final currentPage = filteredLandmarks.isEmpty
+        ? 0
+        : _landmarkPage.clamp(0, totalPages - 1).toInt();
+    final pageStart = currentPage * _landmarksPerPage;
+    final pagedLandmarks = filteredLandmarks
+        .skip(pageStart)
+        .take(_landmarksPerPage)
+        .toList(growable: false);
+    final pageEnd = filteredLandmarks.isEmpty
+        ? 0
+        : math.min(filteredLandmarks.length, pageStart + pagedLandmarks.length);
+    final selectedHiddenBySearch = selectedLandmark != null &&
+        filteredLandmarks.every((landmark) => landmark.id != selectedLandmark.id);
 
     return Scaffold(
       appBar: AppBar(
@@ -501,48 +571,6 @@ class _AdminRouteLandmarkEditorScreenState
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
         children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(widget.route.label, style: theme.textTheme.titleLarge),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Route landmarks act as the admin-managed primary drop-off points. Only admins can add, move, and edit them here.',
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Landmark fares are computed automatically from the route fare rule and each landmark\'s distance along the route.',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      _RouteMetaChip(
-                        label: 'Status',
-                        value: ParagoFormat.statusLabel(widget.route.status),
-                      ),
-                      _RouteMetaChip(
-                        label: 'Landmarks',
-                        value: _landmarks.length.toString(),
-                      ),
-                      _RouteMetaChip(
-                        label: 'Geometry',
-                        value: _routePoints.length >= 2
-                            ? '${_routePoints.length} path pts'
-                            : 'Limited',
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
           const SizedBox(height: 16),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -624,6 +652,61 @@ class _AdminRouteLandmarkEditorScreenState
                             Text('Landmarks',
                                 style: theme.textTheme.titleLarge),
                             const SizedBox(height: 12),
+                            TextField(
+                              controller: _landmarkSearchCtrl,
+                              onChanged: (_) {
+                                setState(() {
+                                  _landmarkPage = 0;
+                                });
+                              },
+                              decoration: InputDecoration(
+                                labelText:
+                                    'Search landmark name, code, or coordinates',
+                                prefixIcon: const Icon(Icons.search),
+                                suffixIcon: _landmarkSearchCtrl.text
+                                        .trim()
+                                        .isEmpty
+                                    ? null
+                                    : IconButton(
+                                        tooltip: 'Clear search',
+                                        onPressed: () {
+                                          _landmarkSearchCtrl.clear();
+                                          setState(() {
+                                            _landmarkPage = 0;
+                                          });
+                                        },
+                                        icon: const Icon(Icons.clear),
+                                      ),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 12,
+                              ),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Text(
+                                '${filteredLandmarks.length} match${filteredLandmarks.length == 1 ? '' : 'es'}',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            if (selectedHiddenBySearch) ...[
+                              const SizedBox(height: 12),
+                              Text(
+                                'The selected landmark is hidden by the current search.',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.primary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 12),
                             ConstrainedBox(
                               constraints: const BoxConstraints(minHeight: 160),
                               child: _landmarks.isEmpty
@@ -651,34 +734,140 @@ class _AdminRouteLandmarkEditorScreenState
                                         ),
                                       ),
                                     )
+                                  : filteredLandmarks.isEmpty
+                                      ? Container(
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.all(16),
+                                          decoration: BoxDecoration(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .surfaceContainerHighest
+                                                .withValues(alpha: 0.45),
+                                            borderRadius:
+                                                BorderRadius.circular(18),
+                                            border: Border.all(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .outlineVariant
+                                                  .withValues(alpha: 0.6),
+                                            ),
+                                          ),
+                                          child: Align(
+                                            alignment: Alignment.topLeft,
+                                            child: Text(
+                                              'No landmarks match the current search.',
+                                              style: theme.textTheme.bodyMedium,
+                                            ),
+                                          ),
+                                        )
                                   : Column(
                                       children: [
                                         for (var index = 0;
-                                            index < _landmarks.length;
+                                            index < pagedLandmarks.length;
                                             index += 1)
                                           _LandmarkListTile(
-                                            order: index + 1,
-                                            landmark: _landmarks[index],
+                                            order: pageStart + index + 1,
+                                            landmark: pagedLandmarks[index],
                                             fareLabel: _formatFare(
                                                 _landmarkFare(
-                                                    _landmarks[index])),
-                                            selected: _landmarks[index].id ==
+                                                    pagedLandmarks[index])),
+                                            selected:
+                                                pagedLandmarks[index].id ==
                                                 _selectedLandmarkId,
                                             coordinateLabel: _formatCoordinate(
-                                                _landmarks[index].position),
+                                                pagedLandmarks[index].position),
                                             onTap: () {
                                               setState(() {
                                                 _selectedLandmarkId =
-                                                    _landmarks[index].id;
+                                                    pagedLandmarks[index].id;
+                                                _syncLandmarkPage(
+                                                  preferredLandmarkId:
+                                                      pagedLandmarks[index].id,
+                                                );
                                                 _message =
-                                                    '${_landmarks[index].name} selected.';
+                                                    '${pagedLandmarks[index].name} selected.';
                                               });
                                             },
                                             onEdit: () => _editLandmark(
-                                                _landmarks[index]),
+                                                pagedLandmarks[index]),
                                             onDelete: () => _deleteLandmark(
-                                                _landmarks[index]),
+                                                pagedLandmarks[index]),
                                           ),
+                                        const SizedBox(height: 14),
+                                        Container(
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.all(14),
+                                          decoration: BoxDecoration(
+                                            color: theme.colorScheme
+                                                .surfaceContainerHighest
+                                                .withValues(alpha: 0.4),
+                                            borderRadius:
+                                                BorderRadius.circular(18),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'Showing ${pageStart + 1}-$pageEnd of ${filteredLandmarks.length} landmarks',
+                                                style: theme.textTheme.bodyMedium
+                                                    ?.copyWith(
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 12),
+                                              Text(
+                                                'Page ${currentPage + 1} of $totalPages',
+                                                style:
+                                                    theme.textTheme.bodyMedium,
+                                              ),
+                                              const SizedBox(height: 12),
+                                              Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: OutlinedButton.icon(
+                                                      onPressed:
+                                                          currentPage == 0
+                                                              ? null
+                                                              : () {
+                                                                  setState(() {
+                                                                    _landmarkPage =
+                                                                        currentPage -
+                                                                            1;
+                                                                  });
+                                                                },
+                                                      icon: const Icon(
+                                                          Icons.chevron_left),
+                                                      label: const Text(
+                                                          'Previous'),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  Expanded(
+                                                    child: OutlinedButton.icon(
+                                                      onPressed:
+                                                          currentPage >=
+                                                                  totalPages -
+                                                                      1
+                                                              ? null
+                                                              : () {
+                                                                  setState(() {
+                                                                    _landmarkPage =
+                                                                        currentPage +
+                                                                            1;
+                                                                  });
+                                                                },
+                                                      icon: const Icon(
+                                                          Icons.chevron_right),
+                                                      label:
+                                                          const Text('Next'),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
                                       ],
                                     ),
                             ),
@@ -769,6 +958,10 @@ class _AdminRouteLandmarkEditorScreenState
                                             setState(() {
                                               _selectedLandmarkId =
                                                   _landmarks[index].id;
+                                              _syncLandmarkPage(
+                                                preferredLandmarkId:
+                                                    _landmarks[index].id,
+                                              );
                                               _message =
                                                   '${_landmarks[index].name} selected.';
                                             });

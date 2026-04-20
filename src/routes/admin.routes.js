@@ -393,7 +393,6 @@ router.post(
     if (hasOwn(body, 'phone')) {
       update.phone = String(body.phone || '').trim();
     }
-    if (typeof body.isVerified === 'boolean') update.isVerified = body.isVerified;
     if (normalizedRouteId) {
       update.assignedRouteId = normalizedRouteId;
     }
@@ -451,7 +450,6 @@ router.patch(
     if (hasOwn(body, 'licenseNumber')) updates.licenseNumber = String(body.licenseNumber || '').trim();
     if (hasOwn(body, 'employeeNumber')) updates.employeeNumber = String(body.employeeNumber || '').trim();
     if (hasOwn(body, 'phone')) updates.phone = String(body.phone || '').trim();
-    if (typeof body.isVerified === 'boolean') updates.isVerified = body.isVerified;
     if (hasOwn(body, 'accountStatus') || hasOwn(body, 'status')) {
       const requestedAccountStatus = String(
         body.accountStatus ?? body.status ?? ''

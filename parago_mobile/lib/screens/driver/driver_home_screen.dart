@@ -59,8 +59,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   static const Duration _vehicleMotionDefaultDuration =
       Duration(milliseconds: 900);
   static const Duration _vehicleMotionTick = Duration(milliseconds: 16);
-  static const Duration _vehicleMotionMinDuration =
-      Duration(milliseconds: 550);
+  static const Duration _vehicleMotionMinDuration = Duration(milliseconds: 550);
   static const Duration _vehicleMotionMaxDuration =
       Duration(milliseconds: 1400);
   static const double _vehicleProjectionHandoffThreshold = 0.88;
@@ -68,8 +67,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   static const double _vehicleProjectionMaxDistanceMeters = 8;
   static const double _vehicleProjectionMinSpeedMetersPerSecond = 0.8;
   static const Duration _driverMapFollowPause = Duration(seconds: 8);
-  static const Duration _driverMapFollowThrottle =
-      Duration(milliseconds: 150);
+  static const Duration _driverMapFollowThrottle = Duration(milliseconds: 150);
   static const double _driverMapFollowLerpFactor = 0.22;
   static const double _driverMapFollowJitterMeters = 10;
   static const double _driverMapFollowSnapMeters = 45;
@@ -447,8 +445,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       _realtimeSocketService.disconnect();
       return;
     }
-    if (!forceReconnect &&
-        _realtimeSocketService.isConnected) {
+    if (!forceReconnect && _realtimeSocketService.isConnected) {
       return;
     }
 
@@ -1449,10 +1446,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Future<void> _completeRideDestination(RideSessionModel ride) async {
     final session = context.read<SessionController>();
     final rideService = RideSessionService(session.apiClient);
-    final destinationLabel =
-        (ride.destinationStopRef ?? '').trim().isEmpty
-            ? 'the saved destination'
-            : ride.destinationStopRef!.trim();
+    final destinationLabel = (ride.destinationStopRef ?? '').trim().isEmpty
+        ? 'the saved destination'
+        : ride.destinationStopRef!.trim();
     await _runDriverAction(
       loadingMessage: 'Closing ride session...',
       successMessage:
@@ -1666,8 +1662,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_driverMapReady) return;
-      final zoom =
-          _driverMapController.camera.zoom == 0 ? 14.2 : _driverMapController.camera.zoom;
+      final zoom = _driverMapController.camera.zoom == 0
+          ? 14.2
+          : _driverMapController.camera.zoom;
       _driverMapController.move(target, zoom);
     });
   }
@@ -1707,8 +1704,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     );
     final sampleGap = _motionSampleGap(
       sampleAt: sampleAt,
-      previousSampleAt:
-          _vehicleLastAuthoritativeSampleAt ??
+      previousSampleAt: _vehicleLastAuthoritativeSampleAt ??
           _vehiclePreviousAuthoritativeSampleAt,
       defaultDuration: _vehicleMotionDefaultDuration,
       minDuration: _vehicleMotionMinDuration,
@@ -1733,7 +1729,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           _vehicleLastReliableBearingDegrees = resolvedHeading;
         }
         _vehicleLastAuthoritativeLocation = target;
-        _vehiclePreviousAuthoritativeSampleAt = _vehicleLastAuthoritativeSampleAt;
+        _vehiclePreviousAuthoritativeSampleAt =
+            _vehicleLastAuthoritativeSampleAt;
         _vehicleLastAuthoritativeSampleAt = sampleAt;
         _vehicleExpectedSampleGap = sampleGap;
         _vehicleLastReliableSpeedMetersPerSecond = speedMetersPerSecond;
@@ -1771,7 +1768,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           _vehicleLastReliableBearingDegrees = resolvedHeading;
         }
         _vehicleLastAuthoritativeLocation = target;
-        _vehiclePreviousAuthoritativeSampleAt = _vehicleLastAuthoritativeSampleAt;
+        _vehiclePreviousAuthoritativeSampleAt =
+            _vehicleLastAuthoritativeSampleAt;
         _vehicleLastAuthoritativeSampleAt = sampleAt;
         _vehicleExpectedSampleGap = sampleGap;
         _vehicleLastReliableSpeedMetersPerSecond = speedMetersPerSecond;
@@ -1864,7 +1862,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       }
     }
 
-    if (_vehicleLocation != nextPoint || _vehicleHeadingDegrees != nextHeading) {
+    if (_vehicleLocation != nextPoint ||
+        _vehicleHeadingDegrees != nextHeading) {
       setState(() {
         _vehicleLocation = nextPoint;
         _vehicleHeadingDegrees = nextHeading;
@@ -1910,10 +1909,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return false;
     }
 
-    final baseProjectionDuration = _vehicleExpectedSampleGap <
-            _vehicleProjectionMaxDuration
-        ? _vehicleExpectedSampleGap
-        : _vehicleProjectionMaxDuration;
+    final baseProjectionDuration =
+        _vehicleExpectedSampleGap < _vehicleProjectionMaxDuration
+            ? _vehicleExpectedSampleGap
+            : _vehicleProjectionMaxDuration;
     final projectionDistanceMeters = math.min(
       _vehicleProjectionMaxDistanceMeters,
       speedMetersPerSecond * (baseProjectionDuration.inMilliseconds / 1000),
@@ -2109,6 +2108,21 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     return _isOnline;
   }
 
+  String _driverAccountStatus() {
+    final direct = _driverProfile['accountStatus']?.toString().toLowerCase();
+    if (direct.isNotEmpty) {
+      return direct;
+    }
+    final user = _driverProfile['userId'];
+    if (user is Map<String, dynamic>) {
+      final nested = user['status']?.toString().toLowerCase() ?? '';
+      if (nested.isNotEmpty) {
+        return nested;
+      }
+    }
+    return 'unknown';
+  }
+
   List<String> _driverOperationalIssues({
     TripSession? trip,
     bool requireActiveTrip = false,
@@ -2131,8 +2145,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       issues.add('Driver must be online.');
     }
 
-    if (_driverProfile['isVerified'] != true) {
-      issues.add('Driver must be verified first.');
+    if (_driverAccountStatus() != 'active') {
+      issues.add('Driver account must be active.');
     }
 
     final assignedJeepneyId =
