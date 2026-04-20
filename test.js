@@ -14,6 +14,10 @@ const {
   routeHasTerminalStop,
   resolveRouteTerminalStop,
 } = require('./src/services/hybridDispatch.service');
+const {
+  hasValidDestinationPoint,
+  isRideWithinDestinationApproachThreshold,
+} = require('./src/utils/destinationApproach');
 
 // Test configuration
 const TEST_CONFIG = {
@@ -511,9 +515,21 @@ function testTripSessionTiming() {
 
 // ============ NOTIFICATION TESTS ============
 function testNotificationTypes() {
-  const types = ['pickup_assigned', 'pickup_acknowledged', 'boarding_confirmed', 'stop_alert', 'trip_started', 'trip_ended'];
+  const types = [
+    'pickup_assigned',
+    'pickup_acknowledged',
+    'boarding_confirmed',
+    'stop_alert',
+    'trip_started',
+    'trip_ended',
+    'passenger_near_destination',
+  ];
   assert(types.includes('pickup_assigned'), 'Pickup assigned type should exist');
   assert(types.includes('stop_alert'), 'Stop alert type should exist');
+  assert(
+    types.includes('passenger_near_destination'),
+    'Passenger near destination type should exist'
+  );
 }
 
 function testNotificationPayload() {
@@ -527,6 +543,69 @@ function testNotificationPayload() {
   assert(notification.type, 'Notification should have type');
   assert(notification.recipientId, 'Notification should have recipientId');
   assert(notification.data, 'Notification should have data');
+}
+
+// ============ DESTINATION APPROACH TESTS ============
+function testValidDestinationApproachPoint() {
+  const ride = {
+    destinationLocation: {
+      coordinates: [120.9842, 14.5995],
+    },
+  };
+  assert.strictEqual(
+    hasValidDestinationPoint(ride),
+    true,
+    'Ride destination point should be valid'
+  );
+}
+
+function testInvalidDestinationApproachPoint() {
+  const ride = {
+    destinationLocation: {
+      coordinates: [120.9842],
+    },
+  };
+  assert.strictEqual(
+    hasValidDestinationPoint(ride),
+    false,
+    'Ride destination point should be invalid when coordinates are incomplete'
+  );
+}
+
+function testDestinationApproachThresholdHit() {
+  const ride = {
+    destinationLocation: {
+      coordinates: [120.9842, 14.5995],
+    },
+  };
+  assert.strictEqual(
+    isRideWithinDestinationApproachThreshold({
+      ride,
+      latitude: 14.5997,
+      longitude: 120.9842,
+      thresholdMeters: 50,
+    }),
+    true,
+    'Ride should be considered near destination within threshold'
+  );
+}
+
+function testDestinationApproachThresholdMiss() {
+  const ride = {
+    destinationLocation: {
+      coordinates: [120.9842, 14.5995],
+    },
+  };
+  assert.strictEqual(
+    isRideWithinDestinationApproachThreshold({
+      ride,
+      latitude: 14.601,
+      longitude: 120.9842,
+      thresholdMeters: 50,
+    }),
+    false,
+    'Ride should not be considered near destination outside threshold'
+  );
 }
 
 // ============ COORDINATE VALIDATION TESTS ============
@@ -637,6 +716,12 @@ async function runAllTests() {
   runTest('Notification', 'Notification Types', testNotificationTypes);
   runTest('Notification', 'Notification Payload', testNotificationPayload);
 
+  console.log('\n--- Destination Approach Tests ---');
+  runTest('DestinationApproach', 'Valid Destination Point', testValidDestinationApproachPoint);
+  runTest('DestinationApproach', 'Invalid Destination Point', testInvalidDestinationApproachPoint);
+  runTest('DestinationApproach', 'Threshold Hit', testDestinationApproachThresholdHit);
+  runTest('DestinationApproach', 'Threshold Miss', testDestinationApproachThresholdMiss);
+
   console.log('\n--- Rate Limiting Tests ---');
   runTest('RateLimit', 'Rate Limit Configuration', testRateLimitConfig);
 
@@ -698,6 +783,10 @@ function generateCSV() {
     'Trip - Trip Timing': 'Verifies trip timing logic',
     'Notification - Notification Types': 'Verifies all notification types are defined',
     'Notification - Notification Payload': 'Verifies notification payload structure',
+    'DestinationApproach - Valid Destination Point': 'Verifies ride sessions expose a usable destination coordinate pair',
+    'DestinationApproach - Invalid Destination Point': 'Verifies incomplete destination coordinates are rejected',
+    'DestinationApproach - Threshold Hit': 'Verifies a ride is flagged near destination when the jeep is within 50 meters',
+    'DestinationApproach - Threshold Miss': 'Verifies a ride is not flagged near destination when the jeep is beyond 50 meters',
     'RateLimit - Rate Limit Configuration': 'Verifies rate limiting configuration values'
   };
 

@@ -53,6 +53,7 @@ const rideSessionSchema = new Schema(
     boardedAt: { type: Date },
     endedAt: { type: Date },
     canSendStopAlert: { type: Boolean, default: false },
+    destinationApproachAlertedAt: { type: Date },
   },
   { timestamps: true }
 );

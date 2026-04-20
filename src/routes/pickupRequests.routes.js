@@ -7,6 +7,7 @@ const Passenger = require('../models/passenger');
 const Driver = require('../models/driver');
 const Route = require('../models/route');
 const { publishNotification } = require('../services/notificationPublisher');
+const { emitToTrip } = require('../realtime/socketServer');
 const {
   isPointAfterOnRoute,
   isRoutePickupNearRoad,
@@ -64,6 +65,34 @@ const pointCoordinates = (value) =>
   Array.isArray(value?.coordinates) && value.coordinates.length >= 2
     ? [Number(value.coordinates[0]), Number(value.coordinates[1])]
     : null;
+
+const resolveRefId = (value) => {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (value._id) return value._id.toString();
+  if (typeof value.toString === 'function') {
+    const stringValue = value.toString();
+    if (stringValue && stringValue !== '[object Object]') {
+      return stringValue;
+    }
+  }
+  return null;
+};
+
+const resolveTripDriverUserId = async (trip) => {
+  const directUserId = resolveRefId(trip?.driverId?.userId);
+  if (directUserId) {
+    return directUserId;
+  }
+
+  const driverId = resolveRefId(trip?.driverId);
+  if (!driverId) {
+    return null;
+  }
+
+  const driver = await Driver.findById(driverId).select('userId');
+  return resolveRefId(driver?.userId);
+};
 
 const ensureDriverCanHandlePickup = ({ driver, trip, accountStatus }) => {
   if (!driver) {
@@ -424,11 +453,9 @@ router.post(
       expiresAt: new Date(Date.now() + pickupRequestTtlMinutes * 60 * 1000),
     });
 
-    const tripDriverUser = trip.driverId?.userId
-      ? { userId: trip.driverId.userId }
-      : await Driver.findById(trip.driverId).select('userId');
+    const tripDriverUserId = await resolveTripDriverUserId(trip);
     await publishNotification({
-      userId: tripDriverUser?.userId,
+      userId: tripDriverUserId,
       type: 'pickup_request_created',
       title: isTerminalPickupType(pickupType)
         ? 'New terminal boarding request'
@@ -446,6 +473,13 @@ router.post(
         request: serializePickupRequest(request),
       },
       category: 'trip',
+    });
+    emitToTrip(trip._id.toString(), 'pickup_request.updated', {
+      action: 'created',
+      tripId: trip._id.toString(),
+      routeId: route._id.toString(),
+      request: serializePickupRequest(request),
+      createdAt: new Date().toISOString(),
     });
 
     return ok(
@@ -598,7 +632,7 @@ router.patch(
       await syncTerminalQueueStatus(trip);
     }
     await publishNotification({
-      userId: trip?.driverId?.userId,
+      userId: await resolveTripDriverUserId(trip),
       type: 'pickup_request_cancelled',
       title: 'Pickup request cancelled',
       body: `Pickup request near ${request.stopRef || 'the selected stop'} was cancelled by the passenger.`,
@@ -608,6 +642,13 @@ router.patch(
         request: serializePickupRequest(request),
       },
       category: 'trip',
+    });
+    emitToTrip(request.tripSessionId?.toString() || '', 'pickup_request.updated', {
+      action: 'cancelled',
+      tripId: request.tripSessionId?.toString() || '',
+      routeId: request.routeId?.toString() || '',
+      request: serializePickupRequest(request),
+      createdAt: new Date().toISOString(),
     });
     return ok(res, request, 'Pickup request cancelled');
   })

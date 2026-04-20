@@ -11,6 +11,9 @@ const ApiError = require('../utils/apiError');
 const { ensureLatLng } = require('../utils/validators');
 const { hasOwn } = require('../utils/object');
 const { requireCurrentDriver } = require('../services/routeContext.service');
+const {
+  processDestinationApproachAlerts,
+} = require('../services/destinationApproach.service');
 const { emitJeepneyLocationUpdate } = require('../realtime/socketServer');
 
 const router = express.Router();
@@ -165,6 +168,13 @@ const updateDriverJeepneyLocation = async (req, res) => {
 
   // Broadcast location update via WebSocket
   if (activeTrip) {
+    await processDestinationApproachAlerts({
+      tripSessionId: activeTrip._id,
+      driverUserId: req.user._id,
+      latitude: Number(body.lat),
+      longitude: Number(body.lng),
+    });
+
     emitJeepneyLocationUpdate({
       tripId: activeTrip._id.toString(),
       routeId: activeTrip.routeId?.toString() || '',

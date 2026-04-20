@@ -44,6 +44,9 @@ module.exports = {
   pickupCurrentLocationMaxDistanceMeters: Number(
     process.env.PICKUP_CURRENT_LOCATION_MAX_DISTANCE_METERS || 50
   ),
+  destinationApproachAlertMeters: Number(
+    process.env.DESTINATION_APPROACH_ALERT_METERS || 50
+  ),
   jeepPassByReassignMeters: Number(
     process.env.JEEP_PASS_BY_REASSIGN_METERS || 50
   ),

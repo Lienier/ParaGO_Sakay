@@ -113,6 +113,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Timer? _vehicleMotionTimer;
   StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
   StreamSubscription<Map<String, dynamic>>? _realtimeOperationsSubscription;
+  StreamSubscription<Map<String, dynamic>>? _realtimePickupRequestSubscription;
   bool _locationTrackingSyncInFlight = false;
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
@@ -123,6 +124,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   DateTime? _lastRealtimeOpsRefreshAt;
   Set<String> _knownNotificationIds = <String>{};
   Set<String> _knownActiveStopAlertIds = <String>{};
+  Set<String> _subscribedRealtimeTripIds = <String>{};
   Set<String> _dismissedNotificationIds = <String>{};
   Set<String> _dismissedDriveAlertIds = <String>{};
   Set<String> _dismissedInfoMessages = <String>{};
@@ -152,6 +154,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _load();
       if (mounted) {
+        final session = context.read<SessionController>();
+        _syncRealtimeSocket(session, forceReconnect: true);
         unawaited(
           _refreshAutomaticAvailability(
             probeNetwork: false,
@@ -173,6 +177,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _availabilityTimer?.cancel();
     _realtimeNotificationSubscription?.cancel();
     _realtimeOperationsSubscription?.cancel();
+    _realtimePickupRequestSubscription?.cancel();
     _realtimeSocketService.dispose();
     super.dispose();
   }
@@ -451,6 +456,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
     _realtimeNotificationSubscription?.cancel();
     _realtimeOperationsSubscription?.cancel();
+    _realtimePickupRequestSubscription?.cancel();
     _realtimeNotificationSubscription =
         _realtimeSocketService.notificationCreatedStream.listen(
       _handleRealtimeSocketNotification,
@@ -458,6 +464,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _realtimeOperationsSubscription =
         _realtimeSocketService.operationsChangedStream.listen(
       _handleRealtimeOperationsChanged,
+    );
+    _realtimePickupRequestSubscription =
+        _realtimeSocketService.pickupRequestUpdatedStream.listen(
+      _handleRealtimePickupRequestUpdate,
     );
     _realtimeSocketService.connect(
       apiBaseUrl: session.apiClient.baseUrl,
@@ -507,6 +517,40 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     }
     _lastRealtimeOpsRefreshAt = now;
     await _refreshFromSocketEvent();
+  }
+
+  Future<void> _handleRealtimePickupRequestUpdate(
+    Map<String, dynamic> event,
+  ) async {
+    if (!mounted) {
+      return;
+    }
+
+    final request = _readDriverPickupRequest(event);
+    if (request == null || request.id.isEmpty) {
+      await _refreshFromSocketEvent();
+      return;
+    }
+
+    final action = event['action']?.toString().toLowerCase() ?? '';
+    final alreadyKnown = (_tripRequests[request.tripSessionId] ?? const [])
+        .any((item) => item.id == request.id);
+
+    setState(() {
+      _tripRequests = _upsertTripRequests(_tripRequests, request);
+    });
+
+    if (action == 'created' && !alreadyKnown) {
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'New pickup request: ${request.stopRef ?? 'Selected stop'}',
+          ),
+        ),
+      );
+    }
   }
 
   NotificationModel? _extractRealtimeNotification(
@@ -593,6 +637,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       final focusedTrips = nextFocus == null || nextFocus.isEmpty
           ? const <TripSession>[]
           : trips.where((trip) => trip.id == nextFocus).toList(growable: false);
+      final focusedTripIds = focusedTrips.map((trip) => trip.id).toSet();
       final initialRouteIds = <String>{
         if (assignedRouteId != null && assignedRouteId.isNotEmpty)
           assignedRouteId,
@@ -622,12 +667,29 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           _isOnline = driverStatus == 'active';
           _lastPublishedOnline = _isOnline;
         }
-        _tripRequests = focusedHydration.requestsByTrip;
-        _tripAlerts = focusedHydration.alertsByTrip;
-        _tripRides = focusedHydration.ridesByTrip;
+        _tripRequests = _replaceTripHydration(
+          current: _tripRequests,
+          hydrated: focusedHydration.requestsByTrip,
+          hydratedTripIds: focusedTripIds,
+        );
+        _tripAlerts = _replaceTripHydration(
+          current: _tripAlerts,
+          hydrated: focusedHydration.alertsByTrip,
+          hydratedTripIds: focusedTripIds,
+        );
+        _tripRides = _replaceTripHydration(
+          current: _tripRides,
+          hydrated: focusedHydration.ridesByTrip,
+          hydratedTripIds: focusedTripIds,
+        );
         _focusedTripId =
             (nextFocus == null || nextFocus.isEmpty) ? null : nextFocus;
       });
+      _syncRealtimeTripSubscriptions(trips);
+      _syncRealtimeSocket(
+        session,
+        forceReconnect: !_realtimeSocketService.isConnected,
+      );
       _applyAutomaticAvailabilityState(session, hasInternet: true);
       unawaited(_syncAutomaticAvailability(session));
       _handleRealtimeDriverUpdates(
@@ -670,6 +732,35 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       }
     }
     return trips.isEmpty ? null : trips.first.id;
+  }
+
+  Map<String, List<T>> _replaceTripHydration<T>({
+    required Map<String, List<T>> current,
+    required Map<String, List<T>> hydrated,
+    required Set<String> hydratedTripIds,
+  }) {
+    if (hydratedTripIds.isEmpty) {
+      return current;
+    }
+
+    final next = <String, List<T>>{
+      for (final entry in current.entries) entry.key: List<T>.from(entry.value),
+    };
+    next.removeWhere((tripId, _) => hydratedTripIds.contains(tripId));
+    next.addAll(hydrated);
+    return next;
+  }
+
+  void _syncRealtimeTripSubscriptions(List<TripSession> trips) {
+    final nextTripIds = trips.map((trip) => trip.id).toSet();
+    final previousTripIds = _subscribedRealtimeTripIds;
+    for (final tripId in previousTripIds.difference(nextTripIds)) {
+      _realtimeSocketService.unsubscribeFromTrip(tripId);
+    }
+    for (final tripId in nextTripIds.difference(previousTripIds)) {
+      _realtimeSocketService.subscribeToTrip(tripId);
+    }
+    _subscribedRealtimeTripIds = nextTripIds;
   }
 
   Future<Map<String, List<LatLng>>> _loadRoutePreviewPoints({
@@ -829,9 +920,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   void _startLiveRefreshLoop() {
     _liveRefreshTimer?.cancel();
     _liveRefreshTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
-      if (!mounted ||
-          _silentRefreshActive ||
-          _realtimeSocketService.isConnected) {
+      if (!mounted || _silentRefreshActive) {
+        return;
+      }
+      final session = context.read<SessionController>();
+      if (!_realtimeSocketService.isConnected) {
+        _syncRealtimeSocket(session, forceReconnect: true);
+      }
+      if (_realtimeSocketService.isConnected) {
         return;
       }
       _silentRefreshActive = true;
@@ -1131,6 +1227,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
 
+    if (notification.type == 'passenger_near_destination') {
+      final stopLabel = _destinationApproachStopLabel(notification.payload);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Passenger nearing destination: $stopLabel'),
+        ),
+      );
+      return;
+    }
+
     if (notification.type == 'stop_alert_created') {
       final alert = _readDriverStopAlert(notification.payload);
       final message = alert == null
@@ -1143,6 +1249,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     messenger.showSnackBar(
       SnackBar(content: Text('${notification.title}: ${notification.body}')),
     );
+  }
+
+  String _destinationApproachStopLabel(Map<String, dynamic> payload) {
+    final value = payload['destinationStopRef']?.toString().trim() ?? '';
+    return value.isEmpty ? 'the saved destination' : value;
   }
 
   Future<void> _runDriverAction({
@@ -1253,77 +1364,116 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
             final terminalAvailable = _routeHasTerminalStop(selectedRoute);
             return AlertDialog(
               title: const Text('Choose route'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Select the route and direction you want to start for this trip.',
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    initialValue: selectedRoute.id,
-                    decoration: const InputDecoration(labelText: 'Route'),
-                    items: [
-                      for (final route in sortedRoutes)
-                        DropdownMenuItem(
-                          value: route.id,
-                          child: Text(_routeChoiceLabel(route)),
+              content: SingleChildScrollView(
+                child: SizedBox(
+                  width:
+                      math.min(MediaQuery.of(context).size.width * 0.85, 420),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Select the route and direction you want to start for this trip.',
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: selectedRoute.id,
+                        isExpanded: true,
+                        decoration: const InputDecoration(labelText: 'Route'),
+                        selectedItemBuilder: (context) => [
+                          for (final route in sortedRoutes)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                _routeChoiceLabel(route),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        items: [
+                          for (final route in sortedRoutes)
+                            DropdownMenuItem(
+                              value: route.id,
+                              child: Text(
+                                _routeChoiceLabel(route),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          if (value == null || value.isEmpty) return;
+                          final match = sortedRoutes.firstWhere(
+                            (route) => route.id == value,
+                            orElse: () => selectedRoute,
+                          );
+                          setState(() {
+                            selectedRoute = match;
+                            if (!_routeHasTerminalStop(match) &&
+                                operatingMode == 'terminal_queue') {
+                              operatingMode = 'route';
+                            }
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Selected: ${_routeChoiceLabel(selectedRoute)}',
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: operatingMode,
+                        isExpanded: true,
+                        decoration:
+                            const InputDecoration(labelText: 'Operating mode'),
+                        items: const [
+                          DropdownMenuItem(
+                            value: 'route',
+                            child: Text(
+                              'Direct to route',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          DropdownMenuItem(
+                            value: 'terminal_queue',
+                            child: Text(
+                              'Join terminal queue',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ].map((item) {
+                          if (item.value != 'terminal_queue') {
+                            return item;
+                          }
+                          return DropdownMenuItem(
+                            value: item.value,
+                            enabled: terminalAvailable,
+                            child: item.child,
+                          );
+                        }).toList(growable: false),
+                        onChanged: (value) {
+                          if (value == null || value.isEmpty) return;
+                          setState(() => operatingMode = value);
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        operatingMode == 'terminal_queue'
+                            ? 'This trip will take terminal boarding requests first.'
+                            : 'This trip will take roadside requests while already on the route.',
+                      ),
+                      if (!terminalAvailable) ...[
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Terminal queue is unavailable for this route until a terminal stop is configured.',
                         ),
+                      ],
                     ],
-                    onChanged: (value) {
-                      if (value == null || value.isEmpty) return;
-                      final match = sortedRoutes.firstWhere(
-                        (route) => route.id == value,
-                        orElse: () => selectedRoute,
-                      );
-                      setState(() {
-                        selectedRoute = match;
-                        if (!_routeHasTerminalStop(match) &&
-                            operatingMode == 'terminal_queue') {
-                          operatingMode = 'route';
-                        }
-                      });
-                    },
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Selected: ${_routeChoiceLabel(selectedRoute)}',
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    initialValue: operatingMode,
-                    decoration:
-                        const InputDecoration(labelText: 'Operating mode'),
-                    items: [
-                      DropdownMenuItem(
-                        value: 'route',
-                        child: Text('Direct to route'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'terminal_queue',
-                        enabled: terminalAvailable,
-                        child: Text('Join terminal queue'),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      if (value == null || value.isEmpty) return;
-                      setState(() => operatingMode = value);
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    operatingMode == 'terminal_queue'
-                        ? 'This trip will take terminal boarding requests first.'
-                        : 'This trip will take roadside requests while already on the route.',
-                  ),
-                  if (!terminalAvailable) ...[
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Terminal queue is unavailable for this route until a terminal stop is configured.',
-                    ),
-                  ],
-                ],
+                ),
               ),
               actions: [
                 TextButton(
@@ -2109,7 +2259,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   String _driverAccountStatus() {
-    final direct = _driverProfile['accountStatus']?.toString().toLowerCase();
+    final direct =
+        _driverProfile['accountStatus']?.toString().toLowerCase() ?? '';
     if (direct.isNotEmpty) {
       return direct;
     }

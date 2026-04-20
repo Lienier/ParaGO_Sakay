@@ -11,16 +11,21 @@ class RealtimeSocketService {
       StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<Map<String, dynamic>> _operationsController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _pickupRequestController =
+      StreamController<Map<String, dynamic>>.broadcast();
 
   io.Socket? _socket;
   String? _currentSocketBaseUrl;
   String? _currentToken;
   bool _networkFailureReported = false;
+  final Set<String> _subscribedTrips = <String>{};
 
   Stream<Map<String, dynamic>> get notificationCreatedStream =>
       _notificationController.stream;
   Stream<Map<String, dynamic>> get operationsChangedStream =>
       _operationsController.stream;
+  Stream<Map<String, dynamic>> get pickupRequestUpdatedStream =>
+      _pickupRequestController.stream;
   bool get isConnected => _socket?.connected == true;
   bool get hasActiveSocket => _socket != null;
 
@@ -86,6 +91,7 @@ class RealtimeSocketService {
     socket.onConnect((_) {
       _networkFailureReported = false;
       debugPrint('Realtime socket connected.');
+      _restoreSubscriptions();
     });
     socket.onDisconnect((reason) {
       debugPrint('Realtime socket disconnected: $reason');
@@ -128,6 +134,12 @@ class RealtimeSocketService {
         _operationsController.add(normalized);
       }
     });
+    socket.on('pickup_request.updated', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) {
+        _pickupRequestController.add(normalized);
+      }
+    });
 
     _socket = socket;
     socket.connect();
@@ -145,8 +157,38 @@ class RealtimeSocketService {
 
   void dispose() {
     disconnect();
+    _subscribedTrips.clear();
     _notificationController.close();
     _operationsController.close();
+    _pickupRequestController.close();
+  }
+
+  void subscribeToTrip(String tripId) {
+    final trimmedTripId = tripId.trim();
+    if (trimmedTripId.isEmpty) {
+      return;
+    }
+    final isNewSubscription = _subscribedTrips.add(trimmedTripId);
+    if (!isNewSubscription || _socket == null || !_socket!.connected) {
+      return;
+    }
+
+    _socket!.emit('subscribe.trip', trimmedTripId);
+    debugPrint('Subscribed to trip updates: $trimmedTripId');
+  }
+
+  void unsubscribeFromTrip(String tripId) {
+    final trimmedTripId = tripId.trim();
+    if (trimmedTripId.isEmpty) {
+      return;
+    }
+    final removed = _subscribedTrips.remove(trimmedTripId);
+    if (!removed || _socket == null || !_socket!.connected) {
+      return;
+    }
+
+    _socket!.emit('unsubscribe.trip', trimmedTripId);
+    debugPrint('Unsubscribed from trip updates: $trimmedTripId');
   }
 
   Map<String, dynamic> _normalizePayload(dynamic payload) {
@@ -176,6 +218,16 @@ class RealtimeSocketService {
 
     final explicitPort = uri.hasPort ? ':${uri.port}' : '';
     return '$scheme://$host$explicitPort';
+  }
+
+  void _restoreSubscriptions() {
+    final socket = _socket;
+    if (socket == null || !socket.connected) {
+      return;
+    }
+    for (final tripId in _subscribedTrips) {
+      socket.emit('subscribe.trip', tripId);
+    }
   }
 
   void _stopRetryingOnNetworkError(

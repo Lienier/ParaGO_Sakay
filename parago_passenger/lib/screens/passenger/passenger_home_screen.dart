@@ -48,7 +48,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const double _autoUnloadDistanceMeters = 120;
   static const int _autoUnloadConsecutiveOutsideChecks = 3;
   static const Duration _autoUnloadSustainedSeparation = Duration(seconds: 60);
-  static const Duration _tripMarkerAnimationTick = Duration(milliseconds: 16);
+  static const Duration _tripMarkerAnimationTick = Duration(milliseconds: 33);
   static const Duration _tripMarkerAnimationDefaultDuration =
       Duration(milliseconds: 900);
   static const Duration _tripMarkerAnimationMinDuration =
@@ -56,6 +56,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const Duration _tripMarkerAnimationMaxDuration =
       Duration(milliseconds: 1400);
   static const Duration _tripRealtimeStaleAfter = Duration(seconds: 8);
+  static const Duration _liveRefreshInterval = Duration(seconds: 8);
+  static const Duration _backgroundLocationRefreshInterval =
+      Duration(seconds: 25);
+  static const Duration _metadataRefreshInterval = Duration(seconds: 12);
+  static const Duration _socketRefreshThrottle = Duration(seconds: 4);
   static const double _tripProjectionHandoffThreshold = 0.88;
   static const Duration _tripProjectionMaxDuration = Duration(seconds: 1);
   static const double _tripProjectionMaxDistanceMeters = 8;
@@ -97,6 +102,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
   bool _locatingPassenger = false;
+  Future<LatLng?>? _passengerLocationRequest;
   bool _passengerSheetCollapsed = false;
   bool _showingCachedPassengerSnapshot = false;
   _PassengerBookingMode _bookingMode = _PassengerBookingMode.roadside;
@@ -107,6 +113,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   int _unloadLabelLookupSerial = 0;
   String? _autoUnloadWindowRideId;
   DateTime? _lastPassengerSyncAt;
+  DateTime? _lastSocketRefreshAt;
   String? _lastMapPromptMessage;
   Set<String> _knownNotificationIds = <String>{};
   final Set<String> _destinationReminderRideIds = <String>{};
@@ -366,19 +373,28 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   void _startLiveRefreshLoop() {
     _liveRefreshTimer?.cancel();
-    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+    _liveRefreshTimer = Timer.periodic(_liveRefreshInterval, (_) async {
       if (!mounted || _silentRefreshActive) {
         return;
       }
       _silentRefreshActive = true;
       try {
         _ensureRealtimeSocketConnection();
-        await _ensureCurrentPassengerLocation(
-          silent: true,
-          forceRefresh: true,
-        );
+        final locationTimestamp = _currentPassengerLocationAt;
+        final shouldRefreshPassengerLocation =
+            locationTimestamp == null ||
+            DateTime.now().difference(locationTimestamp) >=
+                _backgroundLocationRefreshInterval;
+        if (shouldRefreshPassengerLocation) {
+          await _ensureCurrentPassengerLocation(
+            silent: true,
+            forceRefresh: true,
+          );
+        }
         if (_hasFreshRealtimeVehicleState()) {
-          await _refreshPassengerMetadata(silent: true);
+          if (_shouldRefreshPassengerMetadata()) {
+            await _refreshPassengerMetadata(silent: true);
+          }
         } else {
           await _load(
             silent: true,
@@ -475,6 +491,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       }
       return comparisonTime.difference(lastUpdateAt) <= _tripRealtimeStaleAfter;
     });
+  }
+
+  bool _shouldRefreshPassengerMetadata({DateTime? now}) {
+    final lastSyncAt = _lastPassengerSyncAt;
+    if (lastSyncAt == null) {
+      return true;
+    }
+    return (now ?? DateTime.now()).difference(lastSyncAt) >=
+        _metadataRefreshInterval;
   }
 
   bool _applyRealtimePassengerNotification(NotificationModel notification) {
@@ -595,6 +620,20 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
+
+    if (notification.type == 'passenger_near_destination') {
+      final stopLabel = _destinationApproachStopLabel(notification.payload);
+      final thresholdMeters =
+          _destinationApproachThresholdMeters(notification.payload);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            "You're within $thresholdMeters meters of $stopLabel. The driver has been notified.",
+          ),
+        ),
+      );
+      return;
+    }
 
     if (notification.type == 'pickup_request_completed') {
       final request = _readPassengerPickupRequest(notification.payload);
@@ -1017,9 +1056,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
 
     _destinationReminderRideIds.add(ride.id);
+    final destinationLabel = ride.destinationStopRef ?? 'your saved destination';
     final message = ride.canSendStopAlert == false
-        ? 'You are near ${ride.destinationStopRef ?? 'your saved destination'}. Unload manually once you get off.'
-        : 'You are near ${ride.destinationStopRef ?? 'your saved destination'}. Send a para alert when ready, then use "I unloaded" after getting off.';
+        ? 'You are near $destinationLabel. ParaGO will notify the driver automatically within 50 meters. Unload manually once you get off.'
+        : 'You are near $destinationLabel. ParaGO will notify the driver automatically within 50 meters, but you can still send a para alert anytime if needed.';
     setState(() {
       _statusMessage = message;
       _syncMessage = message;
@@ -1028,6 +1068,19 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
+  }
+
+  String _destinationApproachStopLabel(Map<String, dynamic> payload) {
+    final value = payload['destinationStopRef']?.toString().trim() ?? '';
+    return value.isEmpty ? 'your destination' : value;
+  }
+
+  int _destinationApproachThresholdMeters(Map<String, dynamic> payload) {
+    final raw = payload['thresholdMeters'];
+    if (raw is num) {
+      return raw.toInt();
+    }
+    return int.tryParse(raw?.toString() ?? '') ?? 50;
   }
 
   Future<void> _cancelRequest(String requestId) async {
@@ -1631,97 +1684,128 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       return existingLocation;
     }
 
-    if (_locatingPassenger) {
-      return existingLocation;
-    }
-
     if (!mounted) {
       return existingLocation;
     }
-    setState(() => _locatingPassenger = true);
-    try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        if (!silent && mounted) {
-          setState(() {
-            _statusMessage =
-                'Turn on device location to place your pickup pin.';
-          });
+    Future<LatLng?> awaitLocationRequest(Future<LatLng?> request) async {
+      final shouldShowProgress = !silent && mounted && !_locatingPassenger;
+      if (shouldShowProgress) {
+        setState(() => _locatingPassenger = true);
+      }
+      try {
+        return await request;
+      } finally {
+        if (shouldShowProgress && mounted) {
+          setState(() => _locatingPassenger = false);
         }
-        return existingLocation;
       }
+    }
 
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        if (!silent && mounted) {
-          setState(() {
-            _statusMessage =
-                'Location permission is needed so pickup stays within 50 meters of you.';
-          });
+    final inFlightRequest = _passengerLocationRequest;
+    if (inFlightRequest != null) {
+      return awaitLocationRequest(inFlightRequest);
+    }
+
+    final request = () async {
+      try {
+        final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+        if (!serviceEnabled) {
+          if (!silent && mounted) {
+            setState(() {
+              _statusMessage =
+                  'Turn on device location to place your pickup pin.';
+            });
+          }
+          return existingLocation;
         }
-        return existingLocation;
-      }
 
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.best,
-        ),
-      );
-      final previousLocation = _currentPassengerLocation;
-      final rawNext = LatLng(position.latitude, position.longitude);
-      final reportedAccuracy = position.accuracy;
-      final driftMeters = previousLocation == null
-          ? null
-          : _distance.as(LengthUnit.Meter, previousLocation, rawNext);
+        var permission = await Geolocator.checkPermission();
+        if (permission == LocationPermission.denied) {
+          permission = await Geolocator.requestPermission();
+        }
+        if (permission == LocationPermission.denied ||
+            permission == LocationPermission.deniedForever) {
+          if (!silent && mounted) {
+            setState(() {
+              _statusMessage =
+                  'Location permission is needed so pickup stays within 50 meters of you.';
+            });
+          }
+          return existingLocation;
+        }
 
-      if (previousLocation != null &&
-          reportedAccuracy.isFinite &&
-          reportedAccuracy > _maxPassengerGpsAccuracyMeters &&
-          driftMeters != null &&
-          driftMeters <= reportedAccuracy * 1.5) {
-        return previousLocation;
-      }
+        Position? position;
+        try {
+          position = await Geolocator.getCurrentPosition(
+            locationSettings: LocationSettings(
+              accuracy:
+                  silent ? LocationAccuracy.medium : LocationAccuracy.best,
+            ),
+          ).timeout(const Duration(seconds: 12));
+        } on TimeoutException {
+          position = await Geolocator.getLastKnownPosition();
+          if (position == null) {
+            rethrow;
+          }
+        }
 
-      final next = previousLocation != null &&
-              driftMeters != null &&
-              driftMeters < _passengerGpsJitterMeters
-          ? previousLocation
-          : rawNext;
-      if (!mounted) {
-        return next;
-      }
-      setState(() {
-        _currentPassengerLocation = next;
-        _currentPassengerLocationAt = DateTime.now();
-      });
-      if (recenterMap || (!silent && previousLocation == null)) {
-        _syncPassengerMapCamera(next, preferredZoom: 16, force: true);
-      }
-      if (triggerAutoUnload) {
-        unawaited(_maybeAutoUnloadWhenSeparated());
-      }
-      return next;
-    } catch (_) {
-      if (!silent && mounted) {
+        final previousLocation = _currentPassengerLocation;
+        final rawNext = LatLng(position.latitude, position.longitude);
+        final reportedAccuracy = position.accuracy;
+        final driftMeters = previousLocation == null
+            ? null
+            : _distance.as(LengthUnit.Meter, previousLocation, rawNext);
+
+        if (previousLocation != null &&
+            reportedAccuracy.isFinite &&
+            reportedAccuracy > _maxPassengerGpsAccuracyMeters &&
+            driftMeters != null &&
+            driftMeters <= reportedAccuracy * 1.5) {
+          return previousLocation;
+        }
+
+        final next = previousLocation != null &&
+                driftMeters != null &&
+                driftMeters < _passengerGpsJitterMeters
+            ? previousLocation
+            : rawNext;
+        if (!mounted) {
+          return next;
+        }
         setState(() {
-          _statusMessage =
-              'Unable to read your current location right now. Try again in an open area.';
+          _currentPassengerLocation = next;
+          _currentPassengerLocationAt = DateTime.now();
         });
+        if (recenterMap || (!silent && previousLocation == null)) {
+          _syncPassengerMapCamera(next, preferredZoom: 16, force: true);
+        }
+        if (triggerAutoUnload) {
+          unawaited(_maybeAutoUnloadWhenSeparated());
+        }
+        return next;
+      } catch (_) {
+        if (!silent && mounted) {
+          setState(() {
+            _statusMessage =
+                'Unable to read your current location right now. Try again in an open area.';
+          });
+        }
+        return existingLocation;
       }
-      return existingLocation;
+    }();
+
+    _passengerLocationRequest = request;
+    try {
+      return await awaitLocationRequest(request);
     } finally {
-      if (mounted) {
-        setState(() => _locatingPassenger = false);
+      if (identical(_passengerLocationRequest, request)) {
+        _passengerLocationRequest = null;
       }
     }
   }
 
   Future<void> _primeCurrentPassengerLocation() async {
-    await Future<void>.delayed(const Duration(milliseconds: 350));
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
     if (!mounted) {
       return;
     }
@@ -2897,8 +2981,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _showMapPromptNotification(route: _selectedRoute, force: true);
       }
       unawaited(_primeCurrentPassengerLocation());
+      _startLiveRefreshLoop();
     });
-    _startLiveRefreshLoop();
   }
 
   @override
@@ -3735,9 +3819,19 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     if (!mounted || _silentRefreshActive) {
       return;
     }
+    final now = DateTime.now();
+    if (_lastSocketRefreshAt != null &&
+        now.difference(_lastSocketRefreshAt!) < _socketRefreshThrottle) {
+      return;
+    }
+    _lastSocketRefreshAt = now;
     _silentRefreshActive = true;
     try {
-      await _load(silent: true, preferFresh: true);
+      if (_hasFreshRealtimeVehicleState()) {
+        await _refreshPassengerMetadata(silent: true);
+      } else {
+        await _load(silent: true, preferFresh: true);
+      }
     } finally {
       _silentRefreshActive = false;
     }

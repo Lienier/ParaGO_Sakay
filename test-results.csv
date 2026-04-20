@@ -40,4 +40,8 @@ Category,Test Name,Status,Error Message,Description,Input,Expected Output,Actual
 "Trip","Trip Timing","PASS","","Verifies trip timing logic","","",""
 "Notification","Notification Types","PASS","","Verifies all notification types are defined","","",""
 "Notification","Notification Payload","PASS","","Verifies notification payload structure","","",""
+"DestinationApproach","Valid Destination Point","PASS","","Verifies ride sessions expose a usable destination coordinate pair","","",""
+"DestinationApproach","Invalid Destination Point","PASS","","Verifies incomplete destination coordinates are rejected","","",""
+"DestinationApproach","Threshold Hit","PASS","","Verifies a ride is flagged near destination when the jeep is within 50 meters","","",""
+"DestinationApproach","Threshold Miss","PASS","","Verifies a ride is not flagged near destination when the jeep is beyond 50 meters","","",""
 "RateLimit","Rate Limit Configuration","PASS","","Verifies rate limiting configuration values","","",""
