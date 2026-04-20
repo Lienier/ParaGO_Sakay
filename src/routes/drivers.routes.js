@@ -145,6 +145,19 @@ const updateDriverJeepneyLocation = async (req, res) => {
     jeepneyId = activeTrip.jeepneyId;
   }
 
+  const previousJeepneyState = await Jeepney.findById(jeepneyId).select(
+    'lastKnownLocation'
+  );
+  const previousCoordinates = Array.isArray(
+    previousJeepneyState?.lastKnownLocation?.coordinates
+  )
+    ? previousJeepneyState.lastKnownLocation.coordinates
+    : [];
+  const previousLongitude =
+    previousCoordinates.length >= 2 ? Number(previousCoordinates[0]) : null;
+  const previousLatitude =
+    previousCoordinates.length >= 2 ? Number(previousCoordinates[1]) : null;
+
   const jeepney = await Jeepney.findByIdAndUpdate(
     jeepneyId,
     {
@@ -173,6 +186,8 @@ const updateDriverJeepneyLocation = async (req, res) => {
       driverUserId: req.user._id,
       latitude: Number(body.lat),
       longitude: Number(body.lng),
+      previousLatitude,
+      previousLongitude,
     });
 
     emitJeepneyLocationUpdate({

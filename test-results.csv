@@ -44,4 +44,6 @@ Category,Test Name,Status,Error Message,Description,Input,Expected Output,Actual
 "DestinationApproach","Invalid Destination Point","PASS","","Verifies incomplete destination coordinates are rejected","","",""
 "DestinationApproach","Threshold Hit","PASS","","Verifies a ride is flagged near destination when the jeep is within 50 meters","","",""
 "DestinationApproach","Threshold Miss","PASS","","Verifies a ride is not flagged near destination when the jeep is beyond 50 meters","","",""
+"DestinationApproach","Threshold Path Crossing","PASS","","Verifies a ride is still flagged when the jeep crosses the approach radius between GPS samples","","",""
+"DestinationApproach","Threshold Lead Compensation","PASS","","Verifies a small motion-based lead buffer reduces late notifications for moving jeepneys","","",""
 "RateLimit","Rate Limit Configuration","PASS","","Verifies rate limiting configuration values","","",""

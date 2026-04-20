@@ -55,6 +55,8 @@ const processDestinationApproachAlerts = async ({
   driverUserId,
   latitude,
   longitude,
+  previousLatitude,
+  previousLongitude,
 }) => {
   const thresholdMeters = Number(destinationApproachAlertMeters);
   if (
@@ -85,6 +87,8 @@ const processDestinationApproachAlerts = async ({
         latitude,
         longitude,
         thresholdMeters,
+        previousLatitude,
+        previousLongitude,
       })
     ) {
       continue;

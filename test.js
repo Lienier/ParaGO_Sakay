@@ -17,6 +17,7 @@ const {
 const {
   hasValidDestinationPoint,
   isRideWithinDestinationApproachThreshold,
+  computeApproachLeadMeters,
 } = require('./src/utils/destinationApproach');
 
 // Test configuration
@@ -608,6 +609,57 @@ function testDestinationApproachThresholdMiss() {
   );
 }
 
+function testDestinationApproachThresholdPathCrossing() {
+  const ride = {
+    destinationLocation: {
+      coordinates: [120.9842, 14.5995],
+    },
+  };
+  assert.strictEqual(
+    isRideWithinDestinationApproachThreshold({
+      ride,
+      previousLatitude: 14.5991,
+      previousLongitude: 120.9842,
+      latitude: 14.5999,
+      longitude: 120.9842,
+      thresholdMeters: 30,
+    }),
+    true,
+    'Ride should be considered near destination when the jeep path crosses the threshold between samples'
+  );
+}
+
+function testDestinationApproachThresholdLeadCompensation() {
+  const ride = {
+    destinationLocation: {
+      coordinates: [120.9842, 14.5995],
+    },
+  };
+  const leadMeters = computeApproachLeadMeters({
+    previousLatitude: 14.60035,
+    previousLongitude: 120.9842,
+    latitude: 14.60013,
+    longitude: 120.9842,
+    thresholdMeters: 50,
+  });
+  assert.ok(
+    leadMeters > 0,
+    'Lead compensation should be positive when the jeep moves between samples'
+  );
+  assert.strictEqual(
+    isRideWithinDestinationApproachThreshold({
+      ride,
+      previousLatitude: 14.60035,
+      previousLongitude: 120.9842,
+      latitude: 14.60013,
+      longitude: 120.9842,
+      thresholdMeters: 50,
+    }),
+    true,
+    'Ride should be considered near destination slightly before the strict threshold to offset motion and GPS latency'
+  );
+}
+
 // ============ COORDINATE VALIDATION TESTS ============
 function isValidCoordinate(lat, lon) {
   return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
@@ -721,6 +773,8 @@ async function runAllTests() {
   runTest('DestinationApproach', 'Invalid Destination Point', testInvalidDestinationApproachPoint);
   runTest('DestinationApproach', 'Threshold Hit', testDestinationApproachThresholdHit);
   runTest('DestinationApproach', 'Threshold Miss', testDestinationApproachThresholdMiss);
+  runTest('DestinationApproach', 'Threshold Path Crossing', testDestinationApproachThresholdPathCrossing);
+  runTest('DestinationApproach', 'Threshold Lead Compensation', testDestinationApproachThresholdLeadCompensation);
 
   console.log('\n--- Rate Limiting Tests ---');
   runTest('RateLimit', 'Rate Limit Configuration', testRateLimitConfig);
@@ -787,6 +841,8 @@ function generateCSV() {
     'DestinationApproach - Invalid Destination Point': 'Verifies incomplete destination coordinates are rejected',
     'DestinationApproach - Threshold Hit': 'Verifies a ride is flagged near destination when the jeep is within 50 meters',
     'DestinationApproach - Threshold Miss': 'Verifies a ride is not flagged near destination when the jeep is beyond 50 meters',
+    'DestinationApproach - Threshold Path Crossing': 'Verifies a ride is still flagged when the jeep crosses the approach radius between GPS samples',
+    'DestinationApproach - Threshold Lead Compensation': 'Verifies a small motion-based lead buffer reduces late notifications for moving jeepneys',
     'RateLimit - Rate Limit Configuration': 'Verifies rate limiting configuration values'
   };
 
