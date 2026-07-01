@@ -50,6 +50,33 @@ module.exports = {
   jeepPassByReassignMeters: Number(
     process.env.JEEP_PASS_BY_REASSIGN_METERS || 50
   ),
+  autoBoardingProximityMeters: Number(
+    process.env.AUTO_BOARDING_PROXIMITY_METERS || 25
+  ),
+  autoBoardingDwellSeconds: Number(
+    process.env.AUTO_BOARDING_DWELL_SECONDS || 10
+  ),
+  autoBoardingPassengerLocationMaxAgeSeconds: Number(
+    process.env.AUTO_BOARDING_PASSENGER_LOCATION_MAX_AGE_SECONDS || 45
+  ),
+  autoBoardingDriverLocationMaxAgeSeconds: Number(
+    process.env.AUTO_BOARDING_DRIVER_LOCATION_MAX_AGE_SECONDS || 20
+  ),
+  autoOffboardingDistanceMeters: Number(
+    process.env.AUTO_OFFBOARDING_DISTANCE_METERS || 120
+  ),
+  autoOffboardingConsecutiveOutsideChecks: Number(
+    process.env.AUTO_OFFBOARDING_CONSECUTIVE_OUTSIDE_CHECKS || 3
+  ),
+  autoOffboardingSustainedSeparationSeconds: Number(
+    process.env.AUTO_OFFBOARDING_SUSTAINED_SEPARATION_SECONDS || 60
+  ),
+  autoOffboardingPassengerLocationMaxAgeSeconds: Number(
+    process.env.AUTO_OFFBOARDING_PASSENGER_LOCATION_MAX_AGE_SECONDS || 45
+  ),
+  autoOffboardingDriverLocationMaxAgeSeconds: Number(
+    process.env.AUTO_OFFBOARDING_DRIVER_LOCATION_MAX_AGE_SECONDS || 20
+  ),
   fareBaseAmount: Number(process.env.FARE_BASE_AMOUNT || 17),
   fareBaseDistanceKm: Number(process.env.FARE_BASE_DISTANCE_KM || 4),
   fareAdditionalAmountPerKm: Number(

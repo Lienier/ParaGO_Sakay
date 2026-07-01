@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/utils/action_feedback.dart';
@@ -190,6 +192,39 @@ class _AdminRouteManagementScreenState
     widget.onChanged?.call();
   }
 
+  Future<void> _openTerminalSettings(RouteSummaryModel route) async {
+    final payload = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => _TerminalSettingsDialog(route: route),
+    );
+    if (payload == null || !mounted) {
+      return;
+    }
+
+    final session = context.read<SessionController>();
+    final routeService = RouteService(session.apiClient);
+    setState(() => _busyRouteId = route.id);
+    try {
+      await ActionFeedback.run<void>(
+        context: context,
+        loadingMessage: 'Saving terminal settings...',
+        successMessage: payload['enabled'] == false
+            ? 'Terminal queue disabled for ${route.code}.'
+            : 'Terminal settings saved for ${route.code}.',
+        action: () => routeService.updateRouteTerminal(route.id, payload),
+        onSuccess: (_) async {
+          if (!mounted) return;
+          await _load();
+          widget.onChanged?.call();
+        },
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _busyRouteId = null);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final query = _searchCtrl.text.trim().toLowerCase();
@@ -364,6 +399,7 @@ class _AdminRouteManagementScreenState
             busyRouteId: _busyRouteId,
             onEditRoute: _openRouteBuilder,
             onEditLandmarks: _openLandmarkEditor,
+            onEditTerminal: _openTerminalSettings,
             onDeactivate: _deactivateRoute,
             onActivate: null,
           ),
@@ -375,6 +411,7 @@ class _AdminRouteManagementScreenState
             busyRouteId: _busyRouteId,
             onEditRoute: _openRouteBuilder,
             onEditLandmarks: _openLandmarkEditor,
+            onEditTerminal: _openTerminalSettings,
             onDeactivate: null,
             onActivate: _reactivateRoute,
           ),
@@ -403,6 +440,7 @@ class _RouteSection extends StatelessWidget {
     required this.busyRouteId,
     this.onEditRoute,
     required this.onEditLandmarks,
+    required this.onEditTerminal,
     required this.onDeactivate,
     required this.onActivate,
   });
@@ -413,6 +451,7 @@ class _RouteSection extends StatelessWidget {
   final String? busyRouteId;
   final ValueChanged<RouteSummaryModel>? onEditRoute;
   final ValueChanged<RouteSummaryModel> onEditLandmarks;
+  final ValueChanged<RouteSummaryModel> onEditTerminal;
   final ValueChanged<RouteSummaryModel>? onDeactivate;
   final ValueChanged<RouteSummaryModel>? onActivate;
 
@@ -455,6 +494,7 @@ class _RouteSection extends StatelessWidget {
                             busy: busyRouteId == route.id,
                             onEditRoute: onEditRoute,
                             onEditLandmarks: onEditLandmarks,
+                            onEditTerminal: onEditTerminal,
                             onDeactivate: onDeactivate,
                             onActivate: onActivate,
                           ),
@@ -476,6 +516,7 @@ class _RouteRow extends StatelessWidget {
     required this.busy,
     this.onEditRoute,
     required this.onEditLandmarks,
+    required this.onEditTerminal,
     required this.onDeactivate,
     required this.onActivate,
   });
@@ -484,6 +525,7 @@ class _RouteRow extends StatelessWidget {
   final bool busy;
   final ValueChanged<RouteSummaryModel>? onEditRoute;
   final ValueChanged<RouteSummaryModel> onEditLandmarks;
+  final ValueChanged<RouteSummaryModel> onEditTerminal;
   final ValueChanged<RouteSummaryModel>? onDeactivate;
   final ValueChanged<RouteSummaryModel>? onActivate;
 
@@ -517,6 +559,16 @@ class _RouteRow extends StatelessWidget {
         ),
       );
     }
+
+    final terminal = route.effectiveTerminal;
+    final terminalLabel = terminal == null
+        ? 'Terminal not configured'
+        : '${terminal.label} (${terminal.radiusMeters} m)';
+    final terminalSource = terminal == null
+        ? 'Terminal queue unavailable'
+        : terminal.isConfigured
+            ? 'Configured terminal'
+            : 'Fallback from first landmark';
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -570,6 +622,51 @@ class _RouteRow extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Theme.of(context)
+                  .colorScheme
+                  .tertiary
+                  .withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  terminal == null
+                      ? Icons.location_off_outlined
+                      : Icons.storefront_outlined,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.tertiary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        terminalLabel,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        terminalSource,
+                        style: Theme.of(context).textTheme.bodySmall,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
           if (route.stopPoints.isNotEmpty) ...[
             const SizedBox(height: 10),
             Wrap(
@@ -613,6 +710,12 @@ class _RouteRow extends StatelessWidget {
                 icon: const Icon(Icons.place_outlined),
                 label: const Text('Edit landmarks'),
               ),
+              OutlinedButton.icon(
+                onPressed: busy ? null : () => onEditTerminal(route),
+                style: compactOutlinedStyle,
+                icon: const Icon(Icons.storefront_outlined),
+                label: const Text('Terminal'),
+              ),
               if (onDeactivate != null)
                 FilledButton.tonal(
                   onPressed: busy ? null : () => onDeactivate!(route),
@@ -641,6 +744,417 @@ class _RouteRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _TerminalSettingsDialog extends StatefulWidget {
+  const _TerminalSettingsDialog({required this.route});
+
+  final RouteSummaryModel route;
+
+  @override
+  State<_TerminalSettingsDialog> createState() =>
+      _TerminalSettingsDialogState();
+}
+
+class _TerminalSettingsDialogState extends State<_TerminalSettingsDialog> {
+  static const _defaultCenter = LatLng(14.6091, 121.0223);
+
+  late bool _enabled;
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _stopRefCtrl;
+  late final TextEditingController _radiusCtrl;
+  LatLng? _point;
+  String? _message;
+
+  @override
+  void initState() {
+    super.initState();
+    final configured = widget.route.terminal;
+    final effective = widget.route.effectiveTerminal;
+    _enabled = configured?.enabled ?? effective != null;
+    _point = configured?.position ?? effective?.position;
+    _nameCtrl = TextEditingController(
+      text: configured?.name?.trim().isNotEmpty == true
+          ? configured!.name
+          : effective?.label,
+    );
+    _stopRefCtrl = TextEditingController(
+      text: configured?.stopRef?.trim().isNotEmpty == true
+          ? configured!.stopRef
+          : effective?.label,
+    );
+    _radiusCtrl = TextEditingController(
+      text: (configured?.radiusMeters ?? effective?.radiusMeters ?? 75)
+          .toString(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _stopRefCtrl.dispose();
+    _radiusCtrl.dispose();
+    super.dispose();
+  }
+
+  LatLng get _mapCenter {
+    final point = _point;
+    if (point != null) return point;
+    final bounds = widget.route.mapBounds;
+    if (bounds != null) return bounds.center;
+    final references = widget.route.referencePoints;
+    if (references.isNotEmpty) return references.first;
+    return _defaultCenter;
+  }
+
+  double get _mapZoom {
+    if (_point != null) return 15.4;
+    final bounds = widget.route.mapBounds;
+    if (bounds == null) return 13.2;
+    final span = ((bounds.north - bounds.south).abs() +
+            (bounds.east - bounds.west).abs()) /
+        2;
+    if (span < 0.01) return 15.2;
+    if (span < 0.04) return 13.8;
+    return 12.6;
+  }
+
+  void _useStop(RouteStopPoint stop) {
+    setState(() {
+      _point = stop.position;
+      if (_nameCtrl.text.trim().isEmpty ||
+          _nameCtrl.text.trim() == 'Route terminal') {
+        _nameCtrl.text = stop.name;
+      }
+      _stopRefCtrl.text = stop.name;
+      _message = 'Terminal pin moved to ${stop.name}.';
+    });
+  }
+
+  void _save() {
+    if (!_enabled) {
+      Navigator.of(context).pop(<String, dynamic>{'enabled': false});
+      return;
+    }
+
+    final point = _point;
+    if (point == null) {
+      setState(() => _message = 'Choose the terminal location on the map.');
+      return;
+    }
+    final radius = int.tryParse(_radiusCtrl.text.trim());
+    if (radius == null || radius < 1) {
+      setState(() => _message = 'Terminal radius must be at least 1 meter.');
+      return;
+    }
+
+    final name = _nameCtrl.text.trim();
+    final stopRef = _stopRefCtrl.text.trim();
+    Navigator.of(context).pop(<String, dynamic>{
+      'enabled': true,
+      'name': name.isEmpty ? 'Route terminal' : name,
+      'stopRef': stopRef.isEmpty ? name : stopRef,
+      'radiusMeters': radius,
+      'location': {
+        'type': 'Point',
+        'coordinates': <double>[point.longitude, point.latitude],
+      },
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final route = widget.route;
+    final stops = route.stopPoints;
+    final point = _point;
+
+    return AlertDialog(
+      title: Text('Terminal settings - ${route.code}'),
+      content: SizedBox(
+        width: 760,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Enable terminal queue for this route'),
+                value: _enabled,
+                onChanged: (value) => setState(() {
+                  _enabled = value;
+                  _message = value
+                      ? 'Terminal queue enabled. Confirm the location before saving.'
+                      : 'Terminal queue will be disabled for this route.';
+                }),
+              ),
+              const SizedBox(height: 8),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final stacked = constraints.maxWidth < 620;
+                  final nameField = TextField(
+                    controller: _nameCtrl,
+                    enabled: _enabled,
+                    decoration: const InputDecoration(
+                      labelText: 'Terminal name',
+                      prefixIcon: Icon(Icons.storefront_outlined),
+                    ),
+                  );
+                  final stopRefField = TextField(
+                    controller: _stopRefCtrl,
+                    enabled: _enabled,
+                    decoration: const InputDecoration(
+                      labelText: 'Terminal label',
+                      prefixIcon: Icon(Icons.label_outline),
+                    ),
+                  );
+                  final radiusField = TextField(
+                    controller: _radiusCtrl,
+                    enabled: _enabled,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Radius meters',
+                      prefixIcon: Icon(Icons.radar_outlined),
+                    ),
+                  );
+
+                  if (stacked) {
+                    return Column(
+                      children: [
+                        nameField,
+                        const SizedBox(height: 10),
+                        stopRefField,
+                        const SizedBox(height: 10),
+                        radiusField,
+                      ],
+                    );
+                  }
+
+                  return Row(
+                    children: [
+                      Expanded(child: nameField),
+                      const SizedBox(width: 10),
+                      Expanded(child: stopRefField),
+                      const SizedBox(width: 10),
+                      SizedBox(width: 170, child: radiusField),
+                    ],
+                  );
+                },
+              ),
+              if (stops.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                DropdownButtonFormField<int>(
+                  initialValue: null,
+                  decoration: const InputDecoration(
+                    labelText: 'Use route landmark as terminal',
+                    prefixIcon: Icon(Icons.place_outlined),
+                  ),
+                  items: [
+                    for (var index = 0; index < stops.length; index += 1)
+                      DropdownMenuItem<int>(
+                        value: index,
+                        child: Text(
+                          stops[index].name,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                  onChanged: !_enabled
+                      ? null
+                      : (index) {
+                          if (index != null) {
+                            _useStop(stops[index]);
+                          }
+                        },
+                ),
+              ],
+              const SizedBox(height: 12),
+              Text(
+                point == null
+                    ? 'Terminal pin not set'
+                    : 'Terminal pin: ${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 360,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(18),
+                  child: FlutterMap(
+                    options: MapOptions(
+                      initialCenter: _mapCenter,
+                      initialZoom: _mapZoom,
+                      interactionOptions: const InteractionOptions(
+                        flags: InteractiveFlag.all,
+                      ),
+                      onTap: !_enabled
+                          ? null
+                          : (_, selectedPoint) {
+                              setState(() {
+                                _point = selectedPoint;
+                                _message =
+                                    'Terminal pin moved. Save to apply it.';
+                              });
+                            },
+                    ),
+                    children: [
+                      TileLayer(
+                        urlTemplate:
+                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.parago.admin',
+                      ),
+                      if (route.mapPath.length >= 2)
+                        PolylineLayer(
+                          polylines: [
+                            Polyline(
+                              points: route.mapPath,
+                              strokeWidth: 5,
+                              color: const Color(0xFF0F6A5F),
+                            ),
+                          ],
+                        ),
+                      if (point != null)
+                        CircleLayer(
+                          circles: [
+                            CircleMarker(
+                              point: point,
+                              radius: (double.tryParse(
+                                            _radiusCtrl.text.trim(),
+                                          ) ??
+                                          75)
+                                      .clamp(20, 250)
+                                      .toDouble() /
+                                  2,
+                              color: const Color(0xFF8A3B5D)
+                                  .withValues(alpha: 0.16),
+                              borderColor: const Color(0xFF8A3B5D),
+                              borderStrokeWidth: 2,
+                            ),
+                          ],
+                        ),
+                      MarkerLayer(
+                        markers: [
+                          for (final stop in stops.take(20))
+                            Marker(
+                              point: stop.position,
+                              width: 118,
+                              height: 58,
+                              child: _TerminalMapMarker(
+                                label: stop.name,
+                                icon: Icons.place_outlined,
+                                accent: const Color(0xFF2157A5),
+                              ),
+                            ),
+                          if (point != null)
+                            Marker(
+                              point: point,
+                              width: 132,
+                              height: 64,
+                              child: const _TerminalMapMarker(
+                                label: 'Terminal',
+                                icon: Icons.storefront,
+                                accent: Color(0xFF8A3B5D),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const RichAttributionWidget(
+                        attributions: [
+                          TextSourceAttribution('OpenStreetMap contributors'),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (_message != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _message!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton.icon(
+          onPressed: _save,
+          icon: const Icon(Icons.save_outlined),
+          label: const Text('Save terminal'),
+        ),
+      ],
+    );
+  }
+}
+
+class _TerminalMapMarker extends StatelessWidget {
+  const _TerminalMapMarker({
+    required this.label,
+    required this.icon,
+    required this.accent,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.14),
+                blurRadius: 12,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 15, color: accent),
+                const SizedBox(width: 4),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 82),
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: accent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        Icon(Icons.arrow_drop_down, color: accent, size: 28),
+      ],
     );
   }
 }

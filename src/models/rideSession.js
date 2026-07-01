@@ -25,6 +25,11 @@ const rideSessionSchema = new Schema(
       enum: ['roadside', 'terminal'],
       default: 'roadside',
     },
+    boardingMethod: {
+      type: String,
+      enum: ['manual', 'auto_proximity'],
+      default: 'manual',
+    },
     boardingStopRef: { type: String, trim: true },
     boardingLocation: {
       type: {
@@ -49,6 +54,16 @@ const rideSessionSchema = new Schema(
       type: String,
       enum: ['waiting', 'onboard', 'completed'],
       default: 'waiting',
+    },
+    offboardingMethod: {
+      type: String,
+      enum: ['manual', 'auto_separation'],
+    },
+    autoOffboarding: {
+      separationStartedAt: { type: Date },
+      lastCheckedAt: { type: Date },
+      lastDistanceMeters: { type: Number, min: 0 },
+      outsideCount: { type: Number, min: 0, default: 0 },
     },
     boardedAt: { type: Date },
     endedAt: { type: Date },

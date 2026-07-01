@@ -89,7 +89,123 @@ const ensureTerminalQueueRouteSupported = (route, operatingMode) => {
   }
 };
 
+const terminalQueueActiveStatuses = ['waiting', 'loading', 'skipped'];
+
+const populateDispatchTrip = (query) =>
+  query
+    .populate('driverId', 'userId')
+    .populate('jeepneyId', 'plateNumber jeepneyName capacity')
+    .populate('routeId', 'name code direction');
+
+const buildHybridDispatchBoard = async () => {
+  const [terminalTrips, routeTrips] = await Promise.all([
+    populateDispatchTrip(
+      TripSession.find({
+        status: 'active',
+        operatingMode: 'terminal_queue',
+      })
+    ).sort({ terminalQueueNumber: 1, terminalCheckedInAt: 1, createdAt: 1 }),
+    populateDispatchTrip(
+      TripSession.find({
+        status: 'active',
+        operatingMode: 'route',
+      })
+    ).sort({ startedAt: -1, createdAt: -1 }),
+  ]);
+
+  terminalTrips.sort(compareTerminalQueueTrips);
+  const terminalTripIds = terminalTrips.map((trip) => trip._id);
+  const terminalRequests = terminalTripIds.length
+    ? await PickupRequest.find({
+        pickupType: 'terminal',
+        tripSessionId: { $in: terminalTripIds },
+        status: { $in: ['pending', 'acknowledged'] },
+      }).sort({ createdAt: 1 })
+    : [];
+
+  return {
+    terminalQueue: terminalTrips,
+    waitingTerminalPassengers: terminalRequests,
+    routeDrivers: routeTrips,
+  };
+};
+
+const syncTripTerminalQueueToDriver = async (trip) => {
+  if (!trip?.driverId) {
+    return;
+  }
+  await Driver.findByIdAndUpdate(trip.driverId, {
+    $set: {
+      operatingMode: trip.operatingMode,
+      terminalQueueStatus: trip.terminalQueueStatus,
+      terminalCheckedInAt: trip.terminalCheckedInAt || trip.startedAt || new Date(),
+      terminalQueueNumber: trip.terminalQueueNumber,
+      terminalStopRef: trip.terminalStopRef,
+    },
+  });
+};
+
+const requireManageableTerminalQueueTrip = async (tripId) => {
+  ensureObjectId(tripId, 'trip id');
+  const trip = await TripSession.findById(tripId);
+  if (!trip) {
+    throw new ApiError(404, 'Terminal queue trip not found');
+  }
+  if (trip.status !== 'active' || trip.operatingMode !== 'terminal_queue') {
+    throw new ApiError(409, 'Trip is not active in terminal queue mode');
+  }
+  const normalizedStatus = normalizeTerminalQueueStatus(trip.terminalQueueStatus, {
+    operatingMode: trip.operatingMode,
+  });
+  if (!terminalQueueActiveStatuses.includes(normalizedStatus)) {
+    throw new ApiError(409, 'Trip is not waiting, loading, or skipped in the terminal queue');
+  }
+  return trip;
+};
+
+const findManageableTerminalQueueTrips = async (trip) => {
+  const trips = await TripSession.find({
+    routeId: trip.routeId,
+    status: 'active',
+    operatingMode: 'terminal_queue',
+    terminalQueueStatus: { $in: terminalQueueActiveStatuses },
+  }).sort({ terminalQueueNumber: 1, terminalCheckedInAt: 1, createdAt: 1 });
+  return trips.sort(compareTerminalQueueTrips);
+};
+
+const nextQueueNumberForTripRoute = async (trip) => {
+  const trips = await TripSession.find({
+    routeId: trip.routeId,
+    status: { $in: ['scheduled', 'active'] },
+    operatingMode: 'terminal_queue',
+    _id: { $ne: trip._id },
+  }).select('terminalQueueNumber');
+  return nextTerminalQueueNumber(trips);
+};
+
 const syncJeepneyAssignment = async (driver, newJeepneyId) => {
+
+const setTerminalQueueStatus = async (trip, terminalQueueStatus) => {
+  const normalizedStatus = normalizeTerminalQueueStatus(terminalQueueStatus, {
+    operatingMode: trip.operatingMode,
+  });
+
+  if (normalizedStatus === 'departed') {
+    trip.terminalQueueStatus = 'departed';
+    await trip.save();
+    await syncTripTerminalQueueToDriver(trip);
+    return trip;
+  }
+
+  if (!['waiting', 'loading'].includes(normalizedStatus)) {
+    throw new ApiError(400, 'terminalQueueStatus must be waiting, loading, or departed');
+  }
+
+  trip.terminalQueueStatus = normalizedStatus;
+  await trip.save();
+  await syncTripTerminalQueueToDriver(trip);
+  return trip;
+};
   const previousJeepneyId = driver.assignedJeepneyId;
   if (previousJeepneyId && String(previousJeepneyId) !== String(newJeepneyId || '')) {
     await Jeepney.updateOne(
@@ -207,43 +323,128 @@ router.get(
 router.get(
   '/hybrid-dispatch',
   asyncHandler(async (_req, res) => {
-    const [terminalTrips, routeTrips] = await Promise.all([
-      TripSession.find({
-        status: 'active',
-        operatingMode: 'terminal_queue',
-      })
-        .populate('driverId', 'userId')
-        .populate('jeepneyId', 'plateNumber jeepneyName capacity')
-        .populate('routeId', 'name code direction')
-        .sort({ terminalQueueNumber: 1, terminalCheckedInAt: 1, createdAt: 1 }),
-      TripSession.find({
-        status: 'active',
-        operatingMode: 'route',
-      })
-        .populate('driverId', 'userId')
-        .populate('jeepneyId', 'plateNumber jeepneyName capacity')
-        .populate('routeId', 'name code direction')
-        .sort({ startedAt: -1, createdAt: -1 }),
-    ]);
+    return ok(res, await buildHybridDispatchBoard(), 'Hybrid dispatch board');
+  })
+);
 
-    terminalTrips.sort(compareTerminalQueueTrips);
-    const terminalTripIds = terminalTrips.map((trip) => trip._id);
-    const terminalRequests = terminalTripIds.length
-      ? await PickupRequest.find({
-          pickupType: 'terminal',
-          tripSessionId: { $in: terminalTripIds },
-          status: { $in: ['pending', 'acknowledged'] },
-        }).sort({ createdAt: 1 })
-      : [];
+router.patch(
+  '/terminal-queue/:tripId/reorder',
+  asyncHandler(async (req, res) => {
+    const direction = String(req.body?.direction || '').trim().toLowerCase();
+    if (!['up', 'down'].includes(direction)) {
+      throw new ApiError(400, 'direction must be up or down');
+    }
+
+    const trip = await requireManageableTerminalQueueTrip(req.params.tripId);
+    const queue = await findManageableTerminalQueueTrips(trip);
+    const index = queue.findIndex((entry) => String(entry._id) === String(trip._id));
+    if (index < 0) {
+      throw new ApiError(404, 'Terminal queue trip not found in active queue');
+    }
+
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= queue.length) {
+      return ok(
+        res,
+        await buildHybridDispatchBoard(),
+        'Terminal queue order unchanged'
+      );
+    }
+
+    const neighbor = queue[targetIndex];
+    const currentQueueNumber = Number(trip.terminalQueueNumber || index + 1);
+    const neighborQueueNumber = Number(
+      neighbor.terminalQueueNumber || targetIndex + 1
+    );
+    const siblingQueueNumbers = await TripSession.find({
+      routeId: trip.routeId,
+      status: { $in: ['scheduled', 'active'] },
+      operatingMode: 'terminal_queue',
+    }).select('terminalQueueNumber');
+    const temporaryQueueNumber =
+      nextTerminalQueueNumber(siblingQueueNumbers) + 1000;
+
+    await TripSession.updateOne(
+      { _id: trip._id },
+      { $set: { terminalQueueNumber: temporaryQueueNumber } }
+    );
+    await TripSession.updateOne(
+      { _id: neighbor._id },
+      { $set: { terminalQueueNumber: currentQueueNumber } }
+    );
+    await TripSession.updateOne(
+      { _id: trip._id },
+      { $set: { terminalQueueNumber: neighborQueueNumber } }
+    );
+
+    const [updatedTrip, updatedNeighbor] = await Promise.all([
+      TripSession.findById(trip._id),
+      TripSession.findById(neighbor._id),
+    ]);
+    await Promise.all([
+      syncTripTerminalQueueToDriver(updatedTrip),
+      syncTripTerminalQueueToDriver(updatedNeighbor),
+    ]);
 
     return ok(
       res,
-      {
-        terminalQueue: terminalTrips,
-        waitingTerminalPassengers: terminalRequests,
-        routeDrivers: routeTrips,
-      },
-      'Hybrid dispatch board'
+      await buildHybridDispatchBoard(),
+      'Terminal queue order updated'
+    );
+  })
+);
+
+router.patch(
+  '/terminal-queue/:tripId/skip',
+  asyncHandler(async (req, res) => {
+    const trip = await requireManageableTerminalQueueTrip(req.params.tripId);
+    const skipped = req.body?.skipped !== false;
+    const nextQueueNumber = await nextQueueNumberForTripRoute(trip);
+    const acknowledgedTerminalRequests = skipped
+      ? 0
+      : await PickupRequest.countDocuments({
+          tripSessionId: trip._id,
+          pickupType: 'terminal',
+          status: 'acknowledged',
+        });
+
+    trip.terminalQueueStatus = skipped
+      ? 'skipped'
+      : acknowledgedTerminalRequests > 0
+      ? 'loading'
+      : 'waiting';
+    trip.terminalQueueNumber = nextQueueNumber;
+    await trip.save();
+    await syncTripTerminalQueueToDriver(trip);
+
+    return ok(
+      res,
+      await buildHybridDispatchBoard(),
+      skipped ? 'Terminal queue trip skipped' : 'Terminal queue trip restored'
+    );
+  })
+);
+
+router.patch(
+  '/terminal-queue/:tripId/status',
+  asyncHandler(async (req, res) => {
+    const trip = await requireManageableTerminalQueueTrip(req.params.tripId);
+    const terminalQueueStatus = String(req.body?.terminalQueueStatus || '')
+      .trim()
+      .toLowerCase();
+    if (!['waiting', 'loading', 'departed'].includes(terminalQueueStatus)) {
+      throw new ApiError(
+        400,
+        'terminalQueueStatus must be waiting, loading, or departed'
+      );
+    }
+
+    await setTerminalQueueStatus(trip, terminalQueueStatus);
+
+    return ok(
+      res,
+      await buildHybridDispatchBoard(),
+      `Terminal queue trip marked ${terminalQueueStatus}`
     );
   })
 );

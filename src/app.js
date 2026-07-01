@@ -43,7 +43,8 @@ const limiter = rateLimit({
     const path = req.path || req.originalUrl || '';
     return (
       path.endsWith('/drivers/location') ||
-      path.endsWith('/drivers/me/location')
+      path.endsWith('/drivers/me/location') ||
+      path.endsWith('/passengers/me/location')
     );
   },
 });

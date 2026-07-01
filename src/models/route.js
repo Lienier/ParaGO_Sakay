@@ -40,6 +40,17 @@ const fareConfigSchema = new Schema(
   { _id: false }
 );
 
+const terminalSettingsSchema = new Schema(
+  {
+    enabled: { type: Boolean, default: true },
+    name: { type: String, trim: true },
+    stopRef: { type: String, trim: true },
+    location: geoPointSchema,
+    radiusMeters: { type: Number, min: 1, default: 75 },
+  },
+  { _id: false }
+);
+
 const routeSchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
@@ -64,6 +75,7 @@ const routeSchema = new Schema(
       },
     ],
     stops: [stopSchema],
+    terminal: terminalSettingsSchema,
     navigation: {
       source: {
         type: String,

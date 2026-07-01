@@ -42,6 +42,9 @@ class _AdminOverviewPage extends StatelessWidget {
     required this.lastSyncedAt,
     required this.showingCachedSnapshot,
     required this.onRefresh,
+    required this.onReorderTerminalTrip,
+    required this.onSetTerminalTripSkipped,
+    required this.onSetTerminalTripStatus,
   });
 
   final bool loading;
@@ -52,12 +55,23 @@ class _AdminOverviewPage extends StatelessWidget {
   final DateTime? lastSyncedAt;
   final bool showingCachedSnapshot;
   final Future<void> Function({bool silent}) onRefresh;
+  final Future<void> Function(String tripId, String direction)
+      onReorderTerminalTrip;
+  final Future<void> Function(String tripId, bool skipped)
+      onSetTerminalTripSkipped;
+    final Future<void> Function(String tripId, String terminalQueueStatus)
+      onSetTerminalTripStatus;
 
   @override
   Widget build(BuildContext context) {
     final metrics = dashboard ?? const <String, dynamic>{};
     final passengerFlow = passengerFlowReport ?? const <String, dynamic>{};
-    final hybridBoard = hybridDispatchBoard ?? const <String, dynamic>{};
+    final hybridDispatch = hybridDispatchBoard ?? const <String, dynamic>{};
+    final terminalQueue = _readDynamicList(hybridDispatch['terminalQueue']);
+    final waitingTerminalPassengers = _readDynamicList(
+      hybridDispatch['waitingTerminalPassengers'],
+    );
+    final routeDrivers = _readDynamicList(hybridDispatch['routeDrivers']);
     final summary = _readDynamicMap(passengerFlow['summary']);
     final dailyFlow = _parsePassengerFlowSeries(passengerFlow['daily']);
     final topBoardingLocations = _parsePassengerFlowLocations(
@@ -72,10 +86,6 @@ class _AdminOverviewPage extends StatelessWidget {
     final topUnloadLocation = _parsePassengerFlowLocation(
       summary['topUnloadLocation'],
     );
-    final terminalQueue = _readDynamicList(hybridBoard['terminalQueue']);
-    final waitingTerminalPassengers =
-        _readDynamicList(hybridBoard['waitingTerminalPassengers']);
-    final routeDrivers = _readDynamicList(hybridBoard['routeDrivers']);
 
     return RefreshIndicator(
       onRefresh: () => onRefresh(silent: false),
@@ -156,9 +166,9 @@ class _AdminOverviewPage extends StatelessWidget {
           ),
           const SizedBox(height: 18),
           _SectionCard(
-            title: 'Hybrid dispatch board',
+            title: 'Terminal dispatch board',
             subtitle:
-                'Separates terminal queue operations from direct route operations so dispatch can manage both at the same time.',
+                'Shows the jeepney queue at the terminal, waiting terminal passengers, and route-mode drivers.',
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final stacked = constraints.maxWidth < 1050;
@@ -167,11 +177,16 @@ class _AdminOverviewPage extends StatelessWidget {
                   accent: const Color(0xFF8A3B5D),
                   emptyMessage: 'No active terminal queue trips yet.',
                   children: [
-                    if (terminalQueue.isEmpty)
-                      const Text('No active terminal queue trips yet.')
-                    else
-                      for (final trip in terminalQueue)
-                        _HybridDispatchTile(
+                    for (final trip in terminalQueue)
+                      _HybridDispatchTile(
+                          actions: _terminalQueueActions(
+                            trip,
+                            index: terminalQueue.indexOf(trip),
+                            total: terminalQueue.length,
+                            onReorder: onReorderTerminalTrip,
+                            onSkippedChanged: onSetTerminalTripSkipped,
+                            onStatusChanged: onSetTerminalTripStatus,
+                          ),
                           title:
                               '#${trip['terminalQueueNumber'] ?? '-'} ${_dispatchTripLabel(trip)}',
                           subtitle:
@@ -378,6 +393,61 @@ String _dispatchTerminalLabel(dynamic value) {
   return terminal;
 }
 
+List<Widget> _terminalQueueActions(
+  dynamic value, {
+  required int index,
+  required int total,
+  required Future<void> Function(String tripId, String direction) onReorder,
+  required Future<void> Function(String tripId, bool skipped)
+      onSkippedChanged,
+  required Future<void> Function(String tripId, String terminalQueueStatus)
+      onStatusChanged,
+}) {
+  final map = _readDynamicMap(value);
+  final tripId = map['_id']?.toString() ?? '';
+  if (tripId.isEmpty) {
+    return const <Widget>[];
+  }
+  final skipped = map['terminalQueueStatus']?.toString() == 'skipped';
+  final status = map['terminalQueueStatus']?.toString() ?? 'waiting';
+  final loading = status == 'loading';
+  final departed = status == 'departed';
+
+  return [
+    IconButton.outlined(
+      onPressed: index <= 0 ? null : () => onReorder(tripId, 'up'),
+      tooltip: 'Move up',
+      icon: const Icon(Icons.keyboard_arrow_up),
+    ),
+    IconButton.outlined(
+      onPressed: index >= total - 1 ? null : () => onReorder(tripId, 'down'),
+      tooltip: 'Move down',
+      icon: const Icon(Icons.keyboard_arrow_down),
+    ),
+    IconButton.filledTonal(
+      onPressed: () => onSkippedChanged(tripId, !skipped),
+      tooltip: skipped ? 'Restore to queue' : 'Skip this jeepney',
+      icon: Icon(skipped ? Icons.undo : Icons.skip_next),
+    ),
+    IconButton.filledTonal(
+      onPressed: departed ? null : () => onStatusChanged(tripId, 'loading'),
+      tooltip: 'Mark loading',
+      icon: const Icon(Icons.local_shipping_outlined),
+    ),
+    IconButton.filledTonal(
+      onPressed: departed ? null : () => onStatusChanged(tripId, 'departed'),
+      tooltip: 'Mark departed',
+      icon: const Icon(Icons.departure_board_outlined),
+    ),
+    if (loading || departed)
+      IconButton.outlined(
+        onPressed: () => onStatusChanged(tripId, 'waiting'),
+        tooltip: 'Mark waiting',
+        icon: const Icon(Icons.access_time_outlined),
+      ),
+  ];
+}
+
 class _HybridDispatchColumn extends StatelessWidget {
   const _HybridDispatchColumn({
     required this.title,
@@ -428,11 +498,13 @@ class _HybridDispatchTile extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.caption,
+    this.actions = const <Widget>[],
   });
 
   final String title;
   final String subtitle;
   final String caption;
+  final List<Widget> actions;
 
   @override
   Widget build(BuildContext context) {
@@ -461,6 +533,14 @@ class _HybridDispatchTile extends StatelessWidget {
                   color: const Color(0xFF67726E),
                 ),
           ),
+          if (actions.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: actions,
+            ),
+          ],
         ],
       ),
     );
@@ -1026,69 +1106,6 @@ class _PassengerFlowTopStopsCardState extends State<_PassengerFlowTopStopsCard> 
                 ],
               ],
             ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AdminHero extends StatelessWidget {
-  const _AdminHero({
-    required this.title,
-    required this.subtitle,
-  });
-
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(30),
-        gradient: const LinearGradient(
-          colors: [
-            Color(0xFF0F6A5F),
-            Color(0xFF8A3B5D),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.16),
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: const Text(
-              'Dedicated operations console',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Text(
-            title,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w800,
-                ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            subtitle,
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: Colors.white.withValues(alpha: 0.92),
-                  height: 1.45,
-                ),
-          ),
         ],
       ),
     );

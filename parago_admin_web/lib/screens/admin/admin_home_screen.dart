@@ -203,6 +203,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       'pendingRequests': _readIntMetric(current?['pendingRequests']),
       'onboardRides': _readIntMetric(current?['onboardRides']),
       'activeAlerts': _readIntMetric(current?['activeAlerts']),
+      'terminalQueueTrips': _readIntMetric(current?['terminalQueueTrips']),
+      'routeModeTrips': _readIntMetric(current?['routeModeTrips']),
+      'terminalRequests': _readIntMetric(current?['terminalRequests']),
     };
 
     switch (notificationType) {
@@ -245,6 +248,48 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     return next;
   }
 
+  Future<void> _reorderTerminalQueueTrip(
+    String tripId,
+    String direction,
+  ) async {
+    try {
+      final session = context.read<SessionController>();
+      final board = await AdminService(session.apiClient)
+          .reorderTerminalQueueTrip(tripId: tripId, direction: direction);
+      if (!mounted) return;
+      setState(() {
+        _hybridDispatchBoard = board;
+        _lastSyncedAt = DateTime.now();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Queue update failed: $error')),
+      );
+    }
+  }
+
+  Future<void> _setTerminalQueueSkipped(
+    String tripId,
+    bool skipped,
+  ) async {
+    try {
+      final session = context.read<SessionController>();
+      final board = await AdminService(session.apiClient)
+          .setTerminalQueueSkipped(tripId: tripId, skipped: skipped);
+      if (!mounted) return;
+      setState(() {
+        _hybridDispatchBoard = board;
+        _lastSyncedAt = DateTime.now();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Queue update failed: $error')),
+      );
+    }
+  }
+
   int _readIntMetric(dynamic value) {
     if (value is int) {
       return value;
@@ -274,6 +319,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           lastSyncedAt: _lastSyncedAt,
           showingCachedSnapshot: _showingCachedSnapshot,
           onRefresh: _load,
+          onReorderTerminalTrip: _reorderTerminalQueueTrip,
+          onSetTerminalTripSkipped: _setTerminalQueueSkipped,
+          onSetTerminalTripStatus: _setTerminalQueueStatus,
         );
       case _AdminWorkspaceSection.drivers:
         return AdminDriverManagementScreen(
@@ -297,6 +345,28 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     }
   }
 
+  Future<void> _setTerminalQueueStatus(
+    String tripId,
+    String terminalQueueStatus,
+  ) async {
+    try {
+      final session = context.read<SessionController>();
+      final board = await AdminService(session.apiClient).setTerminalQueueStatus(
+        tripId: tripId,
+        terminalQueueStatus: terminalQueueStatus,
+      );
+      if (!mounted) return;
+      setState(() {
+        _hybridDispatchBoard = board;
+        _lastSyncedAt = DateTime.now();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Queue update failed: $error')),
+      );
+    }
+  }
   @override
   Widget build(BuildContext context) {
     final session = context.read<SessionController>();

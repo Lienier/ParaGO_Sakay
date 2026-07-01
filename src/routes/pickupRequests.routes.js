@@ -116,6 +116,13 @@ const syncTerminalQueueStatus = async (trip) => {
   if (!trip || String(trip.operatingMode || 'route') !== 'terminal_queue') {
     return;
   }
+  if (
+    normalizeTerminalQueueStatus(trip.terminalQueueStatus, {
+      operatingMode: trip.operatingMode,
+    }) === 'skipped'
+  ) {
+    return;
+  }
 
   const terminalRequests = await PickupRequest.find({
     tripSessionId: trip._id,
@@ -229,6 +236,14 @@ const resolveEligibleTripForRoute = async ({
       continue;
     }
     if (normalizedPickupType === 'terminal' && tripOperatingMode !== 'terminal_queue') {
+      continue;
+    }
+    if (
+      normalizedPickupType === 'terminal' &&
+      normalizeTerminalQueueStatus(trip.terminalQueueStatus, {
+        operatingMode: tripOperatingMode,
+      }) === 'skipped'
+    ) {
       continue;
     }
     if (normalizedPickupType === 'roadside' && tripOperatingMode === 'terminal_queue') {

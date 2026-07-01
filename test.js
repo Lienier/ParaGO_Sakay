@@ -19,6 +19,13 @@ const {
   isRideWithinDestinationApproachThreshold,
   computeApproachLeadMeters,
 } = require('./src/utils/destinationApproach');
+const {
+  evaluateAutoBoardingProximity,
+} = require('./src/utils/automaticBoarding');
+const {
+  evaluateAutoOffboardingSeparation,
+} = require('./src/utils/automaticOffboarding');
+const tokenHash = require('./src/utils/tokenHash');
 
 // Test configuration
 const TEST_CONFIG = {
@@ -95,6 +102,41 @@ function testRefreshTokenGeneration() {
   assert(refreshToken, 'Refresh token should be generated');
   const decoded = jwt.verify(refreshToken, TEST_CONFIG.JWT_REFRESH_SECRET);
   assert.strictEqual(decoded.userId, '456', 'Refresh token userId should match');
+}
+
+function testRefreshTokenRotationState() {
+  const userId = '456';
+  const oldRefreshToken = jwt.sign(
+    { userId, sessionId: 'old-session' },
+    TEST_CONFIG.JWT_REFRESH_SECRET,
+    { expiresIn: TEST_CONFIG.JWT_REFRESH_EXPIRES_IN }
+  );
+  const newRefreshToken = jwt.sign(
+    { userId, sessionId: 'new-session' },
+    TEST_CONFIG.JWT_REFRESH_SECRET,
+    { expiresIn: TEST_CONFIG.JWT_REFRESH_EXPIRES_IN }
+  );
+
+  const oldHash = tokenHash(oldRefreshToken);
+  const newHash = tokenHash(newRefreshToken);
+  const storedTokenRecord = {
+    userId,
+    tokenHash: oldHash,
+    revokedAt: null,
+    replacedByHash: null,
+  };
+
+  storedTokenRecord.revokedAt = new Date();
+  storedTokenRecord.replacedByHash = newHash;
+
+  assert.notStrictEqual(oldHash, oldRefreshToken, 'Stored token hash should not expose the raw token');
+  assert.notStrictEqual(oldHash, newHash, 'Rotated refresh token should receive a new hash');
+  assert(storedTokenRecord.revokedAt instanceof Date, 'Old refresh token should be revoked during rotation');
+  assert.strictEqual(
+    storedTokenRecord.replacedByHash,
+    newHash,
+    'Old refresh token should link to the replacement hash'
+  );
 }
 
 // ============ PASSWORD HASHING TESTS ============
@@ -321,6 +363,42 @@ function testResolveRouteTerminalStop() {
   );
 }
 
+function testResolveConfiguredRouteTerminal() {
+  const terminal = resolveRouteTerminalStop({
+    terminal: {
+      enabled: true,
+      name: 'North Terminal',
+      stopRef: 'NORTH-GATE',
+      radiusMeters: 90,
+      location: { coordinates: [121.1234, 14.5678] },
+    },
+    stops: [
+      {
+        name: 'Fallback Terminal',
+        order: 1,
+        location: { coordinates: [121.0001, 14.6001] },
+      },
+    ],
+  });
+
+  assert(terminal, 'Configured terminal should resolve');
+  assert.strictEqual(
+    terminal.stopRef,
+    'NORTH-GATE',
+    'Configured terminal stopRef should override the first route stop'
+  );
+  assert.strictEqual(
+    terminal.source,
+    'terminal_settings',
+    'Configured terminal should identify its source'
+  );
+  assert.deepStrictEqual(
+    terminal.location.coordinates,
+    [121.1234, 14.5678],
+    'Configured terminal coordinates should be used'
+  );
+}
+
 function testRouteHasTerminalStop() {
   assert.strictEqual(
     routeHasTerminalStop({
@@ -339,6 +417,23 @@ function testRouteHasTerminalStop() {
     routeHasTerminalStop({ stops: [] }),
     false,
     'Routes without valid stops should not expose a terminal stop'
+  );
+  assert.strictEqual(
+    routeHasTerminalStop({
+      terminal: {
+        enabled: false,
+        location: { coordinates: [121.0, 14.6] },
+      },
+      stops: [
+        {
+          name: 'Fallback Terminal',
+          order: 1,
+          location: { coordinates: [121.0, 14.6] },
+        },
+      ],
+    }),
+    false,
+    'Disabled terminal settings should turn off terminal queue support'
   );
 }
 
@@ -361,8 +456,14 @@ function testTerminalQueueSorting() {
     terminalQueueNumber: 1,
     terminalCheckedInAt: '2026-04-18T08:00:00.000Z',
   };
+  const skippedEarlier = {
+    operatingMode: 'terminal_queue',
+    terminalQueueStatus: 'skipped',
+    terminalQueueNumber: 1,
+    terminalCheckedInAt: '2026-04-18T07:55:00.000Z',
+  };
 
-  const sorted = [waitingLater, loadingSooner, waitingEarlier].sort(
+  const sorted = [waitingLater, skippedEarlier, loadingSooner, waitingEarlier].sort(
     compareTerminalQueueTrips
   );
   assert.strictEqual(
@@ -374,6 +475,11 @@ function testTerminalQueueSorting() {
     sorted[1],
     waitingEarlier,
     'Waiting trips should then sort by queue number and check-in time'
+  );
+  assert.strictEqual(
+    sorted[3],
+    skippedEarlier,
+    'Skipped terminal trips should remain visible but sort after waiting trips'
   );
 }
 
@@ -387,6 +493,11 @@ function testTerminalQueueStatusNormalization() {
     normalizeTerminalQueueStatus('loading', { operatingMode: 'route' }),
     'off_queue',
     'Route-mode trips should never keep terminal queue statuses'
+  );
+  assert.strictEqual(
+    normalizeTerminalQueueStatus('skipped', { operatingMode: 'terminal_queue' }),
+    'skipped',
+    'Terminal queue trips should support admin skipped status'
   );
 }
 
@@ -403,6 +514,110 @@ function testBoardingWindowExpired() {
   const boardingTime = new Date();
   const windowEnd = new Date(pickupTime.getTime() + TEST_CONFIG.BOARDING_WINDOW_MINUTES * 60 * 1000);
   assert(boardingTime > windowEnd, 'Boarding outside window should be invalid');
+}
+
+function testAutoBoardingProximityDwellPending() {
+  const now = new Date('2026-05-23T10:00:08.000Z');
+  const result = evaluateAutoBoardingProximity({
+    distanceMeters: 12,
+    proximityStartedAt: '2026-05-23T10:00:00.000Z',
+    now,
+    proximityMeters: 25,
+    dwellSeconds: 10,
+  });
+  assert.strictEqual(result.near, true, 'Passenger should be treated as near the jeepney');
+  assert.strictEqual(
+    result.shouldBoard,
+    false,
+    'Passenger should not auto-board before the 10-second dwell completes'
+  );
+}
+
+function testAutoBoardingProximityDwellComplete() {
+  const now = new Date('2026-05-23T10:00:11.000Z');
+  const result = evaluateAutoBoardingProximity({
+    distanceMeters: 12,
+    proximityStartedAt: '2026-05-23T10:00:00.000Z',
+    now,
+    proximityMeters: 25,
+    dwellSeconds: 10,
+  });
+  assert.strictEqual(result.near, true, 'Passenger should be treated as near the jeepney');
+  assert.strictEqual(
+    result.shouldBoard,
+    true,
+    'Passenger should auto-board after staying near the jeepney for at least 10 seconds'
+  );
+}
+
+function testAutoBoardingProximityResetsWhenFar() {
+  const result = evaluateAutoBoardingProximity({
+    distanceMeters: 80,
+    proximityStartedAt: '2026-05-23T10:00:00.000Z',
+    now: new Date('2026-05-23T10:00:20.000Z'),
+    proximityMeters: 25,
+    dwellSeconds: 10,
+  });
+  assert.strictEqual(result.near, false, 'Passenger outside proximity should not be near');
+  assert.strictEqual(
+    result.proximityStartedAt,
+    null,
+    'Proximity timer should reset when the passenger is too far from the jeepney'
+  );
+}
+
+function testAutoOffboardingSeparationPending() {
+  const result = evaluateAutoOffboardingSeparation({
+    distanceMeters: 140,
+    separationStartedAt: '2026-05-23T10:00:00.000Z',
+    outsideCount: 1,
+    now: new Date('2026-05-23T10:00:08.000Z'),
+    separationMeters: 120,
+    consecutiveOutsideChecks: 3,
+    sustainedSeparationSeconds: 60,
+  });
+  assert.strictEqual(result.outside, true, 'Passenger should be outside the jeepney range');
+  assert.strictEqual(
+    result.shouldOffboard,
+    false,
+    'Passenger should not auto-offboard before enough outside confirmations'
+  );
+}
+
+function testAutoOffboardingSeparationComplete() {
+  const result = evaluateAutoOffboardingSeparation({
+    distanceMeters: 140,
+    separationStartedAt: '2026-05-23T10:00:00.000Z',
+    outsideCount: 2,
+    now: new Date('2026-05-23T10:00:12.000Z'),
+    separationMeters: 120,
+    consecutiveOutsideChecks: 3,
+    sustainedSeparationSeconds: 60,
+  });
+  assert.strictEqual(result.outside, true, 'Passenger should be outside the jeepney range');
+  assert.strictEqual(
+    result.shouldOffboard,
+    true,
+    'Passenger should auto-offboard after repeated outside confirmations'
+  );
+}
+
+function testAutoOffboardingSeparationResetsWhenNear() {
+  const result = evaluateAutoOffboardingSeparation({
+    distanceMeters: 35,
+    separationStartedAt: '2026-05-23T10:00:00.000Z',
+    outsideCount: 2,
+    now: new Date('2026-05-23T10:00:12.000Z'),
+    separationMeters: 120,
+    consecutiveOutsideChecks: 3,
+    sustainedSeparationSeconds: 60,
+  });
+  assert.strictEqual(result.outside, false, 'Nearby passenger should not be outside');
+  assert.strictEqual(
+    result.outsideCount,
+    0,
+    'Outside confirmation count should reset when passenger returns near the jeepney'
+  );
 }
 
 // ============ STOP ALERT COOLDOWN TESTS ============
@@ -705,6 +920,7 @@ async function runAllTests() {
   runTest('JWT', 'Token Generation', testJWTGeneration);
   runTest('JWT', 'Token Verification', testJWTVerification);
   runTest('JWT', 'Refresh Token Generation', testRefreshTokenGeneration);
+  runTest('JWT', 'Refresh Token Rotation State', testRefreshTokenRotationState);
 
   console.log('\n--- Password Hashing Tests ---');
   await runAsyncTest('Password', 'Password Hashing', testPasswordHashing);
@@ -740,10 +956,17 @@ async function runAllTests() {
   console.log('\n--- Boarding Window Tests ---');
   runTest('Boarding', 'Boarding Window Valid', testBoardingWindowValid);
   runTest('Boarding', 'Boarding Window Expired', testBoardingWindowExpired);
+  runTest('Boarding', 'Auto Boarding Proximity Dwell Pending', testAutoBoardingProximityDwellPending);
+  runTest('Boarding', 'Auto Boarding Proximity Dwell Complete', testAutoBoardingProximityDwellComplete);
+  runTest('Boarding', 'Auto Boarding Proximity Reset When Far', testAutoBoardingProximityResetsWhenFar);
+  runTest('Boarding', 'Auto Offboarding Separation Pending', testAutoOffboardingSeparationPending);
+  runTest('Boarding', 'Auto Offboarding Separation Complete', testAutoOffboardingSeparationComplete);
+  runTest('Boarding', 'Auto Offboarding Separation Reset When Near', testAutoOffboardingSeparationResetsWhenNear);
 
   console.log('\n--- Hybrid Dispatch Tests ---');
   runTest('Hybrid', 'Trip Operating Mode Normalization', testTripOperatingModeNormalization);
   runTest('Hybrid', 'Resolve Route Terminal Stop', testResolveRouteTerminalStop);
+  runTest('Hybrid', 'Resolve Configured Route Terminal', testResolveConfiguredRouteTerminal);
   runTest('Hybrid', 'Route Has Terminal Stop', testRouteHasTerminalStop);
   runTest('Hybrid', 'Terminal Queue Sorting', testTerminalQueueSorting);
   runTest('Hybrid', 'Terminal Queue Status Normalization', testTerminalQueueStatusNormalization);
@@ -801,6 +1024,7 @@ function generateCSV() {
     'JWT - Token Generation': 'Verifies JWT access token can be generated with user payload',
     'JWT - Token Verification': 'Verifies JWT token can be decoded and payload extracted correctly',
     'JWT - Refresh Token Generation': 'Verifies refresh token can be generated with longer expiry',
+    'JWT - Refresh Token Rotation State': 'Verifies a persisted refresh token is revoked and linked to its replacement hash during session refresh',
     'Password - Password Hashing': 'Verifies password can be hashed using bcrypt',
     'Password - Password Comparison Success': 'Verifies correct password matches its hash',
     'Password - Password Comparison Failure': 'Verifies incorrect password does not match hash',
@@ -824,9 +1048,18 @@ function generateCSV() {
     'Pickup - Pickup Type Normalization': 'Verifies hybrid pickup types normalize to terminal or roadside',
     'Boarding - Boarding Window Valid': 'Verifies boarding within time window is allowed',
     'Boarding - Boarding Window Expired': 'Verifies boarding outside time window is rejected',
+    'Boarding - Auto Boarding Proximity Dwell Pending': 'Verifies automatic boarding waits until the passenger stays near the jeepney for 10 seconds',
+    'Boarding - Auto Boarding Proximity Dwell Complete': 'Verifies automatic boarding becomes eligible after sustained passenger-driver proximity',
+    'Boarding - Auto Boarding Proximity Reset When Far': 'Verifies automatic boarding proximity timing resets when passenger and jeepney separate',
+    'Boarding - Auto Offboarding Separation Pending': 'Verifies automatic offboarding waits for repeated passenger-jeepney separation checks',
+    'Boarding - Auto Offboarding Separation Complete': 'Verifies automatic offboarding becomes eligible after repeated outside-range confirmations',
+    'Boarding - Auto Offboarding Separation Reset When Near': 'Verifies automatic offboarding resets when passenger returns near the jeepney',
     'Hybrid - Trip Operating Mode Normalization': 'Verifies trip operating modes normalize to route or terminal queue',
     'Hybrid - Resolve Route Terminal Stop': 'Verifies the first configured route stop is used as the terminal reference',
+    'Hybrid - Resolve Configured Route Terminal': 'Verifies explicit route terminal settings override the first route stop',
+    'Hybrid - Route Has Terminal Stop': 'Verifies terminal availability reflects configured route terminal settings and valid fallback stops',
     'Hybrid - Terminal Queue Sorting': 'Verifies loading trips and earlier queue numbers are prioritized in terminal dispatch',
+    'Hybrid - Terminal Queue Status Normalization': 'Verifies terminal queue statuses normalize according to the trip operating mode',
     'StopAlert - Cooldown Active': 'Verifies stop alert cooldown period is enforced',
     'StopAlert - Cooldown Expired': 'Verifies stop alert can be sent after cooldown',
     'Reassignment - Jeep Passed By': 'Verifies jeep is marked as passed when beyond threshold',

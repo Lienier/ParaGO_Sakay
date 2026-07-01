@@ -5,10 +5,12 @@ class RideSessionModel {
     required this.tripSessionId,
     required this.pickupRequestId,
     required this.status,
+    this.boardingMethod = 'manual',
     this.destinationStopRef,
     this.destinationLatitude,
     this.destinationLongitude,
     this.canSendStopAlert,
+    this.offboardingMethod,
     this.boardedAt,
     this.endedAt,
   });
@@ -18,10 +20,12 @@ class RideSessionModel {
   final String tripSessionId;
   final String pickupRequestId;
   final String status;
+  final String boardingMethod;
   final String? destinationStopRef;
   final double? destinationLatitude;
   final double? destinationLongitude;
   final bool? canSendStopAlert;
+  final String? offboardingMethod;
   final String? boardedAt;
   final String? endedAt;
 
@@ -31,11 +35,13 @@ class RideSessionModel {
       passengerId: json['passengerId']?.toString() ?? '',
       tripSessionId: json['tripSessionId']?.toString() ?? '',
       pickupRequestId: json['pickupRequestId']?.toString() ?? '',
+      boardingMethod: json['boardingMethod']?.toString() ?? 'manual',
       destinationStopRef: json['destinationStopRef']?.toString(),
       destinationLatitude: _readLatitude(json['destinationLocation']),
       destinationLongitude: _readLongitude(json['destinationLocation']),
       status: json['status']?.toString() ?? '',
       canSendStopAlert: json['canSendStopAlert'] as bool?,
+      offboardingMethod: json['offboardingMethod']?.toString(),
       boardedAt: json['boardedAt']?.toString(),
       endedAt: json['endedAt']?.toString(),
     );

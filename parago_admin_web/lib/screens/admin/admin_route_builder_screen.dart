@@ -268,7 +268,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     final session = context.read<SessionController>();
     final routeService = RouteService(session.apiClient);
     final payload = _buildRoutePayload();
-    final existing = _resolvedExistingRoute;
+    final editingRoute = _editingRoute;
 
     setState(() {
       _savingRoute = true;
@@ -279,13 +279,13 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
       final saved = await ActionFeedback.run<dynamic>(
         context: context,
         loadingMessage: 'Saving route geometry...',
-        successMessage: existing == null
+        successMessage: editingRoute == null
             ? 'Route $_normalizedCode created with offline-ready geometry.'
             : 'Route $_normalizedCode updated with offline-ready geometry.',
         action: () async {
-          final saved = existing == null
+          final saved = editingRoute == null
               ? await routeService.createRoute(payload)
-              : await routeService.updateRoute(existing.id, payload);
+              : await routeService.updateRoute(editingRoute.id, payload);
 
           await _routePreviewCache.saveSnapshot(
             routeId: saved.id,
@@ -389,15 +389,14 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     return null;
   }
 
+  RouteSummaryModel? get _editingRoute => widget.initialRoute;
+
   RouteSummaryModel? get _resolvedExistingRoute {
-    final normalizedCode = _normalizedCode;
-    final initialRoute = widget.initialRoute;
-    if (initialRoute != null &&
-        normalizedCode.isNotEmpty &&
-        initialRoute.code.toLowerCase() == normalizedCode.toLowerCase()) {
-      return initialRoute;
+    final editingRoute = _editingRoute;
+    if (editingRoute != null) {
+      return editingRoute;
     }
-    return _existingRouteByCode(normalizedCode);
+    return _existingRouteByCode(_normalizedCode);
   }
 
   String get _normalizedCode => _codeCtrl.text.trim().toUpperCase();

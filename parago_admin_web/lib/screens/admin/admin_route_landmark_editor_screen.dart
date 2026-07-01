@@ -951,8 +951,8 @@ class _AdminRouteLandmarkEditorScreenState
                                         index += 1)
                                       Marker(
                                         point: _landmarks[index].position,
-                                        width: 168,
-                                        height: 86,
+                                        width: 188,
+                                        height: 96,
                                         child: GestureDetector(
                                           onTap: () {
                                             setState(() {
@@ -1069,38 +1069,46 @@ class _LandmarkMarker extends StatelessWidget {
     final accent = selected ? const Color(0xFF8A3B5D) : const Color(0xFF0F6A5F);
     return Align(
       alignment: Alignment.topCenter,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: accent, width: selected ? 2 : 1),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.16),
-              blurRadius: 16,
-              offset: const Offset(0, 8),
-            ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '$order. $name',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: accent,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                fareLabel,
-                style: const TextStyle(fontWeight: FontWeight.w600),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 180),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: accent, width: selected ? 2 : 1),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.16),
+                blurRadius: 16,
+                offset: const Offset(0, 8),
               ),
             ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '$order. $name',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: true,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: accent,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  fareLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
           ),
         ),
       ),

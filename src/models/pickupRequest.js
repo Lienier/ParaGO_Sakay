@@ -48,6 +48,11 @@ const pickupRequestSchema = new Schema(
     },
     acknowledgedBy: { type: Schema.Types.ObjectId, ref: 'Driver' },
     acknowledgedAt: { type: Date },
+    autoBoarding: {
+      proximityStartedAt: { type: Date },
+      lastCheckedAt: { type: Date },
+      lastDistanceMeters: { type: Number, min: 0 },
+    },
     sourceNote: { type: String, trim: true },
     expiresAt: { type: Date, required: true, index: { expireAfterSeconds: 0 } },
   },

@@ -23,6 +23,7 @@ class RouteSummaryModel {
     this.trafficMultiplier,
     this.trafficProfile,
     this.navigationSource,
+    this.terminal,
     this.fareConfig = const RouteFareConfig(),
   });
 
@@ -47,6 +48,7 @@ class RouteSummaryModel {
   final double? trafficMultiplier;
   final String? trafficProfile;
   final String? navigationSource;
+  final RouteTerminalSettings? terminal;
   final RouteFareConfig fareConfig;
 
   factory RouteSummaryModel.fromJson(Map<String, dynamic> json) {
@@ -82,6 +84,7 @@ class RouteSummaryModel {
       trafficMultiplier: _toDouble(navigation?['trafficMultiplier']),
       trafficProfile: navigation?['trafficProfile']?.toString(),
       navigationSource: navigation?['source']?.toString(),
+      terminal: RouteTerminalSettings.fromJson(json['terminal']),
       fareConfig: RouteFareConfig.fromJson(json['fareConfig']),
     );
   }
@@ -107,6 +110,87 @@ class RouteSummaryModel {
   }
 
   bool get hasOfflineReadyView => mapPath.length >= 2 && mapBounds != null;
+
+  RouteTerminalSettings? get effectiveTerminal {
+    final configured = terminal;
+    if (configured != null && !configured.enabled) {
+      return null;
+    }
+    if (configured != null && configured.position != null) {
+      return configured;
+    }
+    if (stopPoints.isEmpty) {
+      return null;
+    }
+    final firstStop = stopPoints.first;
+    return RouteTerminalSettings(
+      enabled: true,
+      name: firstStop.name,
+      stopRef: firstStop.name,
+      position: firstStop.position,
+      radiusMeters: 75,
+      source: RouteTerminalSource.routeStop,
+    );
+  }
+}
+
+enum RouteTerminalSource { configured, routeStop }
+
+class RouteTerminalSettings {
+  const RouteTerminalSettings({
+    required this.enabled,
+    this.name,
+    this.stopRef,
+    this.position,
+    this.radiusMeters = 75,
+    this.source = RouteTerminalSource.configured,
+  });
+
+  final bool enabled;
+  final String? name;
+  final String? stopRef;
+  final LatLng? position;
+  final int radiusMeters;
+  final RouteTerminalSource source;
+
+  bool get isConfigured => source == RouteTerminalSource.configured;
+
+  String get label {
+    final value = (stopRef?.trim().isNotEmpty ?? false)
+        ? stopRef!.trim()
+        : name?.trim();
+    return value == null || value.isEmpty ? 'Route terminal' : value;
+  }
+
+  static RouteTerminalSettings? fromJson(dynamic value) {
+    final map = _asMap(value);
+    if (map == null) {
+      return null;
+    }
+    return RouteTerminalSettings(
+      enabled: map['enabled'] != false,
+      name: map['name']?.toString(),
+      stopRef: map['stopRef']?.toString(),
+      position: _parseLatLng(map['location']),
+      radiusMeters: int.tryParse(map['radiusMeters']?.toString() ?? '') ?? 75,
+    );
+  }
+
+  Map<String, dynamic> toPayload() => <String, dynamic>{
+        'enabled': enabled,
+        if (name != null && name!.trim().isNotEmpty) 'name': name!.trim(),
+        if (stopRef != null && stopRef!.trim().isNotEmpty)
+          'stopRef': stopRef!.trim(),
+        if (position != null)
+          'location': {
+            'type': 'Point',
+            'coordinates': <double>[
+              position!.longitude,
+              position!.latitude,
+            ],
+          },
+        'radiusMeters': radiusMeters,
+      };
 }
 
 class RouteFareConfig {

@@ -8,11 +8,13 @@ class RideSessionModel {
     required this.pickupRequestId,
     required this.status,
     required this.pickupType,
+    this.boardingMethod = 'manual',
     this.destinationStopRef,
     this.destinationLatitude,
     this.destinationLongitude,
     this.fareSnapshot,
     this.canSendStopAlert,
+    this.offboardingMethod,
     this.boardedAt,
     this.endedAt,
   });
@@ -23,11 +25,13 @@ class RideSessionModel {
   final String pickupRequestId;
   final String status;
   final String pickupType;
+  final String boardingMethod;
   final String? destinationStopRef;
   final double? destinationLatitude;
   final double? destinationLongitude;
   final FareSnapshotModel? fareSnapshot;
   final bool? canSendStopAlert;
+  final String? offboardingMethod;
   final String? boardedAt;
   final String? endedAt;
 
@@ -40,12 +44,14 @@ class RideSessionModel {
       tripSessionId: json['tripSessionId']?.toString() ?? '',
       pickupRequestId: json['pickupRequestId']?.toString() ?? '',
       pickupType: json['pickupType']?.toString() ?? 'roadside',
+      boardingMethod: json['boardingMethod']?.toString() ?? 'manual',
       destinationStopRef: json['destinationStopRef']?.toString(),
       destinationLatitude: _readLatitude(json['destinationLocation']),
       destinationLongitude: _readLongitude(json['destinationLocation']),
       fareSnapshot: FareSnapshotModel.fromJson(json['fareSnapshot']),
       status: json['status']?.toString() ?? '',
       canSendStopAlert: json['canSendStopAlert'] as bool?,
+      offboardingMethod: json['offboardingMethod']?.toString(),
       boardedAt: json['boardedAt']?.toString(),
       endedAt: json['endedAt']?.toString(),
     );

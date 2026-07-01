@@ -59,6 +59,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const Duration _liveRefreshInterval = Duration(seconds: 8);
   static const Duration _backgroundLocationRefreshInterval =
       Duration(seconds: 25);
+  static const Duration _passengerLocationReportInterval =
+      Duration(seconds: 5);
+  static const double _passengerLocationReportDistanceMeters = 8;
   static const Duration _metadataRefreshInterval = Duration(seconds: 12);
   static const Duration _socketRefreshThrottle = Duration(seconds: 4);
   static const double _tripProjectionHandoffThreshold = 0.88;
@@ -103,6 +106,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   bool _realtimePrimed = false;
   bool _locatingPassenger = false;
   Future<LatLng?>? _passengerLocationRequest;
+  bool _passengerLocationReportInFlight = false;
+  DateTime? _lastPassengerLocationReportedAt;
+  LatLng? _lastPassengerLocationReported;
   bool _passengerSheetCollapsed = false;
   bool _showingCachedPassengerSnapshot = false;
   _PassengerBookingMode _bookingMode = _PassengerBookingMode.roadside;
@@ -354,6 +360,13 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         notifications: notifications,
         silent: silent,
       );
+      if (_shouldReportPassengerLocationForRideAutomation) {
+        unawaited(_ensureCurrentPassengerLocation(
+          silent: true,
+          forceRefresh: true,
+          triggerAutoUnload: false,
+        ));
+      }
       unawaited(_maybeAutoUnloadWhenSeparated());
       unawaited(_maybeAutoHandleDestinationApproach());
     } catch (error) {
@@ -1070,6 +1083,71 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     );
   }
 
+  bool get _shouldReportPassengerLocationForRideAutomation =>
+      _activeRide?.status == 'onboard' ||
+      _requests.any((request) => request.status == 'acknowledged');
+
+  Future<void> _reportPassengerLocationForAutoBoarding(LatLng location) async {
+    if (!_shouldReportPassengerLocationForRideAutomation ||
+        _passengerLocationReportInFlight) {
+      return;
+    }
+
+    final now = DateTime.now();
+    final lastReportedAt = _lastPassengerLocationReportedAt;
+    final lastReportedLocation = _lastPassengerLocationReported;
+    if (lastReportedAt != null &&
+        now.difference(lastReportedAt) < _passengerLocationReportInterval &&
+        lastReportedLocation != null &&
+        _distance.as(
+              LengthUnit.Meter,
+              lastReportedLocation,
+              location,
+            ) <
+            _passengerLocationReportDistanceMeters) {
+      return;
+    }
+
+    _passengerLocationReportInFlight = true;
+    try {
+      final session = context.read<SessionController>();
+      final result = await PassengerService(session.apiClient)
+          .updateLocationForRideAutomation(
+        lat: location.latitude,
+        lng: location.longitude,
+      );
+      _lastPassengerLocationReportedAt = now;
+      _lastPassengerLocationReported = location;
+      final boardedRide = result.autoBoardedRide;
+      final completedRide = result.autoCompletedRide;
+      if (!mounted || (boardedRide == null && completedRide == null)) {
+        return;
+      }
+      final message = completedRide != null
+          ? 'Automatic unload detected. Your ride has been closed.'
+          : 'Boarding detected automatically. Your ride is now active.';
+      setState(() {
+        if (boardedRide != null) {
+          _rides = _upsertRideSessions(_rides, boardedRide);
+        }
+        if (completedRide != null) {
+          _rides = _upsertRideSessions(_rides, completedRide);
+          _resetAutoUnloadWindow();
+        }
+        _statusMessage = message;
+      });
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+      unawaited(_refreshPassengerMetadata(silent: true));
+    } catch (_) {
+      // Manual boarding remains available when location reporting fails.
+    } finally {
+      _passengerLocationReportInFlight = false;
+    }
+  }
+
   String _destinationApproachStopLabel(Map<String, dynamic> payload) {
     final value = payload['destinationStopRef']?.toString().trim() ?? '';
     return value.isEmpty ? 'your destination' : value;
@@ -1782,6 +1860,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         if (triggerAutoUnload) {
           unawaited(_maybeAutoUnloadWhenSeparated());
         }
+        unawaited(_reportPassengerLocationForAutoBoarding(next));
         return next;
       } catch (_) {
         if (!silent && mounted) {

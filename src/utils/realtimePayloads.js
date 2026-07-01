@@ -71,6 +71,7 @@ const serializeRideSession = (session) => {
     tripSessionId: session.tripSessionId?.toString() || '',
     pickupRequestId: session.pickupRequestId?.toString() || '',
     pickupType: session.pickupType?.toString() || 'roadside',
+    boardingMethod: session.boardingMethod?.toString() || 'manual',
     fareSnapshot: normalizeFareSnapshot(session.fareSnapshot),
     destinationStopRef: session.destinationStopRef?.toString() || null,
     destinationLocation: normalizePoint(
@@ -82,6 +83,7 @@ const serializeRideSession = (session) => {
       typeof session.canSendStopAlert === 'boolean'
         ? session.canSendStopAlert
         : null,
+    offboardingMethod: session.offboardingMethod?.toString() || null,
     boardedAt: toIsoString(session.boardedAt),
     endedAt: toIsoString(session.endedAt),
     createdAt: toIsoString(session.createdAt),

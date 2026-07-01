@@ -35,6 +35,13 @@ class RouteService {
     return RouteSummaryModel.fromJson(response['data'] as Map<String, dynamic>);
   }
 
+  Future<RouteSummaryModel> updateRouteTerminal(
+    String routeId,
+    Map<String, dynamic> terminal,
+  ) {
+    return updateRoute(routeId, {'terminal': terminal});
+  }
+
   Future<RouteSummaryModel> deactivateRoute(String routeId) async {
     final response = await _client.request(
       method: 'DELETE',

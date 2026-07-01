@@ -583,10 +583,6 @@ class _AdminDriverManagementScreenState
                             child: Text('Active accounts'),
                           ),
                           DropdownMenuItem(
-                            value: 'account_suspended',
-                            child: Text('Suspended accounts'),
-                          ),
-                          DropdownMenuItem(
                             value: 'account_deactivated',
                             child: Text('Deactivated accounts'),
                           ),
@@ -621,40 +617,6 @@ class _AdminDriverManagementScreenState
                   ),
                 ],
               ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(24),
-              gradient: const LinearGradient(
-                colors: [
-                  Color(0xFF0F6A5F),
-                  Color(0xFF2157A5),
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Driver Management',
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                      ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Each driver owns one jeepney. Create both records together and update them from one admin screen.',
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: Colors.white.withValues(alpha: 0.92),
-                      ),
-                ),
-              ],
             ),
           ),
           const SizedBox(height: 14),

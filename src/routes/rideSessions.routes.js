@@ -1,9 +1,5 @@
 const express = require('express');
 const RideSession = require('../models/rideSession');
-const Driver = require('../models/driver');
-const Passenger = require('../models/passenger');
-const StopAlert = require('../models/stopAlert');
-const TripSession = require('../models/tripSession');
 const asyncHandler = require('../utils/asyncHandler');
 const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
@@ -11,8 +7,7 @@ const ApiError = require('../utils/apiError');
 const { ok } = require('../utils/response');
 const { PASSENGER, DRIVER, ADMIN } = require('../constants/roles');
 const { ensureObjectId } = require('../utils/validators');
-const { publishNotification } = require('../services/notificationPublisher');
-const { serializeRideSession } = require('../utils/realtimePayloads');
+const { completeRideSession } = require('../services/rideCompletion.service');
 const {
   requireCurrentPassenger,
   requireTrip,
@@ -22,23 +17,6 @@ const {
 } = require('../services/routeContext.service');
 
 const router = express.Router();
-
-const hasValidGeoPoint = (value) => {
-  const coordinates = Array.isArray(value?.coordinates) ? value.coordinates : [];
-  if (coordinates.length !== 2) {
-    return false;
-  }
-
-  const [lng, lat] = coordinates.map((entry) => Number(entry));
-  return (
-    Number.isFinite(lat) &&
-    lat >= -90 &&
-    lat <= 90 &&
-    Number.isFinite(lng) &&
-    lng >= -180 &&
-    lng <= 180
-  );
-};
 
 router.get(
   '/mine',
@@ -89,94 +67,12 @@ router.patch(
     if (session.status === 'completed') {
       return ok(res, session, 'Ride session already completed');
     }
-    if (session.status !== 'onboard') {
-      throw new ApiError(409, 'Only onboard ride sessions can be completed');
-    }
-    const previousStatus = session.status;
-    const endedAt = new Date();
-    const update = {
-      $set: {
-        status: 'completed',
-        endedAt,
-        canSendStopAlert: false,
-      },
-    };
-    if (!hasValidGeoPoint(session.destinationLocation)) {
-      update.$unset = { destinationLocation: 1 };
-    }
-
-    let completedSession = await RideSession.findOneAndUpdate(
-      {
-        _id: session._id,
-        status: 'onboard',
-      },
-      update,
-      { new: true }
-    );
-    if (!completedSession) {
-      const latestSession = await requireRideSession(req.params.id);
-      if (latestSession.status === 'completed') {
-        return ok(res, latestSession, 'Ride session already completed');
-      }
-      if (latestSession.status !== 'onboard') {
-        throw new ApiError(409, 'Only onboard ride sessions can be completed');
-      }
-      throw new ApiError(409, 'Ride session completion is already in progress');
-    }
-    await TripSession.updateOne(
-      {
-        _id: session.tripSessionId,
-        occupancyCount: { $gt: 0 },
-      },
-      {
-        $inc: { occupancyCount: -1 },
-      }
-    );
-    await StopAlert.updateMany(
-      {
-        rideSessionId: session._id,
-        status: { $in: ['sent', 'seen', 'acknowledged'] },
-      },
-      {
-        $set: {
-          status: 'dismissed',
-          acknowledgedAt: endedAt,
-        },
-      }
-    );
-    const passenger = await Passenger.findById(session.passengerId).select('userId');
-    await publishNotification({
-      userId: passenger?.userId,
-      type: 'ride_completed',
-      title: 'Ride completed',
-      body:
-        req.user.role === PASSENGER
-          ? 'Your ride has been marked as unloaded.'
-          : 'Your onboard ride session has been completed.',
-      payload: {
-        rideSessionId: completedSession._id.toString(),
-        tripSessionId: completedSession.tripSessionId.toString(),
-        previousStatus,
-        rideSession: serializeRideSession(completedSession),
-      },
-      category: 'ride',
+    const completedSession = await completeRideSession({
+      session,
+      trip,
+      actorRole: req.user.role,
+      completionMethod: 'manual',
     });
-    if (trip.driverId && req.user.role === PASSENGER) {
-      const driver = await Driver.findById(trip.driverId).select('userId');
-      await publishNotification({
-        userId: driver?.userId,
-        type: 'ride_completed',
-        title: 'Passenger unloaded',
-        body: 'A passenger closed their ride session from the passenger app.',
-        payload: {
-          rideSessionId: completedSession._id.toString(),
-          tripSessionId: completedSession.tripSessionId.toString(),
-          previousStatus,
-          rideSession: serializeRideSession(completedSession),
-        },
-        category: 'ride',
-      });
-    }
     return ok(res, completedSession, 'Ride session completed');
   })
 );

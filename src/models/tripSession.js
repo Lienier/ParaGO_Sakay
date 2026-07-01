@@ -36,7 +36,7 @@ const tripSessionSchema = new Schema(
     },
     terminalQueueStatus: {
       type: String,
-      enum: ['off_queue', 'waiting', 'loading', 'departed'],
+      enum: ['off_queue', 'waiting', 'loading', 'skipped', 'departed'],
       default: 'off_queue',
     },
     terminalQueueNumber: { type: Number, min: 1 },

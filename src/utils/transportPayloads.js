@@ -282,6 +282,37 @@ const buildRouteFareConfig = (value, fieldName = 'fareConfig') => {
   };
 };
 
+const buildRouteTerminalSettings = (value, fieldName = 'terminal') => {
+  if (!isPlainObject(value)) {
+    throw new ApiError(400, `${fieldName} must be an object`);
+  }
+
+  const enabled = hasOwn(value, 'enabled') ? Boolean(value.enabled) : true;
+  const payload = {
+    enabled,
+    name: normalizeOptionalText(value.name),
+    stopRef: normalizeOptionalText(value.stopRef),
+  };
+
+  if (hasOwn(value, 'radiusMeters')) {
+    payload.radiusMeters = normalizePositiveInteger(
+      value.radiusMeters,
+      `${fieldName}.radiusMeters`
+    );
+  }
+
+  if (hasOwn(value, 'location') && value.location != null) {
+    payload.location = normalizeGeoPoint(value.location, `${fieldName}.location`);
+  } else if (enabled) {
+    throw new ApiError(
+      400,
+      `${fieldName}.location is required when terminal settings are enabled`
+    );
+  }
+
+  return payload;
+};
+
 const buildRouteCreatePayload = (value = {}) => {
   if (!isPlainObject(value)) {
     throw new ApiError(400, 'Route payload is required');
@@ -298,6 +329,7 @@ const buildRouteCreatePayload = (value = {}) => {
     path: undefined,
     waypoints: [],
     stops: [],
+    terminal: undefined,
     navigation: undefined,
     fareConfig: hasOwn(value, 'fareConfig')
       ? buildRouteFareConfig(value.fareConfig)
@@ -322,6 +354,10 @@ const buildRouteCreatePayload = (value = {}) => {
       throw new ApiError(400, 'stops must be an array');
     }
     payload.stops = value.stops.map((stop, index) => buildRouteStop(stop, index));
+  }
+
+  if (hasOwn(value, 'terminal') && value.terminal != null) {
+    payload.terminal = buildRouteTerminalSettings(value.terminal);
   }
 
   if (hasOwn(value, 'navigation')) {
@@ -368,6 +404,10 @@ const buildRouteUpdatePayload = (value = {}) => {
       throw new ApiError(400, 'stops must be an array');
     }
     updates.stops = value.stops.map((stop, index) => buildRouteStop(stop, index));
+  }
+  if (hasOwn(value, 'terminal')) {
+    updates.terminal =
+      value.terminal == null ? undefined : buildRouteTerminalSettings(value.terminal);
   }
   if (hasOwn(value, 'navigation') && value.navigation != null) {
     updates.navigation = buildRouteNavigationPayload(value.navigation);

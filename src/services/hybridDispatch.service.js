@@ -24,32 +24,69 @@ const normalizeTerminalQueueStatus = (value, { operatingMode } = {}) => {
     return 'off_queue';
   }
 
-  if (['waiting', 'loading', 'departed'].includes(normalized)) {
+  if (['waiting', 'loading', 'skipped', 'departed'].includes(normalized)) {
     return normalized;
   }
   return 'waiting';
 };
 
+const hasValidPoint = (value) => {
+  const coordinates = Array.isArray(value?.coordinates) ? value.coordinates : [];
+  if (coordinates.length < 2) {
+    return false;
+  }
+  const longitude = Number(coordinates[0]);
+  const latitude = Number(coordinates[1]);
+  return (
+    Number.isFinite(latitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    Number.isFinite(longitude) &&
+    longitude >= -180 &&
+    longitude <= 180
+  );
+};
+
+const normalizeTerminalPoint = (value) => ({
+  type: 'Point',
+  coordinates: [Number(value.coordinates[0]), Number(value.coordinates[1])],
+});
+
 const resolveRouteTerminalStop = (route) => {
+  const configuredTerminal = route?.terminal;
+  if (configuredTerminal && configuredTerminal.enabled === false) {
+    return null;
+  }
+  if (configuredTerminal && hasValidPoint(configuredTerminal.location)) {
+    const stopRef = String(
+      configuredTerminal.stopRef ||
+        configuredTerminal.name ||
+        'Route terminal'
+    ).trim();
+    return {
+      stopRef: stopRef || 'Route terminal',
+      stopOrder: 0,
+      location: normalizeTerminalPoint(configuredTerminal.location),
+      radiusMeters: Number(configuredTerminal.radiusMeters || 75),
+      source: 'terminal_settings',
+    };
+  }
+
   const stops = Array.isArray(route?.stops) ? [...route.stops] : [];
   stops.sort(
     (left, right) => Number(left?.order || 0) - Number(right?.order || 0)
   );
 
   for (const stop of stops) {
-    const coordinates = Array.isArray(stop?.location?.coordinates)
-      ? stop.location.coordinates
-      : [];
-    if (coordinates.length < 2) {
+    if (!hasValidPoint(stop?.location)) {
       continue;
     }
     return {
       stopRef: String(stop?.name || stop?.code || 'Route terminal').trim(),
       stopOrder: Number(stop?.order || 0),
-      location: {
-        type: 'Point',
-        coordinates: [Number(coordinates[0]), Number(coordinates[1])],
-      },
+      location: normalizeTerminalPoint(stop.location),
+      radiusMeters: 75,
+      source: 'route_stop',
     };
   }
 
@@ -83,10 +120,12 @@ const compareTerminalQueueTrips = (left, right) => {
         return 0;
       case 'waiting':
         return 1;
-      case 'departed':
+      case 'skipped':
         return 2;
-      default:
+      case 'departed':
         return 3;
+      default:
+        return 4;
     }
   };
 

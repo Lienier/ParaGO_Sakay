@@ -19,6 +19,165 @@ const {
   normalizeTerminalQueueStatus,
 } = require('./hybridDispatch.service');
 
+const ensureTripHasBoardingCapacity = async (trip) => {
+  const jeepney = await Jeepney.findById(trip.jeepneyId).select('capacity');
+  const seatCapacity = Number(jeepney?.capacity);
+  const occupiedSeats = Number.isFinite(Number(trip.occupancyCount))
+    ? Number(trip.occupancyCount)
+    : 0;
+  if (
+    Number.isFinite(seatCapacity) &&
+    seatCapacity > 0 &&
+    occupiedSeats >= seatCapacity
+  ) {
+    throw new ApiError(409, 'Trip is already at full capacity');
+  }
+};
+
+const syncTerminalQueueAfterBoarding = async ({ trip, pickupType, now }) => {
+  if (!isTerminalPickupType(pickupType) || trip.operatingMode !== 'terminal_queue') {
+    return;
+  }
+
+  const terminalRequests = await PickupRequest.find({
+    tripSessionId: trip._id,
+    pickupType: 'terminal',
+    status: { $in: ['pending', 'acknowledged'] },
+  }).select('status');
+  const hasAcknowledged = terminalRequests.some(
+    (request) => request.status === 'acknowledged'
+  );
+  trip.terminalQueueStatus = normalizeTerminalQueueStatus(
+    hasAcknowledged ? 'loading' : 'waiting',
+    { operatingMode: trip.operatingMode }
+  );
+  await trip.save();
+  if (trip.driverId) {
+    await Driver.findByIdAndUpdate(trip.driverId, {
+      $set: {
+        operatingMode: trip.operatingMode,
+        terminalQueueStatus: trip.terminalQueueStatus,
+        terminalCheckedInAt: trip.terminalCheckedInAt || trip.startedAt || now,
+        terminalQueueNumber: trip.terminalQueueNumber,
+        terminalStopRef: trip.terminalStopRef,
+      },
+    });
+  }
+};
+
+const completeBoardingForPickupRequest = async ({
+  pickupRequest,
+  trip,
+  passengerId,
+  now = new Date(),
+  boardingMethod = 'manual',
+  allowExisting = false,
+}) => {
+  const existing = await RideSession.findOne({
+    passengerId,
+    tripSessionId: trip._id,
+    status: { $in: ['waiting', 'onboard'] },
+  });
+  if (existing) {
+    if (allowExisting) {
+      return existing;
+    }
+    throw new ApiError(409, 'Passenger already has an active ride session for this trip');
+  }
+
+  await ensureTripHasBoardingCapacity(trip);
+
+  const pickupType = pickupRequest.pickupType || 'roadside';
+  const pickupReference = isTerminalPickupType(pickupType)
+    ? pickupRequest.terminalLocation || pickupRequest.pickupLocation
+    : pickupRequest.pickupLocation;
+  if (!pickupReference?.coordinates?.length) {
+    throw new ApiError(409, 'Pickup request is missing a valid boarding reference');
+  }
+  const [lngPickup, latPickup] = pickupReference.coordinates;
+
+  const savedDestinationCoordinates = Array.isArray(
+    pickupRequest.destinationLocation?.coordinates
+  )
+    ? pickupRequest.destinationLocation.coordinates
+    : [];
+  const resolvedDestinationLat = Number(savedDestinationCoordinates[1]);
+  const resolvedDestinationLng = Number(savedDestinationCoordinates[0]);
+  const normalizedDestinationStopRef = String(
+    pickupRequest.destinationStopRef || ''
+  ).trim();
+  if (!normalizedDestinationStopRef) {
+    throw new ApiError(409, 'Pickup request is missing a saved unload destination');
+  }
+  if (
+    !Number.isFinite(resolvedDestinationLat) ||
+    !Number.isFinite(resolvedDestinationLng)
+  ) {
+    throw new ApiError(409, 'Pickup request is missing valid unload destination coordinates');
+  }
+
+  const rideSession = await RideSession.create({
+    passengerId,
+    tripSessionId: trip._id,
+    pickupRequestId: pickupRequest._id,
+    pickupType,
+    boardingMethod,
+    boardingStopRef: String(
+      pickupRequest.terminalStopRef ||
+          pickupRequest.stopRef ||
+          pickupRequest.fareSnapshot?.boardingStopRef ||
+          ''
+    ).trim(),
+    boardingLocation: {
+      type: 'Point',
+      coordinates: [Number(lngPickup), Number(latPickup)],
+    },
+    destinationStopRef: normalizedDestinationStopRef,
+    destinationLocation: {
+      type: 'Point',
+      coordinates: [resolvedDestinationLng, resolvedDestinationLat],
+    },
+    fareSnapshot: pickupRequest.fareSnapshot || undefined,
+    status: 'onboard',
+    boardedAt: now,
+    canSendStopAlert: true,
+  });
+
+  pickupRequest.status = 'completed';
+  await pickupRequest.save();
+  await TripSession.findByIdAndUpdate(trip._id, {
+    $inc: { occupancyCount: 1 },
+  });
+  await syncTerminalQueueAfterBoarding({ trip, pickupType, now });
+
+  const tripDriver = trip.driverId
+    ? await Driver.findById(trip.driverId).select('userId')
+    : null;
+  await publishNotification({
+    userId: tripDriver?.userId,
+    type: 'passenger_boarded',
+    title:
+      boardingMethod === 'auto_proximity'
+        ? 'Passenger auto-boarded'
+        : 'Passenger boarded',
+    body: `Passenger boarded near ${
+      pickupRequest.terminalStopRef ||
+      pickupRequest.stopRef ||
+      'the selected pickup point'
+    }.`,
+    payload: {
+      requestId: pickupRequest._id.toString(),
+      tripSessionId: trip._id.toString(),
+      boardingMethod,
+      request: serializePickupRequest(pickupRequest),
+      rideSession: serializeRideSession(rideSession),
+    },
+    category: 'trip',
+  });
+
+  return rideSession;
+};
+
 const validateBoardingAttempt = async ({
   passengerId,
   tripSessionId,
@@ -64,19 +223,6 @@ const validateBoardingAttempt = async ({
     throw new ApiError(409, 'Trip session is not active');
   }
 
-  const jeepney = await Jeepney.findById(trip.jeepneyId).select('capacity');
-  const seatCapacity = Number(jeepney?.capacity);
-  const occupiedSeats = Number.isFinite(Number(trip.occupancyCount))
-    ? Number(trip.occupancyCount)
-    : 0;
-  if (
-    Number.isFinite(seatCapacity) &&
-    seatCapacity > 0 &&
-    occupiedSeats >= seatCapacity
-  ) {
-    throw new ApiError(409, 'Trip is already at full capacity');
-  }
-
   if (
     boardingWindowMinutes &&
     now.getTime() - new Date(pickupRequest.createdAt).getTime() > boardingWindowMinutes * 60_000
@@ -105,117 +251,28 @@ const validateBoardingAttempt = async ({
     throw new ApiError(409, 'Boarding request too far from pickup area');
   }
 
-  const existing = await RideSession.findOne({
-    passengerId,
-    tripSessionId,
-    status: { $in: ['waiting', 'onboard'] },
-  });
-  if (existing) {
-    throw new ApiError(409, 'Passenger already has an active ride session for this trip');
-  }
-
-  const savedDestinationCoordinates = Array.isArray(
-    pickupRequest.destinationLocation?.coordinates
-  )
-    ? pickupRequest.destinationLocation.coordinates
-    : [];
-  const resolvedDestinationLat =
-    destinationLat != null ? Number(destinationLat) : Number(savedDestinationCoordinates[1]);
-  const resolvedDestinationLng =
-    destinationLng != null ? Number(destinationLng) : Number(savedDestinationCoordinates[0]);
-  const normalizedDestinationStopRef = String(
-    destinationStopRef || pickupRequest.destinationStopRef || ''
-  ).trim();
-  if (!normalizedDestinationStopRef) {
-    throw new ApiError(409, 'Pickup request is missing a saved unload destination');
-  }
-  if (
-    !Number.isFinite(resolvedDestinationLat) ||
-    !Number.isFinite(resolvedDestinationLng)
-  ) {
-    throw new ApiError(409, 'Pickup request is missing valid unload destination coordinates');
-  }
-
-  const rideSession = await RideSession.create({
-    passengerId,
-    tripSessionId,
-    pickupRequestId: pickupRequest._id,
-    pickupType,
-    boardingStopRef: String(
-      pickupRequest.terminalStopRef ||
-          pickupRequest.stopRef ||
-          pickupRequest.fareSnapshot?.boardingStopRef ||
-          ''
-    ).trim(),
-    boardingLocation: {
+  if (destinationStopRef || destinationLat != null || destinationLng != null) {
+    pickupRequest.destinationStopRef =
+      String(destinationStopRef || pickupRequest.destinationStopRef || '').trim();
+    pickupRequest.destinationLocation = {
       type: 'Point',
-      coordinates: [Number(lngPickup), Number(latPickup)],
-    },
-    destinationStopRef: normalizedDestinationStopRef,
-    destinationLocation: {
-      type: 'Point',
-      coordinates: [resolvedDestinationLng, resolvedDestinationLat],
-    },
-    fareSnapshot: pickupRequest.fareSnapshot || undefined,
-    status: 'onboard',
-    boardedAt: now,
-    canSendStopAlert: true,
-  });
-
-  pickupRequest.status = 'completed';
-  await pickupRequest.save();
-  await TripSession.findByIdAndUpdate(tripSessionId, {
-    $inc: { occupancyCount: 1 },
-  });
-  if (isTerminalPickupType(pickupType) && trip.operatingMode === 'terminal_queue') {
-    const terminalRequests = await PickupRequest.find({
-      tripSessionId,
-      pickupType: 'terminal',
-      status: { $in: ['pending', 'acknowledged'] },
-    }).select('status');
-    const hasAcknowledged = terminalRequests.some(
-      (request) => request.status === 'acknowledged'
-    );
-    trip.terminalQueueStatus = normalizeTerminalQueueStatus(
-      hasAcknowledged ? 'loading' : 'waiting',
-      { operatingMode: trip.operatingMode }
-    );
-    await trip.save();
-    if (trip.driverId) {
-      await Driver.findByIdAndUpdate(trip.driverId, {
-        $set: {
-          operatingMode: trip.operatingMode,
-          terminalQueueStatus: trip.terminalQueueStatus,
-          terminalCheckedInAt: trip.terminalCheckedInAt || trip.startedAt || now,
-          terminalQueueNumber: trip.terminalQueueNumber,
-          terminalStopRef: trip.terminalStopRef,
-        },
-      });
-    }
+      coordinates: [
+        destinationLng != null ? Number(destinationLng) : Number(pickupRequest.destinationLocation?.coordinates?.[0]),
+        destinationLat != null ? Number(destinationLat) : Number(pickupRequest.destinationLocation?.coordinates?.[1]),
+      ],
+    };
   }
 
-  const tripDriver = trip.driverId
-    ? await Driver.findById(trip.driverId).select('userId')
-    : null;
-  await publishNotification({
-    userId: tripDriver?.userId,
-    type: 'passenger_boarded',
-    title: 'Passenger boarded',
-    body: `Passenger boarded near ${
-      pickupRequest.terminalStopRef ||
-      pickupRequest.stopRef ||
-      'the selected pickup point'
-    }.`,
-    payload: {
-      requestId: pickupRequest._id.toString(),
-      tripSessionId: trip._id.toString(),
-      request: serializePickupRequest(pickupRequest),
-      rideSession: serializeRideSession(rideSession),
-    },
-    category: 'trip',
+  return completeBoardingForPickupRequest({
+    passengerId,
+    trip,
+    pickupRequest,
+    now,
+    boardingMethod: 'manual',
   });
-
-  return rideSession;
 };
 
-module.exports = { validateBoardingAttempt };
+module.exports = {
+  completeBoardingForPickupRequest,
+  validateBoardingAttempt,
+};

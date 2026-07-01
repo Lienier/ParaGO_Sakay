@@ -40,6 +40,45 @@ class AdminService {
     }
   }
 
+  Future<Map<String, dynamic>> reorderTerminalQueueTrip({
+    required String tripId,
+    required String direction,
+  }) async {
+    final response = await _client.request(
+      method: 'PATCH',
+      path: '/admin/terminal-queue/$tripId/reorder',
+      body: {'direction': direction},
+      useCache: false,
+    );
+    return response['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> setTerminalQueueSkipped({
+    required String tripId,
+    required bool skipped,
+  }) async {
+    final response = await _client.request(
+      method: 'PATCH',
+      path: '/admin/terminal-queue/$tripId/skip',
+      body: {'skipped': skipped},
+      useCache: false,
+    );
+    return response['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> setTerminalQueueStatus({
+    required String tripId,
+    required String terminalQueueStatus,
+  }) async {
+    final response = await _client.request(
+      method: 'PATCH',
+      path: '/admin/terminal-queue/$tripId/status',
+      body: {'terminalQueueStatus': terminalQueueStatus},
+      useCache: false,
+    );
+    return response['data'] as Map<String, dynamic>;
+  }
+
   Future<List<dynamic>> recentActivity({int limit = 40}) async {
     final response = await _client.request(
       method: 'GET',

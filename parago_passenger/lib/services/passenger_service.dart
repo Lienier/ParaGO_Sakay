@@ -124,6 +124,29 @@ class PassengerService {
     return RideSessionModel.fromJson(response['data'] as Map<String, dynamic>);
   }
 
+  Future<PassengerLocationAutomationResult> updateLocationForRideAutomation({
+    required double lat,
+    required double lng,
+  }) async {
+    final response = await _client.request(
+      method: 'POST',
+      path: '/passengers/me/location',
+      body: {
+        'lat': lat,
+        'lng': lng,
+      },
+      useCache: false,
+    );
+    final data = response['data'];
+    if (data is! Map<String, dynamic>) {
+      return const PassengerLocationAutomationResult();
+    }
+    return PassengerLocationAutomationResult(
+      autoBoardedRide: _readRideSession(data['autoBoardedRideSession']),
+      autoCompletedRide: _readRideSession(data['autoCompletedRideSession']),
+    );
+  }
+
   Future<RideSessionModel> completeRideSession(String rideSessionId) async {
     final response = await _client.request(
       method: 'PATCH',
@@ -132,4 +155,26 @@ class PassengerService {
     );
     return RideSessionModel.fromJson(response['data'] as Map<String, dynamic>);
   }
+}
+
+class PassengerLocationAutomationResult {
+  const PassengerLocationAutomationResult({
+    this.autoBoardedRide,
+    this.autoCompletedRide,
+  });
+
+  final RideSessionModel? autoBoardedRide;
+  final RideSessionModel? autoCompletedRide;
+}
+
+RideSessionModel? _readRideSession(dynamic value) {
+  if (value is Map<String, dynamic>) {
+    return RideSessionModel.fromJson(value);
+  }
+  if (value is Map) {
+    return RideSessionModel.fromJson(
+      value.map((key, item) => MapEntry(key.toString(), item)),
+    );
+  }
+  return null;
 }

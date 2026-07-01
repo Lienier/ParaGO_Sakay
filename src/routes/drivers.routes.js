@@ -14,6 +14,12 @@ const { requireCurrentDriver } = require('../services/routeContext.service');
 const {
   processDestinationApproachAlerts,
 } = require('../services/destinationApproach.service');
+const {
+  processAutomaticBoardingForTrip,
+} = require('../services/automaticBoarding.service');
+const {
+  processAutomaticOffboardingForTrip,
+} = require('../services/automaticOffboarding.service');
 const { emitJeepneyLocationUpdate } = require('../realtime/socketServer');
 
 const router = express.Router();
@@ -188,6 +194,22 @@ const updateDriverJeepneyLocation = async (req, res) => {
       longitude: Number(body.lng),
       previousLatitude,
       previousLongitude,
+    });
+    await processAutomaticBoardingForTrip({
+      tripSessionId: activeTrip._id,
+      jeepneyLocation: {
+        type: 'Point',
+        coordinates: [Number(body.lng), Number(body.lat)],
+      },
+      now: new Date(),
+    });
+    await processAutomaticOffboardingForTrip({
+      tripSessionId: activeTrip._id,
+      jeepneyLocation: {
+        type: 'Point',
+        coordinates: [Number(body.lng), Number(body.lat)],
+      },
+      now: new Date(),
     });
 
     emitJeepneyLocationUpdate({

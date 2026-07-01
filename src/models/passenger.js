@@ -12,8 +12,19 @@ const passengerSchema = new Schema(
       phone: { type: String, trim: true },
     },
     defaultRouteId: { type: Schema.Types.ObjectId, ref: 'Route' },
+    lastKnownLocation: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point',
+      },
+      coordinates: { type: [Number] },
+    },
+    lastSeenAt: { type: Date },
   },
   { timestamps: true }
 );
+
+passengerSchema.index({ lastKnownLocation: '2dsphere' });
 
 module.exports = mongoose.model('Passenger', passengerSchema);
