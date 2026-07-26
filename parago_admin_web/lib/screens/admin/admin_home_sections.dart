@@ -1190,6 +1190,8 @@ IconData _sectionIcon(_AdminWorkspaceSection section) {
       return Icons.place_outlined;
     case _AdminWorkspaceSection.fareSettings:
       return Icons.payments_outlined;
+    case _AdminWorkspaceSection.support:
+      return Icons.support_agent_rounded;
   }
 }
 
@@ -1205,6 +1207,8 @@ String _sectionLabel(_AdminWorkspaceSection section) {
       return 'Routes';
     case _AdminWorkspaceSection.fareSettings:
       return 'Fare Settings';
+    case _AdminWorkspaceSection.support:
+      return 'Support';
   }
 }
 

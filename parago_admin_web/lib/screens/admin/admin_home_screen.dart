@@ -16,6 +16,7 @@ import 'admin_driver_management_screen.dart';
 import 'admin_route_builder_screen.dart';
 import 'admin_route_fare_settings_screen.dart';
 import 'admin_route_management_screen.dart';
+import 'admin_support_inbox_screen.dart';
 
 part 'admin_home_sections.dart';
 
@@ -25,6 +26,7 @@ enum _AdminWorkspaceSection {
   routeBuilder,
   routes,
   fareSettings,
+  support,
 }
 
 class AdminHomeScreen extends StatefulWidget {
@@ -341,6 +343,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       case _AdminWorkspaceSection.fareSettings:
         return AdminRouteFareSettingsScreen(
           embedded: true,
+        );
+      case _AdminWorkspaceSection.support:
+        return AdminSupportInboxScreen(
+          realtimeSocketService: _realtimeSocketService,
         );
     }
   }

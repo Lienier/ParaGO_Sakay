@@ -10,6 +10,8 @@ class RealtimeSocketService {
       StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<Map<String, dynamic>> _operationsController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _supportController =
+      StreamController<Map<String, dynamic>>.broadcast();
 
   io.Socket? _socket;
   String? _currentSocketBaseUrl;
@@ -20,6 +22,8 @@ class RealtimeSocketService {
       _notificationController.stream;
   Stream<Map<String, dynamic>> get operationsChangedStream =>
       _operationsController.stream;
+  Stream<Map<String, dynamic>> get supportActivityStream =>
+      _supportController.stream;
   bool get isConnected => _socket?.connected == true;
   bool get hasActiveSocket => _socket != null;
 
@@ -118,6 +122,30 @@ class RealtimeSocketService {
         _operationsController.add(normalized);
       }
     });
+    socket.on('support.thread.created', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) {
+        _supportController.add(normalized);
+      }
+    });
+    socket.on('support.message.created', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) {
+        _supportController.add(normalized);
+      }
+    });
+    socket.on('support.thread.updated', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) {
+        _supportController.add(normalized);
+      }
+    });
+    socket.on('support.thread.read', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) {
+        _supportController.add(normalized);
+      }
+    });
 
     _socket = socket;
     socket.connect();
@@ -137,6 +165,7 @@ class RealtimeSocketService {
     disconnect();
     _notificationController.close();
     _operationsController.close();
+    _supportController.close();
   }
 
   Map<String, dynamic> _normalizePayload(dynamic payload) {

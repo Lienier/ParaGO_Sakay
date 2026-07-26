@@ -13,6 +13,8 @@ class RealtimeSocketService {
       StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<Map<String, dynamic>> _pickupRequestController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _supportController =
+      StreamController<Map<String, dynamic>>.broadcast();
 
   io.Socket? _socket;
   String? _currentSocketBaseUrl;
@@ -26,6 +28,8 @@ class RealtimeSocketService {
       _operationsController.stream;
   Stream<Map<String, dynamic>> get pickupRequestUpdatedStream =>
       _pickupRequestController.stream;
+  Stream<Map<String, dynamic>> get supportActivityStream =>
+      _supportController.stream;
   bool get isConnected => _socket?.connected == true;
   bool get hasActiveSocket => _socket != null;
 
@@ -140,6 +144,30 @@ class RealtimeSocketService {
         _pickupRequestController.add(normalized);
       }
     });
+    socket.on('support.thread.created', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) {
+        _supportController.add(normalized);
+      }
+    });
+    socket.on('support.message.created', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) {
+        _supportController.add(normalized);
+      }
+    });
+    socket.on('support.thread.updated', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) {
+        _supportController.add(normalized);
+      }
+    });
+    socket.on('support.thread.read', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) {
+        _supportController.add(normalized);
+      }
+    });
 
     _socket = socket;
     socket.connect();
@@ -161,6 +189,7 @@ class RealtimeSocketService {
     _notificationController.close();
     _operationsController.close();
     _pickupRequestController.close();
+    _supportController.close();
   }
 
   void subscribeToTrip(String tripId) {

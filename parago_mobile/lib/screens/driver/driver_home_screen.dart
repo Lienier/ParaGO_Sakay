@@ -28,6 +28,7 @@ import '../../services/session_controller.dart';
 import '../../services/stop_alert_service.dart';
 import '../../services/trip_service.dart';
 import '../../widgets/status_badge.dart';
+import '../support/driver_support_screen.dart';
 
 part 'driver_home_screen_sections.dart';
 
@@ -438,6 +439,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (shouldLogout == true) {
       await _logoutDriver();
     }
+  }
+
+  Future<void> _openSupportCenter() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => DriverSupportScreen(
+          routeId: _assignedRouteId,
+          tripSessionId: _focusedTrip?.id,
+          realtimeSocketService: _realtimeSocketService,
+        ),
+      ),
+    );
   }
 
   void _syncRealtimeSocket(
@@ -2621,6 +2634,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       appBar: AppBar(
         title: Text(_tabTitle()),
         actions: [
+          IconButton(
+            tooltip: 'Support',
+            onPressed: _loading ? null : _openSupportCenter,
+            icon: const Icon(Icons.support_agent_rounded),
+          ),
           IconButton(
             tooltip: 'Refresh',
             onPressed: _loading ? null : _load,

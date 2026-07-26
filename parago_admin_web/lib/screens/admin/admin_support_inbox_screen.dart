@@ -1,0 +1,845 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../../core/utils/action_feedback.dart';
+import '../../models/support/support_message.dart';
+import '../../models/support/support_thread.dart';
+import '../../services/session_controller.dart';
+import '../../services/support_service.dart';
+import '../../services/realtime_socket_service.dart';
+
+class AdminSupportInboxScreen extends StatefulWidget {
+  const AdminSupportInboxScreen({
+    super.key,
+    required this.realtimeSocketService,
+  });
+
+  final RealtimeSocketService realtimeSocketService;
+
+  @override
+  State<AdminSupportInboxScreen> createState() => _AdminSupportInboxScreenState();
+}
+
+class _AdminSupportInboxScreenState extends State<AdminSupportInboxScreen> {
+  final TextEditingController _replyController = TextEditingController();
+  final Set<String> _knownThreadIds = <String>{};
+  StreamSubscription<Map<String, dynamic>>? _supportSubscription;
+
+  List<SupportThreadModel> _threads = const <SupportThreadModel>[];
+  List<SupportMessageModel> _messages = const <SupportMessageModel>[];
+  SupportThreadModel? _selectedThread;
+  bool _loading = true;
+  bool _replying = false;
+  bool _taking = false;
+  String? _error;
+  String? _statusFilter;
+  String? _categoryFilter;
+  String? _userRoleFilter;
+  bool _includeClosed = false;
+
+  static const _statusOptions = [
+    ('', 'All statuses'),
+    ('open', 'Open'),
+    ('awaiting_admin', 'Awaiting admin'),
+    ('awaiting_user', 'Awaiting user'),
+    ('resolved', 'Resolved'),
+    ('closed', 'Closed'),
+  ];
+
+  static const _categoryOptions = [
+    ('', 'All categories'),
+    ('complaint', 'Complaint'),
+    ('lost_item', 'Lost item'),
+    ('fare_concern', 'Fare concern'),
+    ('trip_issue', 'Trip issue'),
+    ('safety_concern', 'Safety concern'),
+    ('general_help', 'General help'),
+  ];
+
+  static const _roleOptions = [
+    ('', 'All users'),
+    ('PASSENGER', 'Passengers'),
+    ('DRIVER', 'Drivers'),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _supportSubscription = widget.realtimeSocketService.supportActivityStream.listen(
+      (_) {
+        if (mounted) {
+          unawaited(_loadThreads(silent: true));
+        }
+      },
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_loadThreads());
+    });
+  }
+
+  @override
+  void dispose() {
+    _replyController.dispose();
+    _supportSubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadThreads({bool silent = false}) async {
+    if (!silent && mounted) {
+      setState(() => _loading = true);
+    }
+    try {
+      final session = context.read<SessionController>();
+      final threads = await SupportService(session.apiClient).getInboxThreads(
+        status: _statusFilter,
+        category: _categoryFilter,
+        userRole: _userRoleFilter,
+        includeClosed: _includeClosed,
+      );
+      if (!mounted) return;
+      setState(() {
+        _threads = threads;
+        _knownThreadIds
+          ..clear()
+          ..addAll(threads.map((thread) => thread.id));
+        _error = null;
+      });
+      if (_selectedThread != null) {
+        final match = threads.where((thread) => thread.id == _selectedThread!.id);
+        if (match.isEmpty) {
+          _selectedThread = threads.isEmpty ? null : threads.first;
+        } else {
+          _selectedThread = match.first;
+        }
+      } else if (threads.isNotEmpty) {
+        _selectedThread = threads.first;
+      }
+      if (_selectedThread != null) {
+        await _loadThread(_selectedThread!, silent: true);
+      } else {
+        setState(() => _messages = const <SupportMessageModel>[]);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = ActionFeedback.messageOf(error));
+    } finally {
+      if (mounted && !silent) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<void> _loadThread(SupportThreadModel thread, {bool silent = false}) async {
+    if (!silent && mounted) {
+      setState(() => _loading = true);
+    }
+    try {
+      final session = context.read<SessionController>();
+      final data = await SupportService(session.apiClient).getThreadMessages(thread.id);
+      final parsedThread = SupportThreadModel.fromJson(data['thread'] as Map<String, dynamic>);
+      final messages = data['messages'];
+      final parsedMessages = messages is List
+          ? messages
+              .whereType<Map>()
+              .map((item) => SupportMessageModel.fromJson(item.cast<String, dynamic>()))
+              .toList(growable: false)
+          : const <SupportMessageModel>[];
+      if (!mounted) return;
+      setState(() {
+        _selectedThread = parsedThread;
+        _messages = parsedMessages;
+        _error = null;
+      });
+      await SupportService(session.apiClient).markRead(parsedThread.id);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = ActionFeedback.messageOf(error));
+    } finally {
+      if (mounted && !silent) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<void> _selectThread(SupportThreadModel thread) async {
+    setState(() => _selectedThread = thread);
+    await _loadThread(thread);
+  }
+
+  Future<void> _takeThread() async {
+    final thread = _selectedThread;
+    if (thread == null || _taking) return;
+    setState(() => _taking = true);
+    try {
+      final session = context.read<SessionController>();
+      final adminId = session.user?.userId ?? session.user?.adminId ?? '';
+      if (adminId.isEmpty) {
+        throw StateError('Admin profile is unavailable.');
+      }
+      final updated = await SupportService(session.apiClient).assignThread(
+        threadId: thread.id,
+        assignedAdminId: adminId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedThread = SupportThreadModel.fromJson(updated as Map<String, dynamic>);
+      });
+      await _loadThreads(silent: true);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ActionFeedback.messageOf(error))),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _taking = false);
+      }
+    }
+  }
+
+  Future<void> _replyToThread() async {
+    final thread = _selectedThread;
+    final body = _replyController.text.trim();
+    if (thread == null || body.isEmpty || _replying) return;
+
+    setState(() => _replying = true);
+    try {
+      final session = context.read<SessionController>();
+      final result = await SupportService(session.apiClient).sendMessage(
+        threadId: thread.id,
+        body: body,
+      );
+      _replyController.clear();
+      if (!mounted) return;
+      setState(() {
+        _selectedThread = SupportThreadModel.fromJson(result['thread'] as Map<String, dynamic>);
+      });
+      await _loadThread(_selectedThread!, silent: true);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ActionFeedback.messageOf(error))),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _replying = false);
+      }
+    }
+  }
+
+  Future<void> _resolveThread({String status = 'resolved'}) async {
+    final thread = _selectedThread;
+    if (thread == null) return;
+    try {
+      final session = context.read<SessionController>();
+      final result = await SupportService(session.apiClient).resolveThread(
+        threadId: thread.id,
+        status: status,
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedThread = SupportThreadModel.fromJson(result as Map<String, dynamic>);
+      });
+      await _loadThread(_selectedThread!, silent: true);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ActionFeedback.messageOf(error))),
+      );
+    }
+  }
+
+  Future<void> _closeThread() async {
+    final thread = _selectedThread;
+    if (thread == null) return;
+    try {
+      final session = context.read<SessionController>();
+      final result = await SupportService(session.apiClient).closeThread(thread.id);
+      if (!mounted) return;
+      setState(() {
+        _selectedThread = SupportThreadModel.fromJson(result as Map<String, dynamic>);
+      });
+      await _loadThread(_selectedThread!, silent: true);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ActionFeedback.messageOf(error))),
+      );
+    }
+  }
+
+  Future<void> _reopenThread() async {
+    final thread = _selectedThread;
+    if (thread == null) return;
+    try {
+      final session = context.read<SessionController>();
+      final result = await SupportService(session.apiClient).reopenThread(thread.id);
+      if (!mounted) return;
+      setState(() {
+        _selectedThread = SupportThreadModel.fromJson(result as Map<String, dynamic>);
+      });
+      await _loadThread(_selectedThread!, silent: true);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ActionFeedback.messageOf(error))),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = _selectedThread;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+          child: _SupportInboxFilters(
+            statusFilter: _statusFilter,
+            categoryFilter: _categoryFilter,
+            userRoleFilter: _userRoleFilter,
+            includeClosed: _includeClosed,
+            statusOptions: _statusOptions,
+            categoryOptions: _categoryOptions,
+            roleOptions: _roleOptions,
+            onStatusChanged: (value) {
+              setState(() => _statusFilter = value);
+              unawaited(_loadThreads());
+            },
+            onCategoryChanged: (value) {
+              setState(() => _categoryFilter = value);
+              unawaited(_loadThreads());
+            },
+            onUserRoleChanged: (value) {
+              setState(() => _userRoleFilter = value);
+              unawaited(_loadThreads());
+            },
+            onIncludeClosedChanged: (value) {
+              setState(() => _includeClosed = value);
+              unawaited(_loadThreads());
+            },
+          ),
+        ),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final stacked = constraints.maxWidth < 980;
+              final inboxPane = _SupportInboxList(
+                threads: _threads,
+                loading: _loading,
+                error: _error,
+                onRefresh: () => _loadThreads(),
+                onSelect: _selectThread,
+                selectedThreadId: selected?.id,
+              );
+              final detailPane = selected == null
+                  ? const _EmptySupportDetail()
+                  : _SupportThreadDetail(
+                      thread: selected,
+                      messages: _messages,
+                      loading: _loading,
+                      replyController: _replyController,
+                      replying: _replying,
+                      taking: _taking,
+                      onReply: _replyToThread,
+                      onTakeThread: _takeThread,
+                      onResolve: _resolveThread,
+                      onClose: _closeThread,
+                      onReopen: _reopenThread,
+                    );
+
+              if (stacked) {
+                return ListView(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                  children: [
+                    SizedBox(height: 360, child: inboxPane),
+                    const SizedBox(height: 16),
+                    detailPane,
+                  ],
+                );
+              }
+
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SizedBox(width: 400, child: inboxPane),
+                    const SizedBox(width: 16),
+                    Expanded(child: detailPane),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SupportInboxFilters extends StatelessWidget {
+  const _SupportInboxFilters({
+    required this.statusFilter,
+    required this.categoryFilter,
+    required this.userRoleFilter,
+    required this.includeClosed,
+    required this.statusOptions,
+    required this.categoryOptions,
+    required this.roleOptions,
+    required this.onStatusChanged,
+    required this.onCategoryChanged,
+    required this.onUserRoleChanged,
+    required this.onIncludeClosedChanged,
+  });
+
+  final String? statusFilter;
+  final String? categoryFilter;
+  final String? userRoleFilter;
+  final bool includeClosed;
+  final List<(String, String)> statusOptions;
+  final List<(String, String)> categoryOptions;
+  final List<(String, String)> roleOptions;
+  final ValueChanged<String?> onStatusChanged;
+  final ValueChanged<String?> onCategoryChanged;
+  final ValueChanged<String?> onUserRoleChanged;
+  final ValueChanged<bool> onIncludeClosedChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        SizedBox(
+          width: 190,
+          child: DropdownButtonFormField<String>(
+            value: statusFilter ?? '',
+            decoration: const InputDecoration(labelText: 'Status'),
+            items: [
+              for (final entry in statusOptions)
+                DropdownMenuItem(value: entry.$1, child: Text(entry.$2)),
+            ],
+            onChanged: (value) => onStatusChanged(value?.isEmpty == true ? null : value),
+          ),
+        ),
+        SizedBox(
+          width: 190,
+          child: DropdownButtonFormField<String>(
+            value: categoryFilter ?? '',
+            decoration: const InputDecoration(labelText: 'Category'),
+            items: [
+              for (final entry in categoryOptions)
+                DropdownMenuItem(value: entry.$1, child: Text(entry.$2)),
+            ],
+            onChanged: (value) => onCategoryChanged(value?.isEmpty == true ? null : value),
+          ),
+        ),
+        SizedBox(
+          width: 190,
+          child: DropdownButtonFormField<String>(
+            value: userRoleFilter ?? '',
+            decoration: const InputDecoration(labelText: 'User role'),
+            items: [
+              for (final entry in roleOptions)
+                DropdownMenuItem(value: entry.$1, child: Text(entry.$2)),
+            ],
+            onChanged: (value) => onUserRoleChanged(value?.isEmpty == true ? null : value),
+          ),
+        ),
+        FilterChip(
+          selected: includeClosed,
+          label: const Text('Include closed'),
+          onSelected: onIncludeClosedChanged,
+        ),
+      ],
+    );
+  }
+}
+
+class _SupportInboxList extends StatelessWidget {
+  const _SupportInboxList({
+    required this.threads,
+    required this.loading,
+    required this.error,
+    required this.onRefresh,
+    required this.onSelect,
+    required this.selectedThreadId,
+  });
+
+  final List<SupportThreadModel> threads;
+  final bool loading;
+  final String? error;
+  final Future<void> Function() onRefresh;
+  final ValueChanged<SupportThreadModel> onSelect;
+  final String? selectedThreadId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(24),
+      child: RefreshIndicator(
+        onRefresh: onRefresh,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Support inbox',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Refresh',
+                  onPressed: loading ? null : () => onRefresh(),
+                  icon: const Icon(Icons.refresh),
+                ),
+              ],
+            ),
+            if (error != null) ...[
+              const SizedBox(height: 8),
+              _SupportNotice(message: error!),
+            ],
+            const SizedBox(height: 12),
+            if (loading)
+              const LinearProgressIndicator()
+            else if (threads.isEmpty)
+              const _EmptyInboxState()
+            else
+              for (final thread in threads) ...[
+                _InboxThreadTile(
+                  thread: thread,
+                  selected: selectedThreadId == thread.id,
+                  onTap: () => onSelect(thread),
+                ),
+                const SizedBox(height: 12),
+              ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InboxThreadTile extends StatelessWidget {
+  const _InboxThreadTile({
+    required this.thread,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final SupportThreadModel thread;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final unread = thread.unreadAdminCount;
+    return Material(
+      color: selected ? const Color(0xFFF1F7FF) : const Color(0xFFF8FAFB),
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      thread.title,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
+                    ),
+                  ),
+                  if (unread > 0)
+                    _Pill(label: '$unread unread', accent: const Color(0xFF2157A5)),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '${thread.threadLabel} · ${thread.userRole.toLowerCase()}',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: const Color(0xFF5C6561),
+                    ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                thread.lastMessagePreview?.trim().isNotEmpty == true
+                    ? thread.lastMessagePreview!.trim()
+                    : 'No messages yet.',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SupportThreadDetail extends StatelessWidget {
+  const _SupportThreadDetail({
+    required this.thread,
+    required this.messages,
+    required this.loading,
+    required this.replyController,
+    required this.replying,
+    required this.taking,
+    required this.onReply,
+    required this.onTakeThread,
+    required this.onResolve,
+    required this.onClose,
+    required this.onReopen,
+  });
+
+  final SupportThreadModel thread;
+  final List<SupportMessageModel> messages;
+  final bool loading;
+  final TextEditingController replyController;
+  final bool replying;
+  final bool taking;
+  final Future<void> Function() onReply;
+  final Future<void> Function() onTakeThread;
+  final Future<void> Function({String status}) onResolve;
+  final Future<void> Function() onClose;
+  final Future<void> Function() onReopen;
+
+  @override
+  Widget build(BuildContext context) {
+    final closed = thread.status == 'closed';
+    final selected = thread;
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(24),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(18),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        selected.title,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${selected.creatorName ?? 'Unknown user'} · ${selected.userRole.toLowerCase()} · ${selected.category.replaceAll('_', ' ')}',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: const Color(0xFF5C6561),
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    OutlinedButton(
+                      onPressed: taking ? null : onTakeThread,
+                      child: const Text('Take thread'),
+                    ),
+                    if (closed)
+                      FilledButton.tonal(
+                        onPressed: onReopen,
+                        child: const Text('Reopen'),
+                      )
+                    else ...[
+                      FilledButton.tonal(
+                        onPressed: () => onResolve(status: 'resolved'),
+                        child: const Text('Resolve'),
+                      ),
+                      TextButton(
+                        onPressed: onClose,
+                        child: const Text('Close'),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          if (loading) const LinearProgressIndicator(),
+          Expanded(
+            child: ListView.separated(
+              padding: const EdgeInsets.all(18),
+              itemBuilder: (context, index) {
+                final message = messages[index];
+                final mine = message.senderRole == 'ADMIN';
+                return Align(
+                  alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Container(
+                    constraints: const BoxConstraints(maxWidth: 600),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: mine ? const Color(0xFFEAF5F2) : const Color(0xFFF4F5F7),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Column(
+                      crossAxisAlignment:
+                          mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          mine ? 'Admin' : (message.senderName ?? 'User'),
+                          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(message.body),
+                        if ((message.createdAt ?? '').isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            message.createdAt!,
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                  color: const Color(0xFF68716C),
+                                ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              },
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemCount: messages.length,
+            ),
+          ),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: replyController,
+                      minLines: 1,
+                      maxLines: 4,
+                      decoration: InputDecoration(
+                        hintText: closed ? 'Reopen the thread to reply' : 'Type reply',
+                        border: const OutlineInputBorder(),
+                        enabled: !closed,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  FilledButton(
+                    onPressed: closed || replying ? null : onReply,
+                    child: const Text('Reply'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptySupportDetail extends StatelessWidget {
+  const _EmptySupportDetail();
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(24),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(36),
+          child: Text(
+            'Select a support thread to review messages and respond.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: const Color(0xFF5C6561),
+                ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyInboxState extends StatelessWidget {
+  const _EmptyInboxState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Text(
+        'No support threads match the current filters.',
+        textAlign: TextAlign.center,
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: const Color(0xFF5C6561),
+            ),
+      ),
+    );
+  }
+}
+
+class _SupportNotice extends StatelessWidget {
+  const _SupportNotice({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF6E5),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFF0D7A0)),
+      ),
+      child: Text(message),
+    );
+  }
+}
+
+class _Pill extends StatelessWidget {
+  const _Pill({required this.label, required this.accent});
+
+  final String label;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: accent,
+              fontWeight: FontWeight.w700,
+            ),
+      ),
+    );
+  }
+}

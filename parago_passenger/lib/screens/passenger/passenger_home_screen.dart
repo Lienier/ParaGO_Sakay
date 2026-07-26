@@ -26,6 +26,7 @@ import '../../services/trip_service.dart';
 import '../../widgets/metric_card.dart';
 import '../../widgets/passenger_home_dashboard_widgets.dart';
 import '../../widgets/status_badge.dart';
+import '../support/passenger_support_screen.dart';
 
 class PassengerHomeScreen extends StatefulWidget {
   const PassengerHomeScreen({super.key});
@@ -4687,32 +4688,31 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                     },
                   ),
                   const Divider(height: 1),
-                  // Passenger drawer item temporarily disabled:
-                  // ListTile(
-                  //   leading: Container(
-                  //     width: 40,
-                  //     height: 40,
-                  //     decoration: BoxDecoration(
-                  //       color: const Color(0xFFE8F0FF),
-                  //       borderRadius: BorderRadius.circular(12),
-                  //     ),
-                  //     child: const Icon(
-                  //       Icons.support_agent_rounded,
-                  //       color: Color(0xFF2157A5),
-                  //     ),
-                  //   ),
-                  //   title: const Text(
-                  //     'Support',
-                  //     style: TextStyle(fontWeight: FontWeight.w600),
-                  //   ),
-                  //   subtitle: const Text('Help & contact information'),
-                  //   trailing: const Icon(Icons.chevron_right),
-                  //   onTap: () {
-                  //     Navigator.of(context).pop();
-                  //     _showSupportBottomSheet();
-                  //   },
-                  // ),
-                  // const Divider(height: 1),
+                  ListTile(
+                    leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE8F0FF),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.support_agent_rounded,
+                        color: Color(0xFF2157A5),
+                      ),
+                    ),
+                    title: const Text(
+                      'Support',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: const Text('Chat with the admin team'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      unawaited(_openSupportCenter());
+                    },
+                  ),
+                  const Divider(height: 1),
                   const SizedBox(height: 12),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -5089,6 +5089,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                         color: const Color(0xFF67726E),
                       ),
                 ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    unawaited(_openSupportCenter());
+                  },
+                  icon: const Icon(Icons.chat_bubble_outline_rounded),
+                  label: const Text('Open support chat'),
+                ),
                 const SizedBox(height: 24),
                 Container(
                   padding: const EdgeInsets.all(18),
@@ -5204,6 +5213,20 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           ),
         );
       },
+    );
+  }
+
+  Future<void> _openSupportCenter() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PassengerSupportScreen(
+          routeId: _selectedRoute?.id ?? _selectedRouteId,
+          tripSessionId: _selectedTrip?.id,
+          pickupRequestId: _selectedTripBooking?.id,
+          rideSessionId: _displayRide?.id ?? _activeRide?.id,
+          realtimeSocketService: _realtimeSocketService,
+        ),
+      ),
     );
   }
 
