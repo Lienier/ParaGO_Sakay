@@ -1,0 +1,11 @@
+.git
+.github
+.do
+node_modules
+parago_admin_web/.dart_tool
+parago_admin_web/build
+parago_mobile
+parago_passenger
+parago_admin_web/web-run.err.log
+parago_admin_web/web-run.out.log
+parago_admin_web/verbose-web-run.log

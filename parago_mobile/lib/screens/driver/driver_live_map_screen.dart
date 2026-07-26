@@ -17,6 +17,8 @@ class DriverLiveMapScreen extends StatefulWidget {
 }
 
 class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
+  static const Duration _collapseDelay = Duration(seconds: 10);
+
   final MapController _mapController = MapController();
   final Dio _dio = Dio(
     BaseOptions(
@@ -30,6 +32,7 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
   );
 
   StreamSubscription<Position>? _positionSubscription;
+  Timer? _collapseTimer;
   LatLng? _currentLocation;
   LatLng? _destination;
   List<LatLng> _routePoints = const <LatLng>[];
@@ -40,18 +43,56 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
   bool _loadingRoute = false;
   bool _mapReady = false;
   bool _hasCenteredOnUser = false;
+  bool _isChromeCollapsed = false;
+  bool _consumeNextMapTap = false;
 
   @override
   void initState() {
     super.initState();
     _initializeLocationFlow();
+    _scheduleChromeCollapse();
   }
 
   @override
   void dispose() {
+    _collapseTimer?.cancel();
     _positionSubscription?.cancel();
     _dio.close(force: true);
     super.dispose();
+  }
+
+  void _handleUserInteraction({bool expandChrome = true}) {
+    if (expandChrome && _isChromeCollapsed && mounted) {
+      setState(() {
+        _isChromeCollapsed = false;
+      });
+    }
+    _scheduleChromeCollapse();
+  }
+
+  void _handlePointerDown() {
+    if (_isChromeCollapsed) {
+      _consumeNextMapTap = true;
+    }
+    _handleUserInteraction();
+  }
+
+  void _scheduleChromeCollapse() {
+    _collapseTimer?.cancel();
+    _collapseTimer = Timer(_collapseDelay, () {
+      if (!mounted || _isChromeCollapsed) return;
+      setState(() {
+        _isChromeCollapsed = true;
+      });
+    });
+  }
+
+  void _expandChrome() {
+    if (!mounted) return;
+    setState(() {
+      _isChromeCollapsed = false;
+    });
+    _scheduleChromeCollapse();
   }
 
   Future<void> _initializeLocationFlow() async {
@@ -146,6 +187,7 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
   }
 
   Future<void> _setDestination(LatLng point) async {
+    _handleUserInteraction();
     setState(() {
       _destination = point;
       _routePoints = const <LatLng>[];
@@ -154,6 +196,18 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
       _statusMessage = 'Destination selected. Building route...';
     });
     await _fetchRoute();
+  }
+
+  void _handleMapTap(LatLng point) {
+    if (_consumeNextMapTap) {
+      _consumeNextMapTap = false;
+      return;
+    }
+    if (_isChromeCollapsed) {
+      _expandChrome();
+      return;
+    }
+    unawaited(_setDestination(point));
   }
 
   Future<void> _fetchRoute() async {
@@ -331,6 +385,10 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
   Widget build(BuildContext context) {
     final currentLocation = _currentLocation;
     final destination = _destination;
+    final routeMetricLabel = [
+      if (_distanceKm != null) '${_distanceKm!.toStringAsFixed(2)} km',
+      if (_etaMinutes != null) '${_etaMinutes!.toStringAsFixed(0)} min',
+    ].join(' / ');
     final markers = <Marker>[
       if (currentLocation != null)
         Marker(
@@ -366,135 +424,277 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
     ];
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Driver live map'),
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Track your live jeepney position, tap a destination, and draw a route using OpenRouteService.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    _InfoChip(
-                      label: currentLocation == null
-                          ? 'Waiting for GPS'
-                          : 'GPS ${currentLocation.latitude.toStringAsFixed(5)}, ${currentLocation.longitude.toStringAsFixed(5)}',
-                      color: const Color(0xFFDCEEFF),
-                    ),
-                    if (_distanceKm != null)
-                      _InfoChip(
-                        label: 'Distance ${_distanceKm!.toStringAsFixed(2)} km',
-                        color: const Color(0xFFE5F3DE),
-                      ),
-                    if (_etaMinutes != null)
-                      _InfoChip(
-                        label: 'ETA ${_etaMinutes!.toStringAsFixed(0)} min',
-                        color: const Color(0xFFFFE7C2),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  _statusMessage,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
+      appBar: _isChromeCollapsed
+          ? null
+          : AppBar(
+              title: const Text('Driver live map'),
             ),
-          ),
-          Expanded(
-            child: Stack(
-              children: [
-                FlutterMap(
-                  mapController: _mapController,
-                  options: MapOptions(
-                    initialCenter:
-                        currentLocation ?? const LatLng(14.6091, 121.0223),
-                    initialZoom: 14,
-                    onMapReady: () {
-                      _mapReady = true;
-                      if (currentLocation != null && !_hasCenteredOnUser) {
-                        _moveTo(currentLocation, zoom: 16);
-                      }
-                    },
-                    onTap: (_, point) => _setDestination(point),
-                  ),
-                  children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.example.parago_mobile',
-                    ),
-                    PolylineLayer(
-                      polylines: [
-                        if (_routePoints.isNotEmpty)
-                          Polyline(
-                            points: _routePoints,
-                            strokeWidth: 5,
-                            color: const Color(0xFF0D8B6F),
+      body: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) => _handlePointerDown(),
+        child: Column(
+          children: [
+            AnimatedSize(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeInOut,
+              alignment: Alignment.topCenter,
+              child: _isChromeCollapsed
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Track your live jeepney position, tap a destination, and draw a route using OpenRouteService.',
+                            style: Theme.of(context).textTheme.bodyMedium,
                           ),
-                      ],
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              _InfoChip(
+                                label: currentLocation == null
+                                    ? 'Waiting for GPS'
+                                    : 'GPS ${currentLocation.latitude.toStringAsFixed(5)}, ${currentLocation.longitude.toStringAsFixed(5)}',
+                                color: const Color(0xFFDCEEFF),
+                              ),
+                              if (_distanceKm != null)
+                                _InfoChip(
+                                  label:
+                                      'Distance ${_distanceKm!.toStringAsFixed(2)} km',
+                                  color: const Color(0xFFE5F3DE),
+                                ),
+                              if (_etaMinutes != null)
+                                _InfoChip(
+                                  label:
+                                      'ETA ${_etaMinutes!.toStringAsFixed(0)} min',
+                                  color: const Color(0xFFFFE7C2),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            _statusMessage,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
                     ),
-                    MarkerLayer(markers: markers),
-                  ],
-                ),
-                if (_loadingLocation || _loadingRoute)
-                  const Positioned(
-                    top: 16,
-                    right: 16,
-                    child: Card(
-                      child: Padding(
-                        padding:
-                            EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SizedBox(
-                              width: 18,
-                              height: 18,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2.4),
+            ),
+            Expanded(
+              child: Stack(
+                children: [
+                  FlutterMap(
+                    mapController: _mapController,
+                    options: MapOptions(
+                      initialCenter:
+                          currentLocation ?? const LatLng(14.6091, 121.0223),
+                      initialZoom: 14,
+                      onMapReady: () {
+                        _mapReady = true;
+                        if (currentLocation != null && !_hasCenteredOnUser) {
+                          _moveTo(currentLocation, zoom: 16);
+                        }
+                      },
+                      onTap: (_, point) => _handleMapTap(point),
+                    ),
+                    children: [
+                      TileLayer(
+                        urlTemplate:
+                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.example.parago_mobile',
+                      ),
+                      PolylineLayer(
+                        polylines: [
+                          if (_routePoints.isNotEmpty)
+                            Polyline(
+                              points: _routePoints,
+                              strokeWidth: 5,
+                              color: const Color(0xFF0D8B6F),
                             ),
-                            SizedBox(width: 10),
-                            Text('Updating map...'),
-                          ],
+                        ],
+                      ),
+                      MarkerLayer(markers: markers),
+                    ],
+                  ),
+                  Positioned(
+                    left: 16,
+                    right: 16,
+                    top: 16,
+                    child: AnimatedSlide(
+                      duration: const Duration(milliseconds: 240),
+                      curve: Curves.easeInOut,
+                      offset: _isChromeCollapsed
+                          ? Offset.zero
+                          : const Offset(0, -1.1),
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 180),
+                        opacity: _isChromeCollapsed ? 1 : 0,
+                        child: _CollapsedMapSummary(
+                          gpsLabel: currentLocation == null
+                              ? 'GPS waiting'
+                              : 'GPS ${currentLocation.latitude.toStringAsFixed(5)}, ${currentLocation.longitude.toStringAsFixed(5)}',
+                          destinationLabel: destination == null
+                              ? 'No destination'
+                              : 'Drop-off point set',
+                          routeMetricLabel: routeMetricLabel.isEmpty
+                              ? 'Route pending'
+                              : routeMetricLabel,
+                          statusMessage: _statusMessage,
+                          onExpand: _expandChrome,
                         ),
                       ),
                     ),
                   ),
-              ],
+                  if (_loadingLocation || _loadingRoute)
+                    const Positioned(
+                      top: 16,
+                      right: 16,
+                      child: Card(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.4,
+                                ),
+                              ),
+                              SizedBox(width: 10),
+                              Text('Updating map...'),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (!_isChromeCollapsed)
+                    Positioned(
+                      right: 16,
+                      bottom: 16,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          FloatingActionButton.small(
+                            heroTag: 'refresh_location',
+                            onPressed: () {
+                              _handleUserInteraction();
+                              _initializeLocationFlow();
+                            },
+                            child: const Icon(Icons.gps_fixed),
+                          ),
+                          const SizedBox(height: 12),
+                          FloatingActionButton.extended(
+                            heroTag: 'recenter_location',
+                            onPressed: currentLocation == null
+                                ? null
+                                : () {
+                                    _handleUserInteraction();
+                                    _moveTo(currentLocation, zoom: 16);
+                                  },
+                            icon: const Icon(Icons.my_location),
+                            label: const Text('Recenter'),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CollapsedMapSummary extends StatelessWidget {
+  const _CollapsedMapSummary({
+    required this.gpsLabel,
+    required this.destinationLabel,
+    required this.routeMetricLabel,
+    required this.statusMessage,
+    required this.onExpand,
+  });
+
+  final String gpsLabel;
+  final String destinationLabel;
+  final String routeMetricLabel;
+  final String statusMessage;
+  final VoidCallback onExpand;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.14),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
           ),
         ],
       ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          FloatingActionButton.small(
-            heroTag: 'refresh_location',
-            onPressed: _initializeLocationFlow,
-            child: const Icon(Icons.gps_fixed),
-          ),
-          const SizedBox(height: 12),
-          FloatingActionButton.extended(
-            heroTag: 'recenter_location',
-            onPressed: currentLocation == null
-                ? null
-                : () => _moveTo(currentLocation, zoom: 16),
-            icon: const Icon(Icons.my_location),
-            label: const Text('Recenter'),
-          ),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    destinationLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: onExpand,
+                  icon: const Icon(Icons.keyboard_arrow_down),
+                  tooltip: 'Show full controls',
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _InfoChip(
+                  label: gpsLabel,
+                  color: const Color(0xFFDCEEFF),
+                ),
+                _InfoChip(
+                  label: routeMetricLabel,
+                  color: const Color(0xFFE5F3DE),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              statusMessage,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
       ),
     );
   }

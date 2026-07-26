@@ -51,6 +51,23 @@ flutter run -d chrome \
 
 The app no longer uses a bundled `.env`. Pass app config through `--dart-define`.
 
+## Deploy on Vercel
+
+This app now includes Vercel defaults in `vercel.json` and `vercel-build.sh`.
+
+In Vercel, configure only these values:
+
+1. Root Directory: `parago_admin_web`
+2. Environment Variables:
+  - `PARAGO_API_BASE_URL` = `https://paragosakay-app-qulmw.ondigitalocean.app/api/v1`
+  - `PARAGO_ENABLE_REALTIME` = `false`
+
+Then deploy. Vercel will run `bash ./vercel-build.sh` and publish `build/web`.
+
+Backend CORS reminder:
+
+- Add your Vercel domain(s) to `CORS_ALLOWED_ORIGINS` on the backend service.
+
 Backend note:
 
 - Add Firebase Admin service-account values to the root `.env`.

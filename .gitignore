@@ -6,3 +6,6 @@ coverage/
 .do/*.local.yaml
 .do/*.local.sh
 .do/*trial-key*
+
+.vercel
+.env*

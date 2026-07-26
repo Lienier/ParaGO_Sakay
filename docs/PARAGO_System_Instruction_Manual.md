@@ -524,7 +524,7 @@ Hybrid dispatch board shows:
 2. Admin sets start pin.
 3. Admin sets end pin.
 4. Admin may add branch guide points.
-5. Backend route preview is requested through TomTom.
+5. Backend route preview is requested through Google Routes API, with TomTom as a fallback when needed.
 6. Route geometry, distance, and ETA are returned.
 7. Admin saves route payload.
 8. Admin manages route landmarks and fare settings.
@@ -1160,6 +1160,7 @@ Important note:
 - `SMSAPIPH_API_KEY`
 - `SMSAPIPH_BASE_URL`
 - `TOMTOM_API_KEY`
+- `GOOGLE_ROUTES_API_KEY`
 
 ### Important client runtime defines
 

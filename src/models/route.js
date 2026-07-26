@@ -79,7 +79,7 @@ const routeSchema = new Schema(
     navigation: {
       source: {
         type: String,
-        enum: ['openstreetmap', 'tomtom', 'cached'],
+        enum: ['openstreetmap', 'tomtom', 'google', 'cached'],
         default: 'openstreetmap',
       },
       trafficProfile: {

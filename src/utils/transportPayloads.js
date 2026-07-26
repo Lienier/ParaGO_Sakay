@@ -199,7 +199,12 @@ const buildRouteNavigationPayload = (value, fieldName = 'navigation') => {
 
   const payload = {
     source: value.source
-      ? normalizeEnum(value.source, `${fieldName}.source`, ['openstreetmap', 'tomtom', 'cached'])
+      ? normalizeEnum(value.source, `${fieldName}.source`, [
+          'openstreetmap',
+          'tomtom',
+          'google',
+          'cached',
+        ])
       : 'openstreetmap',
     origin: normalizeGeoPoint(value.origin, `${fieldName}.origin`),
     destination: normalizeGeoPoint(value.destination, `${fieldName}.destination`),

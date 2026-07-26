@@ -2796,7 +2796,7 @@ class _DrivePanelLiveData {
   final VoidCallback? onDismissStatusMessage;
 }
 
-class _DriveMapPanel extends StatelessWidget {
+class _DriveMapPanel extends StatefulWidget {
   const _DriveMapPanel({
     required this.mapController,
     required this.trip,
@@ -2858,6 +2858,91 @@ class _DriveMapPanel extends StatelessWidget {
   final PositionCallback onPositionChanged;
   final _DrivePanelLiveData Function() readLiveData;
   final double? height;
+
+  @override
+  State<_DriveMapPanel> createState() => _DriveMapPanelState();
+}
+
+class _DriveMapPanelState extends State<_DriveMapPanel> {
+  static const Duration _idleCollapseDelay = Duration(seconds: 10);
+
+  Timer? _idleCollapseTimer;
+  bool _isChromeCollapsed = false;
+
+  MapController get mapController => widget.mapController;
+  TripSession? get trip => widget.trip;
+  LatLng get cameraTarget => widget.cameraTarget;
+  String get driverName => widget.driverName;
+  String? get statusMessage => widget.statusMessage;
+  String? get requirementMessage => widget.requirementMessage;
+  String get availabilityNote => widget.availabilityNote;
+  bool get isOnline => widget.isOnline;
+  int get activePickupCount => widget.activePickupCount;
+  String get routeLabel => widget.routeLabel;
+  int get displayedOnboard => widget.displayedOnboard;
+  int? get seatCapacity => widget.seatCapacity;
+  int get manualPassengerCount => widget.manualPassengerCount;
+  List<LatLng> get routePath => widget.routePath;
+  List<_DriveMarkerData> get markers => widget.markers;
+  List<StopAlertModel> get activeDestinationAlerts =>
+      widget.activeDestinationAlerts;
+  VoidCallback? get onIncrement => widget.onIncrement;
+  VoidCallback? get onDecrement => widget.onDecrement;
+  VoidCallback? get onStartTrip => widget.onStartTrip;
+  VoidCallback? get onEndTrip => widget.onEndTrip;
+  VoidCallback? get onTogglePickup => widget.onTogglePickup;
+  VoidCallback? get onAcknowledgeAlert => widget.onAcknowledgeAlert;
+  VoidCallback? get onDismissAlert => widget.onDismissAlert;
+  VoidCallback? get onDismissRequirementMessage =>
+      widget.onDismissRequirementMessage;
+  VoidCallback? get onDismissStatusMessage => widget.onDismissStatusMessage;
+  VoidCallback get onMapReady => widget.onMapReady;
+  PositionCallback get onPositionChanged => widget.onPositionChanged;
+  _DrivePanelLiveData Function() get readLiveData => widget.readLiveData;
+  double? get height => widget.height;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleIdleCollapse();
+  }
+
+  @override
+  void dispose() {
+    _idleCollapseTimer?.cancel();
+    super.dispose();
+  }
+
+  void _handleUserInteraction({bool expandChrome = true}) {
+    if (expandChrome && _isChromeCollapsed && mounted) {
+      setState(() {
+        _isChromeCollapsed = false;
+      });
+    }
+    _scheduleIdleCollapse();
+  }
+
+  void _scheduleIdleCollapse() {
+    _idleCollapseTimer?.cancel();
+    _idleCollapseTimer = Timer(_idleCollapseDelay, () {
+      if (!mounted || _isChromeCollapsed) return;
+      setState(() {
+        _isChromeCollapsed = true;
+      });
+    });
+  }
+
+  void _handleMapPositionChanged(MapCamera camera, bool hasGesture) {
+    onPositionChanged(camera, hasGesture);
+    if (hasGesture) {
+      _handleUserInteraction();
+    }
+  }
+
+  void _openControls(BuildContext context) {
+    _handleUserInteraction();
+    _openControlSheet(context);
+  }
 
   void _openControlSheet(BuildContext context) {
     showModalBottomSheet(
@@ -3250,78 +3335,109 @@ class _DriveMapPanel extends StatelessWidget {
         borderRadius: BorderRadius.circular(32),
         child: SizedBox(
           height: height,
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: FlutterMap(
-                  mapController: mapController,
-                  options: MapOptions(
-                    initialCenter: cameraTarget,
-                    initialZoom: 14.2,
-                    interactionOptions: const InteractionOptions(
-                      flags: InteractiveFlag.all,
-                    ),
-                    onMapReady: onMapReady,
-                    onPositionChanged: onPositionChanged,
-                  ),
-                  children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.parago.mobile',
-                    ),
-                    if (routePath.length >= 2)
-                      PolylineLayer(
-                        polylines: [
-                          Polyline(
-                            points: routePath,
-                            strokeWidth: 6,
-                            color: const Color(0xFF0F6A5F),
-                          ),
-                        ],
+          child: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: (_) => _handleUserInteraction(),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: FlutterMap(
+                    mapController: mapController,
+                    options: MapOptions(
+                      initialCenter: cameraTarget,
+                      initialZoom: 14.2,
+                      interactionOptions: const InteractionOptions(
+                        flags: InteractiveFlag.all,
                       ),
-                    MarkerLayer(
-                      markers: markers
-                          .map(
-                            (entry) => Marker(
-                              point: entry.position,
-                              width: 150,
-                              height: 92,
-                              child: _DriveMapMarker(entry: entry),
+                      onMapReady: onMapReady,
+                      onPositionChanged: _handleMapPositionChanged,
+                    ),
+                    children: [
+                      TileLayer(
+                        urlTemplate:
+                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.parago.mobile',
+                      ),
+                      if (routePath.length >= 2)
+                        PolylineLayer(
+                          polylines: [
+                            Polyline(
+                              points: routePath,
+                              strokeWidth: 6,
+                              color: const Color(0xFF0F6A5F),
                             ),
-                          )
-                          .toList(),
-                    ),
-                    RichAttributionWidget(
-                      attributions: [
-                        TextSourceAttribution('OpenStreetMap contributors'),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          Colors.white.withValues(alpha: 0.04),
-                          Colors.white.withValues(alpha: 0.0),
-                          const Color(0xFF102725).withValues(alpha: 0.12),
+                          ],
+                        ),
+                      MarkerLayer(
+                        markers: markers
+                            .map(
+                              (entry) => Marker(
+                                point: entry.position,
+                                width: 150,
+                                height: 92,
+                                child: _DriveMapMarker(entry: entry),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                      RichAttributionWidget(
+                        attributions: [
+                          TextSourceAttribution('OpenStreetMap contributors'),
                         ],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
+                      ),
+                    ],
+                  ),
+                ),
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            Colors.white.withValues(alpha: 0.04),
+                            Colors.white.withValues(alpha: 0.0),
+                            const Color(0xFF102725).withValues(alpha: 0.12),
+                          ],
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              Positioned(
-                top: 16,
-                left: 16,
-                right: 16,
-                child: Column(
+                if (_isChromeCollapsed)
+                  Positioned(
+                    top: 12,
+                    left: 12,
+                    right: 12,
+                    child: _DriveMapMiniOverlay(
+                      status: isOnline
+                          ? hasTrip
+                              ? trip!.status
+                              : 'ready'
+                          : 'offline',
+                      routeLabel: routeLabel,
+                      displayedOnboard: displayedOnboard,
+                      activePickupCount: activePickupCount,
+                      activeDropOffCount: activeDestinationAlerts.length,
+                      dropOffLabel: activeDestinationAlerts.isEmpty
+                          ? null
+                          : activeDestinationAlerts.first.stopRef,
+                      onOpenControls: () => _openControls(context),
+                      onAcknowledgeDropOff: onAcknowledgeAlert == null
+                          ? null
+                          : () {
+                              _handleUserInteraction();
+                              onAcknowledgeAlert?.call();
+                            },
+                    ),
+                  ),
+                if (!_isChromeCollapsed)
+                  Positioned(
+                    top: 16,
+                    left: 16,
+                    right: 16,
+                    child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Container(
@@ -3531,78 +3647,332 @@ class _DriveMapPanel extends StatelessWidget {
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onVerticalDragEnd: (details) {
+                    _handleUserInteraction();
                     if (details.primaryVelocity != null &&
                         details.primaryVelocity! < -120) {
                       _openControlSheet(context);
                     }
                   },
-                  onTap: () => _openControlSheet(context),
-                  child: Container(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          scheme.primary.withValues(alpha: 0.94),
-                          const Color(0xFF0D4E47).withValues(alpha: 0.96),
-                        ],
-                        begin: Alignment.centerLeft,
-                        end: Alignment.centerRight,
-                      ),
-                      borderRadius: BorderRadius.circular(28),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.18),
-                          blurRadius: 18,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 38,
-                          height: 38,
+                  onTap: () => _openControls(context),
+                  child: _isChromeCollapsed
+                      ? _DriveMapMiniControl(hasTrip: trip != null)
+                      : Container(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                           decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.14),
-                            borderRadius: BorderRadius.circular(14),
+                            gradient: LinearGradient(
+                              colors: [
+                                scheme.primary.withValues(alpha: 0.94),
+                                const Color(0xFF0D4E47)
+                                    .withValues(alpha: 0.96),
+                              ],
+                              begin: Alignment.centerLeft,
+                              end: Alignment.centerRight,
+                            ),
+                            borderRadius: BorderRadius.circular(28),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.18),
+                                blurRadius: 18,
+                                offset: const Offset(0, 10),
+                              ),
+                            ],
                           ),
-                          child: Icon(
-                            Icons.swipe_up,
-                            color: Colors.white.withValues(alpha: 0.95),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
+                          child: Row(
                             children: [
-                              Text(
-                                trip == null
-                                    ? 'No trip selected - pull up for controls'
-                                    : 'Trip control panel - pull up',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
+                              Container(
+                                width: 38,
+                                height: 38,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.14),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Icon(
+                                  Icons.swipe_up,
+                                  color: Colors.white.withValues(alpha: 0.95),
                                 ),
                               ),
-                              const SizedBox(height: 2),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      trip == null
+                                          ? 'No trip selected - pull up for controls'
+                                          : 'Trip control panel - pull up',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Icon(
+                                Icons.keyboard_arrow_up,
+                                color: Colors.white.withValues(alpha: 0.9),
+                              ),
                             ],
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        Icon(
-                          Icons.keyboard_arrow_up,
-                          color: Colors.white.withValues(alpha: 0.9),
-                        ),
-                      ],
+                ),
+              ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DriveMapMiniOverlay extends StatelessWidget {
+  const _DriveMapMiniOverlay({
+    required this.status,
+    required this.routeLabel,
+    required this.displayedOnboard,
+    required this.activePickupCount,
+    required this.activeDropOffCount,
+    required this.onOpenControls,
+    this.dropOffLabel,
+    this.onAcknowledgeDropOff,
+  });
+
+  final String status;
+  final String routeLabel;
+  final int displayedOnboard;
+  final int activePickupCount;
+  final int activeDropOffCount;
+  final String? dropOffLabel;
+  final VoidCallback onOpenControls;
+  final VoidCallback? onAcknowledgeDropOff;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasDropOff = activeDropOffCount > 0;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFF102725).withValues(alpha: 0.90),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                StatusBadge(status: status),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    routeLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
+                IconButton(
+                  tooltip: 'Open controls',
+                  onPressed: onOpenControls,
+                  icon: const Icon(Icons.keyboard_arrow_up),
+                  color: Colors.white,
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _MiniMetric(
+                    icon: Icons.groups_2_outlined,
+                    label: 'Onboard',
+                    value: displayedOnboard.toString(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _MiniMetric(
+                    icon: Icons.hail_outlined,
+                    label: 'Pickup',
+                    value: activePickupCount.toString(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _MiniMetric(
+                    icon: Icons.flag_outlined,
+                    label: 'Drop-off',
+                    value: activeDropOffCount.toString(),
+                    accent: hasDropOff
+                        ? const Color(0xFFFFC3D4)
+                        : const Color(0xFFDDE8E7),
+                  ),
+                ),
+              ],
+            ),
+            if (hasDropOff) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF2EE).withValues(alpha: 0.96),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFFFFC8BA)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.notifications_active,
+                      color: Color(0xFFB24E34),
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        dropOffLabel == null
+                            ? '$activeDropOffCount passenger drop-off alerts'
+                            : '$dropOffLabel drop-off ready',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF5F2517),
+                          fontWeight: FontWeight.w800,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: onAcknowledgeDropOff,
+                      child: const Text('Ack'),
+                    ),
+                  ],
+                ),
               ),
             ],
-          ),
+          ],
         ),
+      ),
+    );
+  }
+}
+
+class _DriveMapMiniControl extends StatelessWidget {
+  const _DriveMapMiniControl({
+    required this.hasTrip,
+  });
+
+  final bool hasTrip;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0D4E47).withValues(alpha: 0.94),
+          borderRadius: BorderRadius.circular(999),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.18),
+              blurRadius: 14,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.keyboard_arrow_up, color: Colors.white),
+            const SizedBox(width: 6),
+            Text(
+              hasTrip ? 'Controls' : 'Trip controls',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniMetric extends StatelessWidget {
+  const _MiniMetric({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.accent = const Color(0xFFDDE8E7),
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 54),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: accent, size: 17),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: accent,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 15,
+                  ),
+                ),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3809,52 +4179,6 @@ class _NotificationCard extends StatelessWidget {
                     ParagoFormat.relative(notification.createdAt),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _TabIntroCard extends StatelessWidget {
-  const _TabIntroCard({
-    required this.title,
-    required this.description,
-    required this.accent,
-  });
-
-  final String title;
-  final String description;
-  final Color accent;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: accent.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Icon(Icons.dashboard_customize_outlined, color: accent),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 6),
-                  Text(description),
                 ],
               ),
             ),

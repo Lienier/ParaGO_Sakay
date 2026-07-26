@@ -64,6 +64,8 @@ It implements a modular backend for passenger/driver/admin roles with:
 - `FIREBASE_PROJECT_ID`
 - `FIREBASE_CLIENT_EMAIL`
 - `FIREBASE_PRIVATE_KEY`
+- `TOMTOM_API_KEY`
+- `GOOGLE_ROUTES_API_KEY`
 
 ## API groups (v1)
 
