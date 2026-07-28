@@ -2,11 +2,48 @@ import '../core/network/api_client.dart';
 import '../models/support/support_message.dart';
 import '../models/support/support_thread.dart';
 
-class SupportService {
+abstract interface class SupportRepository {
+  Future<List<SupportThreadModel>> getInboxThreads({
+    String? status,
+    String? category,
+    String? userRole,
+    String? assignedAdminId,
+    bool includeClosed = false,
+  });
+
+  Future<Map<String, dynamic>> getThreadMessages(String threadId);
+
+  Future<Map<String, dynamic>> sendMessage({
+    required String threadId,
+    required String body,
+  });
+
+  Future<Map<String, dynamic>> markRead(String threadId);
+
+  Future<Map<String, dynamic>> assignThread({
+    required String threadId,
+    required String assignedAdminId,
+  });
+
+  Future<Map<String, dynamic>> resolveThread({
+    required String threadId,
+    String status = 'resolved',
+  });
+
+  Future<Map<String, dynamic>> closeThread(
+    String threadId, {
+    String? reason,
+  });
+
+  Future<Map<String, dynamic>> reopenThread(String threadId);
+}
+
+class SupportService implements SupportRepository {
   SupportService(this._client);
 
   final ApiClient _client;
 
+  @override
   Future<List<SupportThreadModel>> getInboxThreads({
     String? status,
     String? category,
@@ -19,8 +56,10 @@ class SupportService {
       path: '/support/admin/threads',
       queryParameters: {
         if (status != null && status.trim().isNotEmpty) 'status': status.trim(),
-        if (category != null && category.trim().isNotEmpty) 'category': category.trim(),
-        if (userRole != null && userRole.trim().isNotEmpty) 'userRole': userRole.trim(),
+        if (category != null && category.trim().isNotEmpty)
+          'category': category.trim(),
+        if (userRole != null && userRole.trim().isNotEmpty)
+          'userRole': userRole.trim(),
         if (assignedAdminId != null && assignedAdminId.trim().isNotEmpty)
           'assignedAdminId': assignedAdminId.trim(),
         'includeClosed': includeClosed.toString(),
@@ -31,10 +70,12 @@ class SupportService {
     if (data is! List) return const <SupportThreadModel>[];
     return data
         .whereType<Map>()
-        .map((item) => SupportThreadModel.fromJson(item.cast<String, dynamic>()))
+        .map(
+            (item) => SupportThreadModel.fromJson(item.cast<String, dynamic>()))
         .toList();
   }
 
+  @override
   Future<Map<String, dynamic>> getThreadMessages(String threadId) async {
     final response = await _client.request(
       method: 'GET',
@@ -44,6 +85,7 @@ class SupportService {
     return response['data'] as Map<String, dynamic>;
   }
 
+  @override
   Future<Map<String, dynamic>> sendMessage({
     required String threadId,
     required String body,
@@ -56,6 +98,7 @@ class SupportService {
     return response['data'] as Map<String, dynamic>;
   }
 
+  @override
   Future<Map<String, dynamic>> markRead(String threadId) async {
     final response = await _client.request(
       method: 'PATCH',
@@ -66,6 +109,7 @@ class SupportService {
     return response['data'] as Map<String, dynamic>;
   }
 
+  @override
   Future<Map<String, dynamic>> assignThread({
     required String threadId,
     required String assignedAdminId,
@@ -79,6 +123,7 @@ class SupportService {
     return response['data'] as Map<String, dynamic>;
   }
 
+  @override
   Future<Map<String, dynamic>> resolveThread({
     required String threadId,
     String status = 'resolved',
@@ -92,7 +137,9 @@ class SupportService {
     return response['data'] as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> closeThread(String threadId, {String? reason}) async {
+  @override
+  Future<Map<String, dynamic>> closeThread(String threadId,
+      {String? reason}) async {
     final response = await _client.request(
       method: 'PATCH',
       path: '/support/threads/$threadId/close',
@@ -104,6 +151,7 @@ class SupportService {
     return response['data'] as Map<String, dynamic>;
   }
 
+  @override
   Future<Map<String, dynamic>> reopenThread(String threadId) async {
     final response = await _client.request(
       method: 'PATCH',
@@ -120,7 +168,8 @@ class SupportService {
     if (messages is! List) return const <SupportMessageModel>[];
     return messages
         .whereType<Map>()
-        .map((item) => SupportMessageModel.fromJson(item.cast<String, dynamic>()))
+        .map((item) =>
+            SupportMessageModel.fromJson(item.cast<String, dynamic>()))
         .toList();
   }
 }
