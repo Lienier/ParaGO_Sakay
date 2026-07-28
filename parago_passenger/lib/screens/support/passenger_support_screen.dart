@@ -20,6 +20,7 @@ class PassengerSupportScreen extends StatefulWidget {
     this.initialCategory,
     this.initialSubject,
     this.initialMessage,
+    this.supportService,
     required this.realtimeSocketService,
   });
 
@@ -30,6 +31,7 @@ class PassengerSupportScreen extends StatefulWidget {
   final String? initialCategory;
   final String? initialSubject;
   final String? initialMessage;
+  final SupportService? supportService;
   final RealtimeSocketService realtimeSocketService;
 
   @override
@@ -44,10 +46,15 @@ class _PassengerSupportScreenState extends State<PassengerSupportScreen> {
   bool _creating = false;
   String? _message;
 
+  SupportService get _supportService =>
+      widget.supportService ??
+      SupportService(context.read<SessionController>().apiClient);
+
   @override
   void initState() {
     super.initState();
-    _supportSubscription = widget.realtimeSocketService.supportActivityStream.listen(
+    _supportSubscription =
+        widget.realtimeSocketService.supportActivityStream.listen(
       (event) {
         final notificationType = event['notificationType']?.toString() ?? '';
         if (notificationType == 'support.thread.read') {
@@ -75,8 +82,7 @@ class _PassengerSupportScreenState extends State<PassengerSupportScreen> {
     }
 
     try {
-      final session = context.read<SessionController>();
-      final threads = await SupportService(session.apiClient).getMyThreads();
+      final threads = await _supportService.getMyThreads();
       if (!mounted) return;
       setState(() {
         _threads = threads;
@@ -113,24 +119,31 @@ class _PassengerSupportScreenState extends State<PassengerSupportScreen> {
 
     setState(() => _creating = true);
     try {
-      final session = context.read<SessionController>();
-      final response = await SupportService(session.apiClient).createThread(
+      final supportService = _supportService;
+      final hasOwnedRideContext =
+          (widget.pickupRequestId ?? '').trim().isNotEmpty ||
+              (widget.rideSessionId ?? '').trim().isNotEmpty;
+      final response = await supportService.createThread(
         subject: created.subject,
         category: created.category,
         message: created.message,
-        tripSessionId: widget.tripSessionId,
+        // A selected live jeep is not proof that this passenger owns its trip.
+        tripSessionId: hasOwnedRideContext ? widget.tripSessionId : null,
         pickupRequestId: widget.pickupRequestId,
         rideSessionId: widget.rideSessionId,
         routeId: widget.routeId,
       );
-      final thread = SupportThreadModel.fromJson(response['thread'] as Map<String, dynamic>);
+      final thread = SupportThreadModel.fromJson(
+          response['thread'] as Map<String, dynamic>);
       if (!mounted) return;
       await _loadThreads(silent: true);
+      if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => PassengerSupportThreadScreen(
             thread: thread,
             realtimeSocketService: widget.realtimeSocketService,
+            supportService: supportService,
           ),
         ),
       );
@@ -150,13 +163,12 @@ class _PassengerSupportScreenState extends State<PassengerSupportScreen> {
   }
 
   Future<void> _openThread(SupportThreadModel thread) async {
-    final session = context.read<SessionController>();
-    final service = SupportService(session.apiClient);
     final updated = await Navigator.of(context).push<SupportThreadModel>(
       MaterialPageRoute(
         builder: (_) => PassengerSupportThreadScreen(
           thread: thread,
           realtimeSocketService: widget.realtimeSocketService,
+          supportService: _supportService,
         ),
       ),
     );
@@ -180,7 +192,8 @@ class _PassengerSupportScreenState extends State<PassengerSupportScreen> {
     } else {
       next.insert(0, thread);
     }
-    next.sort((left, right) => (right.lastMessageAt ?? right.createdAt ?? '').compareTo(
+    next.sort((left, right) =>
+        (right.lastMessageAt ?? right.createdAt ?? '').compareTo(
           left.lastMessageAt ?? left.createdAt ?? '',
         ));
     return next;
@@ -244,16 +257,20 @@ class PassengerSupportThreadScreen extends StatefulWidget {
     super.key,
     required this.thread,
     required this.realtimeSocketService,
+    this.supportService,
   });
 
   final SupportThreadModel thread;
   final RealtimeSocketService realtimeSocketService;
+  final SupportService? supportService;
 
   @override
-  State<PassengerSupportThreadScreen> createState() => _PassengerSupportThreadScreenState();
+  State<PassengerSupportThreadScreen> createState() =>
+      _PassengerSupportThreadScreenState();
 }
 
-class _PassengerSupportThreadScreenState extends State<PassengerSupportThreadScreen> {
+class _PassengerSupportThreadScreenState
+    extends State<PassengerSupportThreadScreen> {
   final TextEditingController _composerController = TextEditingController();
   StreamSubscription<Map<String, dynamic>>? _supportSubscription;
   SupportThreadModel? _thread;
@@ -262,11 +279,16 @@ class _PassengerSupportThreadScreenState extends State<PassengerSupportThreadScr
   bool _sending = false;
   String? _message;
 
+  SupportService get _supportService =>
+      widget.supportService ??
+      SupportService(context.read<SessionController>().apiClient);
+
   @override
   void initState() {
     super.initState();
     _thread = widget.thread;
-    _supportSubscription = widget.realtimeSocketService.supportActivityStream.listen(
+    _supportSubscription =
+        widget.realtimeSocketService.supportActivityStream.listen(
       (event) {
         final notificationType = event['notificationType']?.toString() ?? '';
         if (notificationType == 'support.thread.read') {
@@ -295,14 +317,15 @@ class _PassengerSupportThreadScreenState extends State<PassengerSupportThreadScr
       setState(() => _loading = true);
     }
     try {
-      final session = context.read<SessionController>();
-      final data = await SupportService(session.apiClient).getThreadMessages(_thread!.id);
-      final thread = SupportThreadModel.fromJson(data['thread'] as Map<String, dynamic>);
+      final data = await _supportService.getThreadMessages(_thread!.id);
+      final thread =
+          SupportThreadModel.fromJson(data['thread'] as Map<String, dynamic>);
       final messages = data['messages'];
       final parsedMessages = messages is List
           ? messages
               .whereType<Map>()
-              .map((item) => SupportMessageModel.fromJson(item.cast<String, dynamic>()))
+              .map((item) =>
+                  SupportMessageModel.fromJson(item.cast<String, dynamic>()))
               .toList(growable: false)
           : const <SupportMessageModel>[];
       if (!mounted) return;
@@ -311,7 +334,7 @@ class _PassengerSupportThreadScreenState extends State<PassengerSupportThreadScr
         _messages = parsedMessages;
         _message = null;
       });
-      await SupportService(session.apiClient).markRead(thread.id);
+      await _supportService.markRead(thread.id);
     } catch (error) {
       if (!mounted) return;
       setState(() => _message = ActionFeedback.messageOf(error));
@@ -330,12 +353,12 @@ class _PassengerSupportThreadScreenState extends State<PassengerSupportThreadScr
 
     setState(() => _sending = true);
     try {
-      final session = context.read<SessionController>();
-      final result = await SupportService(session.apiClient).sendMessage(
+      final result = await _supportService.sendMessage(
         threadId: _thread!.id,
         body: body,
       );
-      final thread = SupportThreadModel.fromJson(result['thread'] as Map<String, dynamic>);
+      final thread =
+          SupportThreadModel.fromJson(result['thread'] as Map<String, dynamic>);
       if (!mounted) return;
       _composerController.clear();
       setState(() {
@@ -358,11 +381,10 @@ class _PassengerSupportThreadScreenState extends State<PassengerSupportThreadScr
     final thread = _thread;
     if (thread == null) return;
     try {
-      final session = context.read<SessionController>();
-      final result = await SupportService(session.apiClient).reopenThread(thread.id);
+      final result = await _supportService.reopenThread(thread.id);
       if (!mounted) return;
       setState(() {
-        _thread = SupportThreadModel.fromJson(result as Map<String, dynamic>);
+        _thread = SupportThreadModel.fromJson(result);
       });
       await _loadThread(silent: true);
     } catch (error) {
@@ -377,11 +399,10 @@ class _PassengerSupportThreadScreenState extends State<PassengerSupportThreadScr
     final thread = _thread;
     if (thread == null) return;
     try {
-      final session = context.read<SessionController>();
-      final result = await SupportService(session.apiClient).closeThread(thread.id);
+      final result = await _supportService.closeThread(thread.id);
       if (!mounted) return;
       setState(() {
-        _thread = SupportThreadModel.fromJson(result as Map<String, dynamic>);
+        _thread = SupportThreadModel.fromJson(result);
       });
       await _loadThread(silent: true);
     } catch (error) {
@@ -435,33 +456,43 @@ class _PassengerSupportThreadScreenState extends State<PassengerSupportThreadScr
                 final message = _messages[index];
                 final mine = message.senderRole == 'PASSENGER';
                 return Align(
-                  alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                  alignment:
+                      mine ? Alignment.centerRight : Alignment.centerLeft,
                   child: Container(
                     constraints: const BoxConstraints(maxWidth: 460),
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: mine ? const Color(0xFFDDF1EB) : const Color(0xFFF4F5F7),
+                      color: mine
+                          ? const Color(0xFFDDF1EB)
+                          : const Color(0xFFF4F5F7),
                       borderRadius: BorderRadius.circular(18),
                     ),
                     child: Column(
-                      crossAxisAlignment:
-                          mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                      crossAxisAlignment: mine
+                          ? CrossAxisAlignment.end
+                          : CrossAxisAlignment.start,
                       children: [
                         Text(
                           mine ? 'You' : (message.senderName ?? 'Admin'),
-                          style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.labelMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
                         ),
                         const SizedBox(height: 6),
-                        Text(message.body),
+                        Text(
+                          message.body,
+                          softWrap: true,
+                          overflow: TextOverflow.visible,
+                        ),
                         if ((message.createdAt ?? '').isNotEmpty) ...[
                           const SizedBox(height: 6),
                           Text(
                             message.createdAt!,
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: const Color(0xFF68716C),
-                                ),
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: const Color(0xFF68716C),
+                                    ),
                           ),
                         ],
                       ],
@@ -492,9 +523,18 @@ class _PassengerSupportThreadScreenState extends State<PassengerSupportThreadScr
                       ),
                     ),
                     const SizedBox(width: 10),
-                    FilledButton(
+                    IconButton.filled(
+                      tooltip: 'Send message',
                       onPressed: _sending ? null : _sendMessage,
-                      child: const Text('Send'),
+                      icon: _sending
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.send_rounded),
                     ),
                   ],
                 ),
@@ -506,7 +546,8 @@ class _PassengerSupportThreadScreenState extends State<PassengerSupportThreadScr
               child: Padding(
                 padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
                 child: _SupportNotice(
-                  message: 'This thread is closed. Reopen it to send another message.',
+                  message:
+                      'This thread is closed. Reopen it to send another message.',
                 ),
               ),
             ),
@@ -561,8 +602,10 @@ class _SupportThreadComposerState extends State<_SupportThreadComposer> {
   @override
   void initState() {
     super.initState();
-    _subjectController = TextEditingController(text: widget.initialSubject ?? '');
-    _messageController = TextEditingController(text: widget.initialMessage ?? '');
+    _subjectController =
+        TextEditingController(text: widget.initialSubject ?? '');
+    _messageController =
+        TextEditingController(text: widget.initialMessage ?? '');
     final initialCategory = widget.initialCategory?.trim().toLowerCase();
     if (initialCategory != null && _categories.contains(initialCategory)) {
       _category = initialCategory;
@@ -578,95 +621,107 @@ class _SupportThreadComposerState extends State<_SupportThreadComposer> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        bottom: MediaQuery.viewInsetsOf(context).bottom + 16,
-        top: 8,
-      ),
-      child: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'New support thread',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          bottom: MediaQuery.viewInsetsOf(context).bottom + 16,
+          top: 8,
+        ),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'New support thread',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                initialValue: _category,
+                decoration: const InputDecoration(
+                  labelText: 'Category',
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(
+                      value: 'general_help', child: Text('General help')),
+                  DropdownMenuItem(
+                      value: 'complaint', child: Text('Complaint')),
+                  DropdownMenuItem(
+                      value: 'fare_concern', child: Text('Fare concern')),
+                  DropdownMenuItem(
+                      value: 'trip_issue', child: Text('Trip issue')),
+                  DropdownMenuItem(
+                      value: 'lost_item', child: Text('Lost item')),
+                  DropdownMenuItem(
+                      value: 'safety_concern', child: Text('Safety concern')),
+                ],
+                onChanged: (value) {
+                  setState(() => _category = value ?? 'general_help');
+                },
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _subjectController,
+                decoration: const InputDecoration(
+                  labelText: 'Subject',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _messageController,
+                minLines: 4,
+                maxLines: 8,
+                decoration: const InputDecoration(
+                  labelText: 'Message',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if ((value ?? '').trim().isEmpty) {
+                    return 'Write your message';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Cancel'),
+                    ),
                   ),
-            ),
-            const SizedBox(height: 16),
-            DropdownButtonFormField<String>(
-              value: _category,
-              decoration: const InputDecoration(
-                labelText: 'Category',
-                border: OutlineInputBorder(),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: () {
+                        if (!_formKey.currentState!.validate()) {
+                          return;
+                        }
+                        Navigator.of(context).pop(
+                          _SupportThreadDraft(
+                            category: _category,
+                            subject: _subjectController.text.trim(),
+                            message: _messageController.text.trim(),
+                          ),
+                        );
+                      },
+                      child: const Text('Send'),
+                    ),
+                  ),
+                ],
               ),
-              items: const [
-                DropdownMenuItem(value: 'general_help', child: Text('General help')),
-                DropdownMenuItem(value: 'complaint', child: Text('Complaint')),
-                DropdownMenuItem(value: 'fare_concern', child: Text('Fare concern')),
-                DropdownMenuItem(value: 'trip_issue', child: Text('Trip issue')),
-                DropdownMenuItem(value: 'lost_item', child: Text('Lost item')),
-                DropdownMenuItem(value: 'safety_concern', child: Text('Safety concern')),
-              ],
-              onChanged: (value) {
-                setState(() => _category = value ?? 'general_help');
-              },
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _subjectController,
-              decoration: const InputDecoration(
-                labelText: 'Subject',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _messageController,
-              minLines: 4,
-              maxLines: 8,
-              decoration: const InputDecoration(
-                labelText: 'Message',
-                border: OutlineInputBorder(),
-              ),
-              validator: (value) {
-                if ((value ?? '').trim().isEmpty) {
-                  return 'Write your message';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: () {
-                    if (!_formKey.currentState!.validate()) {
-                      return;
-                    }
-                    Navigator.of(context).pop(
-                      _SupportThreadDraft(
-                        category: _category,
-                        subject: _subjectController.text.trim(),
-                        message: _messageController.text.trim(),
-                      ),
-                    );
-                  },
-                  child: const Text('Send'),
-                ),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -785,8 +840,10 @@ class _ThreadSummaryCard extends StatelessWidget {
             children: [
               _Pill(label: thread.category.replaceAll('_', ' ')),
               _Pill(label: thread.status.replaceAll('_', ' ')),
-              if ((thread.routeId ?? '').isNotEmpty) _Pill(label: 'Route linked'),
-              if ((thread.tripSessionId ?? '').isNotEmpty) _Pill(label: 'Trip linked'),
+              if ((thread.routeId ?? '').isNotEmpty)
+                _Pill(label: 'Route linked'),
+              if ((thread.tripSessionId ?? '').isNotEmpty)
+                _Pill(label: 'Trip linked'),
             ],
           ),
           const SizedBox(height: 12),
