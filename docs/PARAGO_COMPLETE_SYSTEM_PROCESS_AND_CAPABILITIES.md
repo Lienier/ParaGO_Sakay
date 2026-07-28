@@ -1273,6 +1273,18 @@ The destination is important because:
 - Manual unload validation can compare against destination/route.
 - Destination approach alerts can be triggered.
 
+### 12.6.1 Live Jeep Plate And Traffic ETA
+
+Passengers can tap a visible jeepney marker to view:
+
+- Plate number.
+- Google traffic-aware ETA to the selected pickup pin, or current GPS location when no pickup pin exists.
+- Remaining road distance.
+- Available seats.
+- Vehicle location freshness.
+
+The passenger app refreshes the selected jeep ETA every 30 seconds and after significant realtime movement. ETA is unavailable when Google routing is unavailable, the vehicle location is stale, or the jeepney has already passed the pickup point; no average-speed fallback is shown.
+
 ### 12.7 Request Submission
 
 When passenger submits a request:
@@ -2199,6 +2211,22 @@ This depends on:
 
 More detail: [REALTIME_COMPLETE.md](REALTIME_COMPLETE.md).
 
+### 21.8 Service Announcements
+
+Admins can publish or schedule service changes, disruptions, maintenance,
+safety notices, and general updates for passengers, drivers, or both.
+
+Announcements are stored once and delivered through role-based API queries and
+Socket.IO refresh events. They do not create per-user notification rows or
+change ordinary notification unread counts.
+
+Users can dismiss the current announcement revision. Dismissals persist for
+that account across devices, while a published edit increments the revision
+and makes the updated announcement visible again.
+
+Scheduled and expired states are reconciled every 30 seconds, and active
+queries also enforce start and expiry times directly.
+
 ## 22. Reports And Monitoring
 
 ### 22.1 Request Reports
@@ -2416,6 +2444,9 @@ Capabilities:
 - Trip end.
 - Availability/request acceptance update.
 - Occupancy updates where supported.
+- Passenger-only live traffic ETA through `POST /trips/:tripId/passenger-eta`.
+
+The live ETA endpoint derives the origin from the active jeepney location, follows the trip route using pass-through waypoints, returns the authoritative plate number, and caches matching requests for 25 seconds. The Google API key remains server-side.
 
 ### 23.9 Pickup Requests
 

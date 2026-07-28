@@ -45,7 +45,11 @@ class _DriverSupportScreenState extends State<DriverSupportScreen> {
     super.initState();
     _supportSubscription =
         widget.realtimeSocketService.supportActivityStream.listen(
-      (_) {
+      (event) {
+        final notificationType = event['notificationType']?.toString() ?? '';
+        if (notificationType == 'support.thread.read') {
+          return;
+        }
         if (mounted) {
           unawaited(_loadThreads(silent: true));
         }
@@ -263,6 +267,10 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
     _supportSubscription =
         widget.realtimeSocketService.supportActivityStream.listen(
       (event) {
+        final notificationType = event['notificationType']?.toString() ?? '';
+        if (notificationType == 'support.thread.read') {
+          return;
+        }
         final threadId = event['threadId']?.toString() ?? '';
         if (threadId.isNotEmpty && _thread?.id == threadId && mounted) {
           unawaited(_loadThread(silent: true));

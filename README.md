@@ -98,6 +98,14 @@ It implements a modular backend for passenger/driver/admin roles with:
 - `POST /api/v1/auth/reset-password`
 - `GET /api/v1/auth/me`
 
+## Passenger live jeep ETA
+
+- `POST /api/v1/trips/:tripId/passenger-eta` is available to authenticated passengers.
+- The request contains only the passenger destination; the backend resolves the active jeepney location and plate number.
+- ETA uses Google Routes API traffic-aware routing shaped to the trip route and is cached for 25 seconds.
+- Passenger markers refresh the selected jeep ETA every 30 seconds and after significant WebSocket location movement.
+- Missing keys, stale locations, passed pickup points, and Google failures return ETA unavailable without an estimated fallback.
+
 ## Notes
 
 - No QR code flow is implemented.

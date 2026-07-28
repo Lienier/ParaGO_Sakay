@@ -5,12 +5,14 @@ class PassengerDashboardTopBar extends StatelessWidget {
     super.key,
     required this.unreadCount,
     required this.onMenuPressed,
+    required this.onNoticesPressed,
     required this.onRefreshPressed,
     required this.onAccountSelected,
   });
 
   final int unreadCount;
   final VoidCallback onMenuPressed;
+  final VoidCallback onNoticesPressed;
   final VoidCallback onRefreshPressed;
   final ValueChanged<String> onAccountSelected;
 
@@ -45,28 +47,33 @@ class PassengerDashboardTopBar extends StatelessWidget {
                   ),
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFEAF5F2),
+          Material(
+            color: const Color(0xFFEAF5F2),
+            borderRadius: BorderRadius.circular(999),
+            child: InkWell(
+              onTap: onNoticesPressed,
               borderRadius: BorderRadius.circular(999),
-            ),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.notifications_active_outlined,
-                  size: 18,
-                  color: Color(0xFF0F6A5F),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.notifications_active_outlined,
+                      size: 18,
+                      color: Color(0xFF0F6A5F),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '$unreadCount',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: const Color(0xFF0F6A5F),
+                          ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 6),
-                Text(
-                  '$unreadCount',
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        fontWeight: FontWeight.w800,
-                        color: const Color(0xFF0F6A5F),
-                      ),
-                ),
-              ],
+              ),
             ),
           ),
           const SizedBox(width: 10),

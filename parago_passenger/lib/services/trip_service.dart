@@ -1,4 +1,5 @@
 import '../core/network/api_client.dart';
+import '../models/trip/passenger_jeep_eta.dart';
 import '../models/trip/trip_session.dart';
 
 class TripService {
@@ -19,6 +20,27 @@ class TripService {
     return data
         .map((e) => TripSession.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  Future<PassengerJeepEta> getPassengerEta({
+    required String tripId,
+    required double destinationLatitude,
+    required double destinationLongitude,
+  }) async {
+    final response = await _client.request(
+      method: 'POST',
+      path: '/trips/$tripId/passenger-eta',
+      body: {
+        'destination': {
+          'latitude': destinationLatitude,
+          'longitude': destinationLongitude,
+        },
+      },
+      useCache: false,
+    );
+    return PassengerJeepEta.fromJson(
+      (response['data'] as Map).cast<String, dynamic>(),
+    );
   }
 
   Future<TripSession> startTrip(String tripId) async {

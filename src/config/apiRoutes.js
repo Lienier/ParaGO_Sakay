@@ -12,6 +12,7 @@ const rideSessionRoutes = require('../routes/rideSessions.routes');
 const stopAlertRoutes = require('../routes/stopAlerts.routes');
 const supportRoutes = require('../routes/support.routes');
 const notificationRoutes = require('../routes/notifications.routes');
+const announcementRoutes = require('../routes/announcements.routes');
 const reportRoutes = require('../routes/reports.routes');
 
 const routeDefinitions = [
@@ -29,6 +30,7 @@ const routeDefinitions = [
   { path: '/stop-alerts', router: stopAlertRoutes },
   { path: '/support', router: supportRoutes },
   { path: '/notifications', router: notificationRoutes },
+  { path: '/announcements', router: announcementRoutes },
   { path: '/reports', router: reportRoutes },
 ];
 

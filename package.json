@@ -12,7 +12,9 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "route:build": "node scripts/generate_route_payload.js",
-    "test": "node test.js"
+    "test": "node test.js && node --test tests/announcements.integration.test.js",
+    "test:unit": "node test.js",
+    "test:announcements": "node --test tests/announcements.integration.test.js"
   },
   "keywords": [
     "parago",
@@ -40,6 +42,8 @@
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.4"
+    "mongodb-memory-server": "^11.2.0",
+    "nodemon": "^3.1.4",
+    "supertest": "^7.2.2"
   }
 }

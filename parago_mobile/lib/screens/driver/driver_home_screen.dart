@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/utils/action_feedback.dart';
 import '../../core/utils/parago_format.dart';
 import '../../models/operations/notification.dart';
+import '../../models/operations/announcement.dart';
 import '../../models/operations/pickup_request.dart';
 import '../../models/operations/ride_session.dart';
 import '../../models/operations/stop_alert.dart';
@@ -20,6 +21,7 @@ import '../../models/trip/trip_session.dart';
 import '../../services/driver_service.dart';
 import '../../services/location_tracking_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/announcement_service.dart';
 import '../../services/ride_session_service.dart';
 import '../../services/route_preview_cache.dart';
 import '../../services/route_service.dart';
@@ -28,6 +30,7 @@ import '../../services/session_controller.dart';
 import '../../services/stop_alert_service.dart';
 import '../../services/trip_service.dart';
 import '../../widgets/status_badge.dart';
+import '../../widgets/announcement_card.dart';
 import '../support/driver_support_screen.dart';
 
 part 'driver_home_screen_sections.dart';
@@ -78,6 +81,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   List<RouteSummaryModel> _routes = [];
   Map<String, List<LatLng>> _cachedRoutePreviewPoints = {};
   List<NotificationModel> _notifications = [];
+  List<AnnouncementModel> _announcements = [];
   Map<String, List<PickupRequestModel>> _tripRequests = {};
   Map<String, List<StopAlertModel>> _tripAlerts = {};
   Map<String, List<RideSessionModel>> _tripRides = {};
@@ -115,6 +119,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
   StreamSubscription<Map<String, dynamic>>? _realtimeOperationsSubscription;
   StreamSubscription<Map<String, dynamic>>? _realtimePickupRequestSubscription;
+  StreamSubscription<Map<String, dynamic>>? _realtimeAnnouncementSubscription;
   bool _locationTrackingSyncInFlight = false;
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
@@ -123,6 +128,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   AppLifecycleState? _appLifecycleState;
   int _loadGeneration = 0;
   DateTime? _lastRealtimeOpsRefreshAt;
+  DateTime? _lastAnnouncementRefreshAttemptAt;
   Set<String> _knownNotificationIds = <String>{};
   Set<String> _knownActiveStopAlertIds = <String>{};
   Set<String> _subscribedRealtimeTripIds = <String>{};
@@ -131,6 +137,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Set<String> _dismissedInfoMessages = <String>{};
   bool _dismissedNotificationsLoaded = false;
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
+  AnnouncementFeedController? _announcementFeedController;
   final MapController _driverMapController = MapController();
   bool _driverMapReady = false;
   LatLng? _lastDriverMapCenter;
@@ -179,6 +186,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _realtimeNotificationSubscription?.cancel();
     _realtimeOperationsSubscription?.cancel();
     _realtimePickupRequestSubscription?.cancel();
+    _realtimeAnnouncementSubscription?.cancel();
+    _announcementFeedController?.dispose();
     _realtimeSocketService.dispose();
     super.dispose();
   }
@@ -470,6 +479,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _realtimeNotificationSubscription?.cancel();
     _realtimeOperationsSubscription?.cancel();
     _realtimePickupRequestSubscription?.cancel();
+    _realtimeAnnouncementSubscription?.cancel();
     _realtimeNotificationSubscription =
         _realtimeSocketService.notificationCreatedStream.listen(
       _handleRealtimeSocketNotification,
@@ -482,10 +492,61 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         _realtimeSocketService.pickupRequestUpdatedStream.listen(
       _handleRealtimePickupRequestUpdate,
     );
+    _realtimeAnnouncementSubscription =
+        _realtimeSocketService.announcementActivityStream.listen(
+      (_) => unawaited(_refreshAnnouncements()),
+    );
     _realtimeSocketService.connect(
       apiBaseUrl: session.apiClient.baseUrl,
       token: token,
     );
+  }
+
+  AnnouncementFeedController _announcementFeed() {
+    final existing = _announcementFeedController;
+    if (existing != null) return existing;
+    final session = context.read<SessionController>();
+    return _announcementFeedController =
+        AnnouncementFeedController(AnnouncementService(session.apiClient));
+  }
+
+  void _refreshAnnouncementsIfDue({bool useCache = false}) {
+    final lastAttempt = _lastAnnouncementRefreshAttemptAt;
+    if (lastAttempt != null &&
+        DateTime.now().difference(lastAttempt) < const Duration(seconds: 30)) {
+      return;
+    }
+    unawaited(_refreshAnnouncements(useCache: useCache));
+  }
+
+  Future<void> _refreshAnnouncements({bool useCache = false}) async {
+    if (!mounted) return;
+    _lastAnnouncementRefreshAttemptAt = DateTime.now();
+    final items = await _announcementFeed().refresh(useCache: useCache);
+    if (mounted) {
+      setState(() => _announcements = items);
+    }
+  }
+
+  Future<void> _dismissAnnouncement(AnnouncementModel announcement) async {
+    final feed = _announcementFeed();
+    final resultFuture = feed.dismiss(announcement);
+    setState(() => _announcements = feed.items);
+    final result = await resultFuture;
+    if (!mounted) return;
+    setState(() => _announcements = feed.items);
+    if (result.status == AnnouncementDismissStatus.failed) {
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not dismiss announcement. '
+            '${ActionFeedback.messageOf(result.error!)}',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _handleRealtimeSocketNotification(
@@ -633,6 +694,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     }
 
     try {
+      _refreshAnnouncementsIfDue();
       final initialResults = await Future.wait<dynamic>([
         tripService.getMyTrips(useCache: false),
         notificationService.getMine(useCache: false),
@@ -939,6 +1001,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       final session = context.read<SessionController>();
       if (!_realtimeSocketService.isConnected) {
         _syncRealtimeSocket(session, forceReconnect: true);
+      }
+      final lastAnnouncementAttemptAt = _lastAnnouncementRefreshAttemptAt;
+      if (lastAnnouncementAttemptAt == null ||
+          DateTime.now().difference(lastAnnouncementAttemptAt) >=
+              const Duration(seconds: 30)) {
+        unawaited(_refreshAnnouncements());
       }
       if (_realtimeSocketService.isConnected) {
         return;
@@ -2677,6 +2745,21 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           return Stack(
             children: [
               Positioned.fill(child: bodyContent),
+              if (_tabIndex == 0 && _announcements.isNotEmpty)
+                Positioned(
+                  top: 10,
+                  left: 14,
+                  right: 14,
+                  child: SafeArea(
+                    bottom: false,
+                    child: AnnouncementCard(
+                      announcement: _announcements.first,
+                      compact: true,
+                      onDismiss: () =>
+                          _dismissAnnouncement(_announcements.first),
+                    ),
+                  ),
+                ),
               if (_loading)
                 const Positioned(
                   top: 0,
@@ -3456,288 +3539,293 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                     left: 16,
                     right: 16,
                     child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF102725).withValues(alpha: 0.84),
-                        borderRadius: BorderRadius.circular(26),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.08),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.18),
-                            blurRadius: 24,
-                            offset: const Offset(0, 14),
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color:
+                                const Color(0xFF102725).withValues(alpha: 0.84),
+                            borderRadius: BorderRadius.circular(26),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.08),
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.18),
+                                blurRadius: 24,
+                                offset: const Offset(0, 14),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
+                          child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      driverName,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleMedium
-                                          ?.copyWith(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.w800,
-                                          ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      availabilityNote,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: Colors.white70,
-                                          ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  StatusBadge(
-                                    status: isOnline
-                                        ? hasTrip
-                                            ? trip!.status
-                                            : 'ready'
-                                        : 'offline',
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 8,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(
-                                        alpha: 0.10,
-                                      ),
-                                      borderRadius: BorderRadius.circular(999),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
-                                        const Icon(
-                                          Icons.route,
-                                          size: 16,
-                                          color: Colors.white,
-                                        ),
-                                        const SizedBox(width: 6),
                                         Text(
-                                          routeLabel,
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.w700,
-                                          ),
+                                          driverName,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleMedium
+                                              ?.copyWith(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          availabilityNote,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall
+                                              ?.copyWith(
+                                                color: Colors.white70,
+                                              ),
                                         ),
                                       ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      StatusBadge(
+                                        status: isOnline
+                                            ? hasTrip
+                                                ? trip!.status
+                                                : 'ready'
+                                            : 'offline',
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 8,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withValues(
+                                            alpha: 0.10,
+                                          ),
+                                          borderRadius:
+                                              BorderRadius.circular(999),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(
+                                              Icons.route,
+                                              size: 16,
+                                              color: Colors.white,
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              routeLabel,
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 14),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _MapStatTile(
+                                      label: 'On board',
+                                      value: displayedOnboard.toString(),
+                                      accent: scheme.primary,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: _MapStatTile(
+                                      label: 'Pickup alerts',
+                                      value: activePickupCount.toString(),
+                                      accent: const Color(0xFFE29B2D),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: _MapStatTile(
+                                      label: 'Unload alerts',
+                                      value: activeDestinationAlerts.length
+                                          .toString(),
+                                      accent: const Color(0xFFCC4B7A),
                                     ),
                                   ),
                                 ],
                               ),
                             ],
                           ),
-                          const SizedBox(height: 14),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _MapStatTile(
-                                  label: 'On board',
-                                  value: displayedOnboard.toString(),
-                                  accent: scheme.primary,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: _MapStatTile(
-                                  label: 'Pickup alerts',
-                                  value: activePickupCount.toString(),
-                                  accent: const Color(0xFFE29B2D),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: _MapStatTile(
-                                  label: 'Unload alerts',
-                                  value:
-                                      activeDestinationAlerts.length.toString(),
-                                  accent: const Color(0xFFCC4B7A),
-                                ),
-                              ),
-                            ],
+                        ),
+                        if (activeDestinationAlerts.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          _DriverPopupAlert(
+                            title: 'Passenger nearing destination',
+                            message: activeDestinationAlerts.length == 1
+                                ? '${activeDestinationAlerts.first.stopRef} is ready for unloading.'
+                                : '${activeDestinationAlerts.first.stopRef} plus ${activeDestinationAlerts.length - 1} more unloading alerts are active.',
+                            actionLabel: 'Acknowledge',
+                            onAction: onAcknowledgeAlert,
+                            onClose: onDismissAlert,
                           ),
                         ],
-                      ),
-                    ),
-                    if (activeDestinationAlerts.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      _DriverPopupAlert(
-                        title: 'Passenger nearing destination',
-                        message: activeDestinationAlerts.length == 1
-                            ? '${activeDestinationAlerts.first.stopRef} is ready for unloading.'
-                            : '${activeDestinationAlerts.first.stopRef} plus ${activeDestinationAlerts.length - 1} more unloading alerts are active.',
-                        actionLabel: 'Acknowledge',
-                        onAction: onAcknowledgeAlert,
-                        onClose: onDismissAlert,
-                      ),
-                    ],
-                    if (requirementMessage != null) ...[
-                      const SizedBox(height: 12),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.95),
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                requirementMessage!,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 12,
-                                ),
-                              ),
+                        if (requirementMessage != null) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.95),
+                              borderRadius: BorderRadius.circular(18),
                             ),
-                            IconButton(
-                              tooltip: 'Close info',
-                              onPressed: onDismissRequirementMessage,
-                              icon: const Icon(Icons.close),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                    if (statusMessage != null && statusMessage!.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.95),
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                statusMessage!,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                            IconButton(
-                              tooltip: 'Close info',
-                              onPressed: onDismissStatusMessage,
-                              icon: const Icon(Icons.close),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              Positioned(
-                left: 16,
-                right: 16,
-                bottom: 16,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onVerticalDragEnd: (details) {
-                    _handleUserInteraction();
-                    if (details.primaryVelocity != null &&
-                        details.primaryVelocity! < -120) {
-                      _openControlSheet(context);
-                    }
-                  },
-                  onTap: () => _openControls(context),
-                  child: _isChromeCollapsed
-                      ? _DriveMapMiniControl(hasTrip: trip != null)
-                      : Container(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                scheme.primary.withValues(alpha: 0.94),
-                                const Color(0xFF0D4E47)
-                                    .withValues(alpha: 0.96),
-                              ],
-                              begin: Alignment.centerLeft,
-                              end: Alignment.centerRight,
-                            ),
-                            borderRadius: BorderRadius.circular(28),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.18),
-                                blurRadius: 18,
-                                offset: const Offset(0, 10),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 38,
-                                height: 38,
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.14),
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                                child: Icon(
-                                  Icons.swipe_up,
-                                  color: Colors.white.withValues(alpha: 0.95),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      trip == null
-                                          ? 'No trip selected - pull up for controls'
-                                          : 'Trip control panel - pull up',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w700,
-                                      ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    requirementMessage!,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 12,
                                     ),
-                                    const SizedBox(height: 2),
-                                  ],
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                              Icon(
-                                Icons.keyboard_arrow_up,
-                                color: Colors.white.withValues(alpha: 0.9),
-                              ),
-                            ],
+                                IconButton(
+                                  tooltip: 'Close info',
+                                  onPressed: onDismissRequirementMessage,
+                                  icon: const Icon(Icons.close),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
+                        ],
+                        if (statusMessage != null &&
+                            statusMessage!.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.95),
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    statusMessage!,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Close info',
+                                  onPressed: onDismissStatusMessage,
+                                  icon: const Icon(Icons.close),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: 16,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onVerticalDragEnd: (details) {
+                      _handleUserInteraction();
+                      if (details.primaryVelocity != null &&
+                          details.primaryVelocity! < -120) {
+                        _openControlSheet(context);
+                      }
+                    },
+                    onTap: () => _openControls(context),
+                    child: _isChromeCollapsed
+                        ? _DriveMapMiniControl(hasTrip: trip != null)
+                        : Container(
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  scheme.primary.withValues(alpha: 0.94),
+                                  const Color(0xFF0D4E47)
+                                      .withValues(alpha: 0.96),
+                                ],
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                              ),
+                              borderRadius: BorderRadius.circular(28),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.18),
+                                  blurRadius: 18,
+                                  offset: const Offset(0, 10),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 38,
+                                  height: 38,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.14),
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: Icon(
+                                    Icons.swipe_up,
+                                    color: Colors.white.withValues(alpha: 0.95),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        trip == null
+                                            ? 'No trip selected - pull up for controls'
+                                            : 'Trip control panel - pull up',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Icon(
+                                  Icons.keyboard_arrow_up,
+                                  color: Colors.white.withValues(alpha: 0.9),
+                                ),
+                              ],
+                            ),
+                          ),
+                  ),
                 ),
-              ),
               ],
             ),
           ),

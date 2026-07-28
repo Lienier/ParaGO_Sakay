@@ -15,6 +15,8 @@ class RealtimeSocketService {
       StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<Map<String, dynamic>> _supportController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _announcementController =
+      StreamController<Map<String, dynamic>>.broadcast();
 
   io.Socket? _socket;
   String? _currentSocketBaseUrl;
@@ -30,6 +32,8 @@ class RealtimeSocketService {
       _pickupRequestController.stream;
   Stream<Map<String, dynamic>> get supportActivityStream =>
       _supportController.stream;
+  Stream<Map<String, dynamic>> get announcementActivityStream =>
+      _announcementController.stream;
   bool get isConnected => _socket?.connected == true;
   bool get hasActiveSocket => _socket != null;
 
@@ -168,6 +172,18 @@ class RealtimeSocketService {
         _supportController.add(normalized);
       }
     });
+    for (final eventName in const [
+      'announcement.published',
+      'announcement.updated',
+      'announcement.archived',
+    ]) {
+      socket.on(eventName, (payload) {
+        final normalized = _normalizePayload(payload);
+        if (normalized.isNotEmpty) {
+          _announcementController.add(normalized);
+        }
+      });
+    }
 
     _socket = socket;
     socket.connect();
@@ -190,6 +206,7 @@ class RealtimeSocketService {
     _operationsController.close();
     _pickupRequestController.close();
     _supportController.close();
+    _announcementController.close();
   }
 
   void subscribeToTrip(String tripId) {

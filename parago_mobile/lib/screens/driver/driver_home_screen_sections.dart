@@ -717,19 +717,23 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
             if (onboardRides.isEmpty) {
               return const _DriverEmptyState(
                 title: 'No onboard passengers',
-                message: 'Saved unload destinations appear here once riders board.',
+                message:
+                    'Saved unload destinations appear here once riders board.',
               );
             }
             return Column(
               children: [
-                for (var index = 0; index < onboardRides.length; index += 1) ...[
+                for (var index = 0;
+                    index < onboardRides.length;
+                    index += 1) ...[
                   () {
                     final ride = onboardRides[index];
                     final destinationLabel =
                         (ride.destinationStopRef ?? '').trim().isEmpty
                             ? 'Saved destination ${index + 1}'
                             : ride.destinationStopRef!.trim();
-                    final hasSavedPoint = _rideDestinationPosition(ride) != null;
+                    final hasSavedPoint =
+                        _rideDestinationPosition(ride) != null;
                     return _DriverActionCard(
                       title: destinationLabel,
                       subtitle:
@@ -743,7 +747,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                       icon: Icons.location_on_outlined,
                     );
                   }(),
-                  if (index < onboardRides.length - 1) const SizedBox(height: 12),
+                  if (index < onboardRides.length - 1)
+                    const SizedBox(height: 12),
                 ],
               ],
             );
@@ -771,8 +776,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                   break;
                 }
               }
-              final canCompleteUnload =
-                  matchingRide != null &&
+              final canCompleteUnload = matchingRide != null &&
                   matchingRide.status == 'onboard' &&
                   alert.status != 'dismissed';
 
@@ -818,7 +822,14 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
       children: [
-        if (visibleNotifications.isEmpty)
+        for (final announcement in _announcements) ...[
+          AnnouncementCard(
+            announcement: announcement,
+            onDismiss: () => _dismissAnnouncement(announcement),
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (visibleNotifications.isEmpty && _announcements.isEmpty)
           const _DriverEmptyState(
             title: 'No notifications yet',
             message: 'System notices and event confirmations will appear here.',

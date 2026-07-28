@@ -59,7 +59,7 @@ class _AdminOverviewPage extends StatelessWidget {
       onReorderTerminalTrip;
   final Future<void> Function(String tripId, bool skipped)
       onSetTerminalTripSkipped;
-    final Future<void> Function(String tripId, String terminalQueueStatus)
+  final Future<void> Function(String tripId, String terminalQueueStatus)
       onSetTerminalTripStatus;
 
   @override
@@ -179,21 +179,21 @@ class _AdminOverviewPage extends StatelessWidget {
                   children: [
                     for (final trip in terminalQueue)
                       _HybridDispatchTile(
-                          actions: _terminalQueueActions(
-                            trip,
-                            index: terminalQueue.indexOf(trip),
-                            total: terminalQueue.length,
-                            onReorder: onReorderTerminalTrip,
-                            onSkippedChanged: onSetTerminalTripSkipped,
-                            onStatusChanged: onSetTerminalTripStatus,
-                          ),
-                          title:
-                              '#${trip['terminalQueueNumber'] ?? '-'} ${_dispatchTripLabel(trip)}',
-                          subtitle:
-                              '${_dispatchTripMode(trip)} · ${_dispatchTerminalLabel(trip)}',
-                          caption:
-                              '${trip['occupancyCount'] ?? 0} onboard · ${ParagoFormat.statusLabel(trip['terminalQueueStatus']?.toString() ?? 'waiting')}',
+                        actions: _terminalQueueActions(
+                          trip,
+                          index: terminalQueue.indexOf(trip),
+                          total: terminalQueue.length,
+                          onReorder: onReorderTerminalTrip,
+                          onSkippedChanged: onSetTerminalTripSkipped,
+                          onStatusChanged: onSetTerminalTripStatus,
                         ),
+                        title:
+                            '#${trip['terminalQueueNumber'] ?? '-'} ${_dispatchTripLabel(trip)}',
+                        subtitle:
+                            '${_dispatchTripMode(trip)} · ${_dispatchTerminalLabel(trip)}',
+                        caption:
+                            '${trip['occupancyCount'] ?? 0} onboard · ${ParagoFormat.statusLabel(trip['terminalQueueStatus']?.toString() ?? 'waiting')}',
+                      ),
                   ],
                 );
                 final waitingCard = _HybridDispatchColumn(
@@ -398,8 +398,7 @@ List<Widget> _terminalQueueActions(
   required int index,
   required int total,
   required Future<void> Function(String tripId, String direction) onReorder,
-  required Future<void> Function(String tripId, bool skipped)
-      onSkippedChanged,
+  required Future<void> Function(String tripId, bool skipped) onSkippedChanged,
   required Future<void> Function(String tripId, String terminalQueueStatus)
       onStatusChanged,
 }) {
@@ -965,7 +964,8 @@ class _PassengerFlowTopStopsCard extends StatefulWidget {
       _PassengerFlowTopStopsCardState();
 }
 
-class _PassengerFlowTopStopsCardState extends State<_PassengerFlowTopStopsCard> {
+class _PassengerFlowTopStopsCardState
+    extends State<_PassengerFlowTopStopsCard> {
   static const _itemsPerPage = 5;
 
   int _page = 0;
@@ -989,14 +989,11 @@ class _PassengerFlowTopStopsCardState extends State<_PassengerFlowTopStopsCard> 
   @override
   Widget build(BuildContext context) {
     final totalPages = _pageCount(widget.stops);
-    final currentPage = widget.stops.isEmpty
-        ? 0
-        : _page.clamp(0, totalPages - 1).toInt();
+    final currentPage =
+        widget.stops.isEmpty ? 0 : _page.clamp(0, totalPages - 1).toInt();
     final start = currentPage * _itemsPerPage;
-    final visibleStops = widget.stops
-        .skip(start)
-        .take(_itemsPerPage)
-        .toList(growable: false);
+    final visibleStops =
+        widget.stops.skip(start).take(_itemsPerPage).toList(growable: false);
     final end = widget.stops.isEmpty ? 0 : start + visibleStops.length;
 
     return Container(
@@ -1022,7 +1019,9 @@ class _PassengerFlowTopStopsCardState extends State<_PassengerFlowTopStopsCard> 
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (var index = 0; index < visibleStops.length; index += 1) ...[
+                for (var index = 0;
+                    index < visibleStops.length;
+                    index += 1) ...[
                   Row(
                     children: [
                       CircleAvatar(
@@ -1056,7 +1055,8 @@ class _PassengerFlowTopStopsCardState extends State<_PassengerFlowTopStopsCard> 
                       ),
                     ],
                   ),
-                  if (index < visibleStops.length - 1) const SizedBox(height: 10),
+                  if (index < visibleStops.length - 1)
+                    const SizedBox(height: 10),
                 ],
                 if (widget.stops.length > _itemsPerPage) ...[
                   const SizedBox(height: 14),
@@ -1190,6 +1190,8 @@ IconData _sectionIcon(_AdminWorkspaceSection section) {
       return Icons.place_outlined;
     case _AdminWorkspaceSection.fareSettings:
       return Icons.payments_outlined;
+    case _AdminWorkspaceSection.announcements:
+      return Icons.campaign_outlined;
     case _AdminWorkspaceSection.support:
       return Icons.support_agent_rounded;
   }
@@ -1207,6 +1209,8 @@ String _sectionLabel(_AdminWorkspaceSection section) {
       return 'Routes';
     case _AdminWorkspaceSection.fareSettings:
       return 'Fare Settings';
+    case _AdminWorkspaceSection.announcements:
+      return 'Announcements';
     case _AdminWorkspaceSection.support:
       return 'Support';
   }

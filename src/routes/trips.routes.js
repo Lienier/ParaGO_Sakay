@@ -22,6 +22,9 @@ const {
   normalizeTripOperatingMode,
   resolveRouteTerminalStop,
 } = require('../services/hybridDispatch.service');
+const {
+  calculatePassengerEta,
+} = require('../services/passengerEta.service');
 
 const router = express.Router();
 const terminalQueueCreateRetryLimit = 4;
@@ -183,6 +186,20 @@ router.get(
       .populate('jeepneyId driverId routeId')
       .sort({ createdAt: -1 });
     return ok(res, trips, 'Driver trips');
+  })
+);
+
+router.post(
+  '/:id/passenger-eta',
+  authenticate,
+  authorize(PASSENGER),
+  asyncHandler(async (req, res) => {
+    ensureObjectId(req.params.id, 'trip id');
+    const eta = await calculatePassengerEta({
+      tripId: req.params.id,
+      destination: req.body?.destination,
+    });
+    return ok(res, eta, 'Passenger traffic ETA');
   })
 );
 

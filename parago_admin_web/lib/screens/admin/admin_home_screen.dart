@@ -13,6 +13,7 @@ import '../../services/realtime_socket_service.dart';
 import '../../services/session_controller.dart';
 import '../../widgets/metric_card.dart';
 import 'admin_driver_management_screen.dart';
+import 'admin_announcements_screen.dart';
 import 'admin_route_builder_screen.dart';
 import 'admin_route_fare_settings_screen.dart';
 import 'admin_route_management_screen.dart';
@@ -26,6 +27,7 @@ enum _AdminWorkspaceSection {
   routeBuilder,
   routes,
   fareSettings,
+  announcements,
   support,
 }
 
@@ -344,6 +346,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         return AdminRouteFareSettingsScreen(
           embedded: true,
         );
+      case _AdminWorkspaceSection.announcements:
+        return AdminAnnouncementsScreen(
+          realtimeSocketService: _realtimeSocketService,
+        );
       case _AdminWorkspaceSection.support:
         return AdminSupportInboxScreen(
           realtimeSocketService: _realtimeSocketService,
@@ -357,7 +363,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   ) async {
     try {
       final session = context.read<SessionController>();
-      final board = await AdminService(session.apiClient).setTerminalQueueStatus(
+      final board =
+          await AdminService(session.apiClient).setTerminalQueueStatus(
         tripId: tripId,
         terminalQueueStatus: terminalQueueStatus,
       );
@@ -373,6 +380,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       );
     }
   }
+
   @override
   Widget build(BuildContext context) {
     final session = context.read<SessionController>();

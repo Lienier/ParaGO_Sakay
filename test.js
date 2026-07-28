@@ -26,6 +26,17 @@ const {
   evaluateAutoOffboardingSeparation,
 } = require('./src/utils/automaticOffboarding');
 const tokenHash = require('./src/utils/tokenHash');
+const {
+  buildCacheKey,
+  buildRouteSegment,
+  normalizeDestination,
+  sampleEvenly,
+} = require('./src/services/passengerEta.service');
+const {
+  buildPayload: buildAnnouncementPayload,
+  normalizeAudiences,
+  statusForTiming: announcementStatusForTiming,
+} = require('./src/services/announcement.service');
 
 // Test configuration
 const TEST_CONFIG = {
@@ -190,6 +201,81 @@ function testDistanceCalculationDifferentPoints() {
 function testDistanceCalculationFarPoints() {
   const distance = calculateDistance(14.5995, 120.9842, 14.6500, 121.0500);
   assert(distance > 1000, 'Distance between far points should be significant');
+}
+
+function testPassengerEtaDestinationValidation() {
+  assert.deepStrictEqual(
+    normalizeDestination({ latitude: 14.6, longitude: 121.01 }),
+    { latitude: 14.6, longitude: 121.01 }
+  );
+  assert.throws(
+    () => normalizeDestination({ latitude: 95, longitude: 121.01 }),
+    /latitude is out of range/
+  );
+}
+
+function testPassengerEtaRouteSegment() {
+  const route = {
+    path: {
+      type: 'LineString',
+      coordinates: [
+        [121.0, 14.6],
+        [121.005, 14.6],
+        [121.01, 14.6],
+        [121.015, 14.6],
+        [121.02, 14.6],
+      ],
+    },
+  };
+  const segment = buildRouteSegment({
+    route,
+    origin: { latitude: 14.6, longitude: 121.002 },
+    destination: { latitude: 14.6, longitude: 121.018 },
+  });
+  assert(segment.viaPoints.length > 0);
+  assert(segment.viaPoints.length <= 10);
+  assert(Math.abs(segment.destination.longitude - 121.018) < 0.00001);
+}
+
+function testPassengerEtaRejectsPassedPickup() {
+  const route = {
+    path: {
+      type: 'LineString',
+      coordinates: [
+        [121.0, 14.6],
+        [121.01, 14.6],
+        [121.02, 14.6],
+      ],
+    },
+  };
+  assert.throws(
+    () =>
+      buildRouteSegment({
+        route,
+        origin: { latitude: 14.6, longitude: 121.015 },
+        destination: { latitude: 14.6, longitude: 121.005 },
+      }),
+    /already passed/
+  );
+}
+
+function testPassengerEtaCacheKeyAndSampling() {
+  const firstKey = buildCacheKey({
+    tripId: 'trip-1',
+    destination: { latitude: 14.60001, longitude: 121.01001 },
+  });
+  const secondKey = buildCacheKey({
+    tripId: 'trip-1',
+    destination: { latitude: 14.60004, longitude: 121.01004 },
+  });
+  assert.strictEqual(firstKey, secondKey);
+  assert.strictEqual(
+    sampleEvenly(
+      Array.from({ length: 80 }, (_, index) => [index, index]),
+      10
+    ).length,
+    10
+  );
 }
 
 // ============ VALIDATION TESTS ============
@@ -761,6 +847,61 @@ function testNotificationPayload() {
   assert(notification.data, 'Notification should have data');
 }
 
+function testAnnouncementValidation() {
+  const payload = buildAnnouncementPayload({
+    title: ' Service interruption ',
+    body: 'Expect a short delay.',
+    category: 'disruption',
+    severity: 'warning',
+    audiences: ['passenger', 'DRIVER', 'PASSENGER'],
+    startsAt: '2026-07-28T04:00:00.000Z',
+    expiresAt: '2026-07-28T05:00:00.000Z',
+  });
+  assert.strictEqual(payload.title, 'Service interruption');
+  assert.deepStrictEqual(payload.audiences, ['PASSENGER', 'DRIVER']);
+  assert.throws(
+    () => normalizeAudiences([]),
+    /audiences must contain PASSENGER, DRIVER, or both/
+  );
+  assert.throws(
+    () =>
+      buildAnnouncementPayload({
+        ...payload,
+        startsAt: '2026-07-28T05:00:00.000Z',
+        expiresAt: '2026-07-28T04:00:00.000Z',
+      }),
+    /expiresAt must be later than startsAt/
+  );
+}
+
+function testAnnouncementTimingStatus() {
+  const now = new Date('2026-07-28T04:00:00.000Z');
+  assert.strictEqual(
+    announcementStatusForTiming({
+      startsAt: new Date('2026-07-28T05:00:00.000Z'),
+      expiresAt: null,
+      now,
+    }),
+    'scheduled'
+  );
+  assert.strictEqual(
+    announcementStatusForTiming({
+      startsAt: new Date('2026-07-28T03:00:00.000Z'),
+      expiresAt: null,
+      now,
+    }),
+    'published'
+  );
+  assert.strictEqual(
+    announcementStatusForTiming({
+      startsAt: new Date('2026-07-28T02:00:00.000Z'),
+      expiresAt: new Date('2026-07-28T03:00:00.000Z'),
+      now,
+    }),
+    'expired'
+  );
+}
+
 // ============ DESTINATION APPROACH TESTS ============
 function testValidDestinationApproachPoint() {
   const ride = {
@@ -932,6 +1073,12 @@ async function runAllTests() {
   runTest('Geo', 'Distance Calculation Different Points', testDistanceCalculationDifferentPoints);
   runTest('Geo', 'Distance Calculation Far Points', testDistanceCalculationFarPoints);
 
+  console.log('\n--- Passenger Traffic ETA Tests ---');
+  runTest('PassengerETA', 'Destination Validation', testPassengerEtaDestinationValidation);
+  runTest('PassengerETA', 'Route Segment Sampling', testPassengerEtaRouteSegment);
+  runTest('PassengerETA', 'Passed Pickup Rejection', testPassengerEtaRejectsPassedPickup);
+  runTest('PassengerETA', 'Cache Key And Sampling', testPassengerEtaCacheKeyAndSampling);
+
   console.log('\n--- Validation Tests ---');
   runTest('Validation', 'Email Validation Valid', testEmailValidationValid);
   runTest('Validation', 'Email Validation Invalid', testEmailValidationInvalid);
@@ -990,6 +1137,10 @@ async function runAllTests() {
   console.log('\n--- Notification Tests ---');
   runTest('Notification', 'Notification Types', testNotificationTypes);
   runTest('Notification', 'Notification Payload', testNotificationPayload);
+
+  console.log('\n--- Announcement Tests ---');
+  runTest('Announcement', 'Payload Validation', testAnnouncementValidation);
+  runTest('Announcement', 'Timing Status', testAnnouncementTimingStatus);
 
   console.log('\n--- Destination Approach Tests ---');
   runTest('DestinationApproach', 'Valid Destination Point', testValidDestinationApproachPoint);

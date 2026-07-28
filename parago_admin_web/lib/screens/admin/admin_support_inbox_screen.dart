@@ -68,7 +68,11 @@ class _AdminSupportInboxScreenState extends State<AdminSupportInboxScreen> {
   void initState() {
     super.initState();
     _supportSubscription = widget.realtimeSocketService.supportActivityStream.listen(
-      (_) {
+      (event) {
+        final notificationType = event['notificationType']?.toString() ?? '';
+        if (notificationType == 'support.thread.read') {
+          return;
+        }
         if (mounted) {
           unawaited(_loadThreads(silent: true));
         }
@@ -351,13 +355,15 @@ class _AdminSupportInboxScreenState extends State<AdminSupportInboxScreen> {
                     );
 
               if (stacked) {
-                return ListView(
+                return Padding(
                   padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                  children: [
-                    SizedBox(height: 360, child: inboxPane),
-                    const SizedBox(height: 16),
-                    detailPane,
-                  ],
+                  child: Column(
+                    children: [
+                      SizedBox(height: 280, child: inboxPane),
+                      const SizedBox(height: 16),
+                      Expanded(child: detailPane),
+                    ],
+                  ),
                 );
               }
 
@@ -651,29 +657,46 @@ class _SupportThreadDetail extends StatelessWidget {
                     ],
                   ),
                 ),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    OutlinedButton(
-                      onPressed: taking ? null : onTakeThread,
-                      child: const Text('Take thread'),
-                    ),
-                    if (closed)
-                      FilledButton.tonal(
-                        onPressed: onReopen,
-                        child: const Text('Reopen'),
-                      )
-                    else ...[
-                      FilledButton.tonal(
-                        onPressed: () => onResolve(status: 'resolved'),
-                        child: const Text('Resolve'),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 320),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.end,
+                    children: [
+                      SizedBox(
+                        width: 118,
+                        child: OutlinedButton(
+                          onPressed: taking ? null : onTakeThread,
+                          child: const Text('Take thread'),
+                        ),
                       ),
-                      TextButton(
-                        onPressed: onClose,
-                        child: const Text('Close'),
-                      ),
+                      if (closed)
+                        SizedBox(
+                          width: 90,
+                          child: FilledButton.tonal(
+                            onPressed: onReopen,
+                            child: const Text('Reopen'),
+                          ),
+                        )
+                      else ...[
+                        SizedBox(
+                          width: 90,
+                          child: FilledButton.tonal(
+                            onPressed: () => onResolve(status: 'resolved'),
+                            child: const Text('Resolve'),
+                          ),
+                        ),
+                        SizedBox(
+                          width: 80,
+                          child: TextButton(
+                            onPressed: onClose,
+                            child: const Text('Close'),
+                          ),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ],
             ),
@@ -706,7 +729,10 @@ class _SupportThreadDetail extends StatelessWidget {
                               ),
                         ),
                         const SizedBox(height: 6),
-                        Text(message.body),
+                        Text(
+                          _wrapLongTokens(message.body),
+                          softWrap: true,
+                        ),
                         if ((message.createdAt ?? '').isNotEmpty) ...[
                           const SizedBox(height: 6),
                           Text(
@@ -744,9 +770,16 @@ class _SupportThreadDetail extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 10),
-                  FilledButton(
-                    onPressed: closed || replying ? null : onReply,
-                    child: const Text('Reply'),
+                  SizedBox(
+                    width: 88,
+                    height: 52,
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(88, 52),
+                      ),
+                      onPressed: closed || replying ? null : onReply,
+                      child: const Text('Reply'),
+                    ),
                   ),
                 ],
               ),
@@ -817,6 +850,24 @@ class _SupportNotice extends StatelessWidget {
       child: Text(message),
     );
   }
+}
+
+String _wrapLongTokens(String value, {int chunkSize = 28}) {
+  final longTokenPattern = RegExp('\\S{${chunkSize + 1},}');
+  return value.replaceAllMapped(longTokenPattern, (match) {
+    final token = match.group(0)!;
+    final buffer = StringBuffer();
+    for (var index = 0; index < token.length; index += chunkSize) {
+      final end = (index + chunkSize < token.length)
+          ? index + chunkSize
+          : token.length;
+      buffer.write(token.substring(index, end));
+      if (end < token.length) {
+        buffer.write('\u200B');
+      }
+    }
+    return buffer.toString();
+  });
 }
 
 class _Pill extends StatelessWidget {

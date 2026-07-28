@@ -10,12 +10,15 @@ import 'package:provider/provider.dart';
 import '../../core/utils/action_feedback.dart';
 import '../../core/utils/parago_format.dart';
 import '../../models/operations/notification.dart';
+import '../../models/operations/announcement.dart';
 import '../../models/operations/pickup_request.dart';
 import '../../models/operations/ride_session.dart';
 import '../../models/passenger/passenger_profile.dart';
 import '../../models/transport/route_summary.dart';
+import '../../models/trip/passenger_jeep_eta.dart';
 import '../../models/trip/trip_session.dart';
 import '../../services/notification_service.dart';
+import '../../services/announcement_service.dart';
 import '../../services/passenger_service.dart';
 import '../../services/passenger_profile_service.dart';
 import '../../services/realtime_socket_service.dart';
@@ -24,6 +27,7 @@ import '../../services/session_controller.dart';
 import '../../services/stop_alert_service.dart';
 import '../../services/trip_service.dart';
 import '../../widgets/metric_card.dart';
+import '../../widgets/announcement_card.dart';
 import '../../widgets/passenger_home_dashboard_widgets.dart';
 import '../../widgets/status_badge.dart';
 import '../support/passenger_support_screen.dart';
@@ -60,8 +64,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const Duration _liveRefreshInterval = Duration(seconds: 8);
   static const Duration _backgroundLocationRefreshInterval =
       Duration(seconds: 25);
-  static const Duration _passengerLocationReportInterval =
-      Duration(seconds: 5);
+  static const Duration _passengerLocationReportInterval = Duration(seconds: 5);
   static const double _passengerLocationReportDistanceMeters = 8;
   static const Duration _metadataRefreshInterval = Duration(seconds: 12);
   static const Duration _socketRefreshThrottle = Duration(seconds: 4);
@@ -74,6 +77,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const Duration _passengerMapFollowPause = Duration(seconds: 8);
   static const Duration _passengerMapFollowThrottle =
       Duration(milliseconds: 150);
+  static const Duration _passengerEtaRefreshInterval = Duration(seconds: 30);
+  static const Duration _passengerEtaMovementRefreshFloor =
+      Duration(seconds: 10);
+  static const double _passengerEtaMovementRefreshMeters = 100;
   static const double _passengerMapFollowLerpFactor = 0.22;
   static const double _passengerMapFollowJitterMeters = 10;
   static const double _passengerMapFollowSnapMeters = 45;
@@ -86,6 +93,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   List<PickupRequestModel> _requests = [];
   List<RideSessionModel> _rides = [];
   List<NotificationModel> _notifications = [];
+  List<AnnouncementModel> _announcements = [];
   String? _selectedTripId;
   String? _selectedRouteId;
   LatLng? _currentPassengerLocation;
@@ -100,9 +108,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   String? _statusMessage;
   String? _syncMessage;
   Timer? _liveRefreshTimer;
+  Timer? _passengerEtaTimer;
   Timer? _tripMarkerAnimationTimer;
   StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
   StreamSubscription<Map<String, dynamic>>? _realtimeLocationSubscription;
+  StreamSubscription<Map<String, dynamic>>? _realtimeAnnouncementSubscription;
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
   bool _locatingPassenger = false;
@@ -121,6 +131,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   String? _autoUnloadWindowRideId;
   DateTime? _lastPassengerSyncAt;
   DateTime? _lastSocketRefreshAt;
+  DateTime? _lastAnnouncementRefreshAttemptAt;
   String? _lastMapPromptMessage;
   Set<String> _knownNotificationIds = <String>{};
   final Set<String> _destinationReminderRideIds = <String>{};
@@ -133,11 +144,20 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   final DraggableScrollableController _sheetController =
       DraggableScrollableController();
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
+  AnnouncementFeedController? _announcementFeedController;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final Map<String, _TripMarkerAnimation> _tripMarkerAnimations =
       <String, _TripMarkerAnimation>{};
   final Map<String, _TripVehicleMotionState> _tripVehicleStates =
       <String, _TripVehicleMotionState>{};
+  PassengerJeepEta? _selectedJeepEta;
+  String? _passengerEtaTripId;
+  String? _passengerEtaError;
+  bool _passengerEtaLoading = false;
+  bool _passengerEtaRequestInFlight = false;
+  int _passengerEtaRequestSerial = 0;
+  DateTime? _passengerEtaLastRequestedAt;
+  LatLng? _passengerEtaLastOrigin;
   OverlayEntry? _mapPromptOverlayEntry;
   Timer? _mapPromptOverlayTimer;
 
@@ -296,6 +316,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
     try {
       final shouldUseLiveCache = !preferFresh;
+      _refreshAnnouncementsIfDue(useCache: shouldUseLiveCache);
       final results = await Future.wait<dynamic>([
         tripService.getActiveTrips(useCache: shouldUseLiveCache),
         passengerService.getMyPickupRequests(useCache: shouldUseLiveCache),
@@ -337,6 +358,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
       if (!mounted) return;
       setState(() {
+        if (_passengerEtaTripId != null && _passengerEtaTripId != nextTripId) {
+          _clearPassengerEtaSelection();
+        }
         _trips = trips;
         _requests = requests;
         _rides = rides;
@@ -395,8 +419,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       try {
         _ensureRealtimeSocketConnection();
         final locationTimestamp = _currentPassengerLocationAt;
-        final shouldRefreshPassengerLocation =
-            locationTimestamp == null ||
+        final shouldRefreshPassengerLocation = locationTimestamp == null ||
             DateTime.now().difference(locationTimestamp) >=
                 _backgroundLocationRefreshInterval;
         if (shouldRefreshPassengerLocation) {
@@ -415,6 +438,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
             preferFresh: !_realtimeSocketService.isConnected,
           );
         }
+        _refreshAnnouncementsIfDue();
       } finally {
         _silentRefreshActive = false;
       }
@@ -433,6 +457,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
 
     try {
+      _refreshAnnouncementsIfDue(useCache: true);
       final results = await Future.wait<dynamic>([
         passengerService.getMyPickupRequests(useCache: true),
         passengerService.getMyRides(useCache: true),
@@ -466,6 +491,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       }
 
       setState(() {
+        if (_passengerEtaTripId != null && _passengerEtaTripId != nextTripId) {
+          _clearPassengerEtaSelection();
+        }
         _requests = requests;
         _rides = rides;
         _notifications = notifications;
@@ -1070,7 +1098,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
 
     _destinationReminderRideIds.add(ride.id);
-    final destinationLabel = ride.destinationStopRef ?? 'your saved destination';
+    final destinationLabel =
+        ride.destinationStopRef ?? 'your saved destination';
     final message = ride.canSendStopAlert == false
         ? 'You are near $destinationLabel. ParaGO will notify the driver automatically within 50 meters. Unload manually once you get off.'
         : 'You are near $destinationLabel. ParaGO will notify the driver automatically within 50 meters, but you can still send a para alert anytime if needed.';
@@ -1723,9 +1752,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       status == 'onboard' || status == 'waiting';
 
   bool _isFocusedRequestStatus(String status) =>
-      status == 'pending' ||
-      status == 'acknowledged' ||
-      status == 'completed';
+      status == 'pending' || status == 'acknowledged' || status == 'completed';
 
   TripSession? _tripFromListById(List<TripSession> trips, String tripId) {
     for (final trip in trips) {
@@ -1862,6 +1889,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           unawaited(_maybeAutoUnloadWhenSeparated());
         }
         unawaited(_reportPassengerLocationForAutoBoarding(next));
+        if (_draftPickupPoint == null &&
+            previousLocation != null &&
+            _distance.as(LengthUnit.Meter, previousLocation, next) >=
+                _passengerGpsJitterMeters) {
+          _refreshPassengerEtaForTargetChange();
+        }
         return next;
       } catch (_) {
         if (!silent && mounted) {
@@ -2080,6 +2113,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   Future<void> _onPassengerMapTap(LatLng point) async {
     final route = _selectedRoute;
     final currentLocation = await _ensureCurrentPassengerLocation();
+    final previousPickupPoint = _draftPickupPoint;
     LatLng? labelLookupPoint;
     var lookupPickupLabel = false;
     if (!mounted) {
@@ -2171,6 +2205,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           forPickup: lookupPickupLabel,
         ),
       );
+    }
+    if (lookupPickupLabel &&
+        !_sameMapPoint(previousPickupPoint, _draftPickupPoint)) {
+      _refreshPassengerEtaForTargetChange();
     }
   }
 
@@ -2648,6 +2686,196 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
   }
 
+  LatLng? get _passengerEtaDestination =>
+      _draftPickupPoint ?? _currentPassengerLocation;
+
+  void _startPassengerEtaRefreshLoop() {
+    _passengerEtaTimer?.cancel();
+    _passengerEtaTimer = Timer.periodic(_passengerEtaRefreshInterval, (_) {
+      unawaited(_refreshSelectedPassengerEta());
+    });
+  }
+
+  void _selectPassengerJeep(TripSession trip) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _selectedTripId = trip.id;
+      _passengerEtaTripId = trip.id;
+      _selectedJeepEta = null;
+      _passengerEtaError = null;
+      _passengerEtaLoading = true;
+      _passengerEtaLastRequestedAt = null;
+      _passengerEtaLastOrigin = null;
+      _passengerEtaRequestSerial += 1;
+    });
+    unawaited(_refreshSelectedPassengerEta(force: true));
+  }
+
+  void _clearPassengerEtaSelection() {
+    _passengerEtaRequestSerial += 1;
+    _passengerEtaRequestInFlight = false;
+    _passengerEtaTripId = null;
+    _selectedJeepEta = null;
+    _passengerEtaError = null;
+    _passengerEtaLoading = false;
+    _passengerEtaLastRequestedAt = null;
+    _passengerEtaLastOrigin = null;
+  }
+
+  void _refreshPassengerEtaForTargetChange() {
+    if (_passengerEtaTripId == null) {
+      return;
+    }
+    setState(() {
+      _passengerEtaRequestSerial += 1;
+      _passengerEtaRequestInFlight = false;
+      _selectedJeepEta = null;
+      _passengerEtaError = null;
+      _passengerEtaLoading = true;
+      _passengerEtaLastRequestedAt = null;
+    });
+    unawaited(_refreshSelectedPassengerEta(force: true));
+  }
+
+  Future<void> _refreshSelectedPassengerEta({bool force = false}) async {
+    final tripId = _passengerEtaTripId;
+    final destination = _passengerEtaDestination;
+    if (tripId == null || tripId.isEmpty) {
+      return;
+    }
+    if (destination == null) {
+      if (mounted) {
+        setState(() {
+          _selectedJeepEta = null;
+          _passengerEtaError = 'ETA unavailable';
+          _passengerEtaLoading = false;
+        });
+      }
+      return;
+    }
+    final now = DateTime.now();
+    final lastRequestedAt = _passengerEtaLastRequestedAt;
+    if (!force &&
+        lastRequestedAt != null &&
+        now.difference(lastRequestedAt) < _passengerEtaRefreshInterval) {
+      return;
+    }
+    if (_passengerEtaRequestInFlight) {
+      return;
+    }
+
+    final trip = _tripById(tripId);
+    final origin = trip == null ? null : _tripVehiclePoint(trip);
+    final requestSerial = ++_passengerEtaRequestSerial;
+    final destinationSnapshot = destination;
+    _passengerEtaRequestInFlight = true;
+    _passengerEtaLastRequestedAt = now;
+    _passengerEtaLastOrigin = origin;
+    if (mounted) {
+      setState(() {
+        _passengerEtaLoading = true;
+        _passengerEtaError = null;
+      });
+    }
+
+    try {
+      final session = context.read<SessionController>();
+      final eta = await TripService(session.apiClient).getPassengerEta(
+        tripId: tripId,
+        destinationLatitude: destinationSnapshot.latitude,
+        destinationLongitude: destinationSnapshot.longitude,
+      );
+      if (!mounted ||
+          requestSerial != _passengerEtaRequestSerial ||
+          _passengerEtaTripId != tripId ||
+          !_sameMapPoint(_passengerEtaDestination, destinationSnapshot)) {
+        return;
+      }
+      setState(() {
+        _selectedJeepEta = eta;
+        _passengerEtaError = null;
+        _passengerEtaLoading = false;
+      });
+    } catch (_) {
+      if (!mounted ||
+          requestSerial != _passengerEtaRequestSerial ||
+          _passengerEtaTripId != tripId) {
+        return;
+      }
+      setState(() {
+        _selectedJeepEta = null;
+        _passengerEtaError = 'ETA unavailable';
+        _passengerEtaLoading = false;
+      });
+    } finally {
+      if (requestSerial == _passengerEtaRequestSerial) {
+        _passengerEtaRequestInFlight = false;
+      }
+    }
+  }
+
+  void _maybeRefreshPassengerEtaForMovement(
+    TripSession trip,
+    LatLng nextPoint,
+  ) {
+    if (_passengerEtaTripId != trip.id) {
+      return;
+    }
+    final lastRequestedAt = _passengerEtaLastRequestedAt;
+    final lastOrigin = _passengerEtaLastOrigin;
+    if (lastRequestedAt == null || lastOrigin == null) {
+      unawaited(_refreshSelectedPassengerEta(force: true));
+      return;
+    }
+    if (DateTime.now().difference(lastRequestedAt) <
+        _passengerEtaMovementRefreshFloor) {
+      return;
+    }
+    final movedMeters = _distance.as(
+      LengthUnit.Meter,
+      lastOrigin,
+      nextPoint,
+    );
+    if (movedMeters >= _passengerEtaMovementRefreshMeters) {
+      unawaited(_refreshSelectedPassengerEta(force: true));
+    }
+  }
+
+  String _passengerEtaLabel() {
+    final eta = _selectedJeepEta;
+    if (_passengerEtaLoading && eta == null) {
+      return 'ETA loading';
+    }
+    if (eta == null || _passengerEtaError != null) {
+      return 'ETA unavailable';
+    }
+    final duration = _compactDurationLabel(
+      eta.durationSeconds,
+      fallback: 'ETA unavailable',
+    );
+    return _draftPickupPoint != null
+        ? '$duration to pickup'
+        : '$duration to you';
+  }
+
+  String _selectedJeepLocationFreshness(TripSession trip) {
+    final seenAt = _selectedJeepEta?.vehicleLocationLastSeenAt ??
+        _tripVehicleStates[trip.id]?.lastRealtimeUpdateAt;
+    if (seenAt == null) {
+      return 'Location syncing';
+    }
+    final age = DateTime.now().difference(seenAt);
+    if (age.inSeconds < 10) {
+      return 'Live now';
+    }
+    if (age.inSeconds < 60) {
+      return 'Updated ${age.inSeconds}s ago';
+    }
+    return 'Location stale';
+  }
+
   List<Marker> _tripVehicleMarkers(
     List<TripSession> routeTrips,
     TripSession? selectedTrip,
@@ -2661,21 +2889,38 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
     return visibleTrips
         .where((trip) => _tripVehiclePoint(trip) != null)
-        .map(
-          (trip) => Marker(
-            point: _tripVehiclePoint(trip)!,
-            width: trip.id == selectedTrip?.id ? 52 : 44,
-            height: trip.id == selectedTrip?.id ? 52 : 44,
-            child: _PassengerVehicleMarker(
-              color: trip.id == selectedTrip?.id
-                  ? const Color(0xFF0F6A5F)
-                  : const Color(0xFF2157A5),
-              size: trip.id == selectedTrip?.id ? 36 : 30,
-              headingDegrees: _tripVehicleHeading(trip),
-            ),
+        .map((trip) {
+      final showDetails = trip.id == _passengerEtaTripId;
+      final directDistance = _distanceFromPassengerToTrip(trip);
+      final etaDistance = showDetails ? _selectedJeepEta?.distanceMeters : null;
+      final etaPlateNumber =
+          showDetails ? _selectedJeepEta?.plateNumber.trim() : null;
+      return Marker(
+        point: _tripVehiclePoint(trip)!,
+        width: showDetails ? 220 : (trip.id == selectedTrip?.id ? 52 : 44),
+        height: showDetails ? 118 : (trip.id == selectedTrip?.id ? 52 : 44),
+        alignment: Alignment.bottomCenter,
+        child: _PassengerVehicleMarker(
+          color: trip.id == selectedTrip?.id
+              ? const Color(0xFF0F6A5F)
+              : const Color(0xFF2157A5),
+          size: trip.id == selectedTrip?.id ? 36 : 30,
+          headingDegrees: _tripVehicleHeading(trip),
+          selected: showDetails,
+          plateNumber: etaPlateNumber?.isNotEmpty == true
+              ? etaPlateNumber!
+              : (trip.jeepneyPlateNumber ?? trip.jeepneyLabel),
+          etaLabel: _passengerEtaLabel(),
+          distanceLabel: _compactDistanceLabel(
+            etaDistance ?? directDistance,
+            fallback: 'Distance unavailable',
           ),
-        )
-        .toList(growable: false);
+          seatsLabel: _availableSeatsLabel(trip),
+          freshnessLabel: _selectedJeepLocationFreshness(trip),
+          onTap: () => _selectPassengerJeep(trip),
+        ),
+      );
+    }).toList(growable: false);
   }
 
   Widget _buildPassengerMapSurface({
@@ -2917,6 +3162,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                                 _mapSelectionMode =
                                     _PassengerMapSelectionMode.pickup;
                               });
+                              _refreshPassengerEtaForTargetChange();
                             },
                   icon: const Icon(Icons.layers_clear_outlined),
                   label: const Text('Clear pins'),
@@ -3062,16 +3308,20 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       }
       unawaited(_primeCurrentPassengerLocation());
       _startLiveRefreshLoop();
+      _startPassengerEtaRefreshLoop();
     });
   }
 
   @override
   void dispose() {
     _liveRefreshTimer?.cancel();
+    _passengerEtaTimer?.cancel();
     _tripMarkerAnimationTimer?.cancel();
     _realtimeNotificationSubscription?.cancel();
     _realtimeLocationSubscription?.cancel();
+    _realtimeAnnouncementSubscription?.cancel();
     _dismissMapPromptNotification();
+    _announcementFeedController?.dispose();
     _realtimeSocketService.dispose();
     super.dispose();
   }
@@ -3085,6 +3335,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
     _realtimeNotificationSubscription?.cancel();
     _realtimeLocationSubscription?.cancel();
+    _realtimeAnnouncementSubscription?.cancel();
 
     _realtimeNotificationSubscription =
         _realtimeSocketService.notificationCreatedStream.listen(
@@ -3095,6 +3346,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _realtimeSocketService.jeepneyLocationStream.listen(
       _handleRealtimeLocationUpdate,
     );
+    _realtimeAnnouncementSubscription =
+        _realtimeSocketService.announcementActivityStream.listen(
+      (_) => unawaited(_refreshAnnouncements()),
+    );
 
     _realtimeSocketService.connect(
       apiBaseUrl: session.apiClient.baseUrl,
@@ -3104,6 +3359,123 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     _syncRealtimeRouteSubscription(
       previousRouteId: null,
       nextRouteId: _selectedRouteId,
+    );
+  }
+
+  AnnouncementFeedController _announcementFeed() {
+    final existing = _announcementFeedController;
+    if (existing != null) return existing;
+    final session = context.read<SessionController>();
+    return _announcementFeedController =
+        AnnouncementFeedController(AnnouncementService(session.apiClient));
+  }
+
+  void _refreshAnnouncementsIfDue({bool useCache = false}) {
+    final lastAttempt = _lastAnnouncementRefreshAttemptAt;
+    if (lastAttempt != null &&
+        DateTime.now().difference(lastAttempt) < const Duration(seconds: 30)) {
+      return;
+    }
+    unawaited(_refreshAnnouncements(useCache: useCache));
+  }
+
+  Future<void> _refreshAnnouncements({bool useCache = false}) async {
+    if (!mounted) return;
+    _lastAnnouncementRefreshAttemptAt = DateTime.now();
+    final items = await _announcementFeed().refresh(useCache: useCache);
+    if (mounted) setState(() => _announcements = items);
+  }
+
+  Future<void> _dismissAnnouncement(AnnouncementModel announcement) async {
+    final feed = _announcementFeed();
+    final resultFuture = feed.dismiss(announcement);
+    setState(() => _announcements = feed.items);
+    final result = await resultFuture;
+    if (!mounted) return;
+    setState(() => _announcements = feed.items);
+    if (result.status == AnnouncementDismissStatus.failed) {
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not dismiss announcement. '
+            '${ActionFeedback.messageOf(result.error!)}',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _showPassengerNoticesSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (sheetContext) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.72,
+        minChildSize: 0.45,
+        maxChildSize: 0.94,
+        builder: (context, controller) => Material(
+          color: const Color(0xFFFFFEFB),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          clipBehavior: Clip.antiAlias,
+          child: ListView(
+            controller: controller,
+            padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
+            children: [
+              Center(
+                child: Container(
+                  width: 52,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD9DDD7),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                'Notices',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 14),
+              if (_announcements.isEmpty && _notifications.isEmpty)
+                const Text('No notices yet.'),
+              for (final announcement in _announcements) ...[
+                AnnouncementCard(
+                  announcement: announcement,
+                  onDismiss: () {
+                    Navigator.pop(sheetContext);
+                    unawaited(_dismissAnnouncement(announcement));
+                  },
+                ),
+                const SizedBox(height: 12),
+              ],
+              for (final notification in _notifications) ...[
+                Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: ListTile(
+                    leading: Icon(
+                      notification.isRead
+                          ? Icons.mark_email_read_outlined
+                          : Icons.notifications_active,
+                    ),
+                    title: Text(notification.title, softWrap: true),
+                    subtitle: Text(
+                      '${notification.body}\n'
+                      '${ParagoFormat.relative(notification.createdAt)}',
+                      softWrap: true,
+                    ),
+                    isThreeLine: true,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -3210,6 +3582,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         tripId: trip.id,
         target: nextPoint,
       );
+      _maybeRefreshPassengerEtaForMovement(trip, nextPoint);
       return;
     }
     final distanceMeters = Geolocator.distanceBetween(
@@ -3228,6 +3601,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       );
       return;
     }
+    _maybeRefreshPassengerEtaForMovement(trip, nextPoint);
 
     final nextHeading = _resolveTripMarkerHeading(
       previousPoint: currentPoint,
@@ -3246,8 +3620,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         lastRealtimeUpdateAt: receivedAt,
         sampleAt: sampleAt,
         expectedSampleGap: sampleGap,
-        speedMetersPerSecond:
-            _metersPerSecond(distanceMeters, sampleGap) ?? 0,
+        speedMetersPerSecond: _metersPerSecond(distanceMeters, sampleGap) ?? 0,
         bearingDegrees: nextHeading,
       );
       _syncPassengerSelectedTripCamera(
@@ -3351,15 +3724,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         previousAuthoritativeSampleAt: previousState?.lastAuthoritativeSampleAt,
         lastAuthoritativeSampleAt:
             sampleAt ?? previousState?.lastAuthoritativeSampleAt,
-        expectedSampleGap:
-            expectedSampleGap ??
+        expectedSampleGap: expectedSampleGap ??
             previousState?.expectedSampleGap ??
             _tripMarkerAnimationDefaultDuration,
-        lastReliableSpeedMetersPerSecond:
-            speedMetersPerSecond ??
+        lastReliableSpeedMetersPerSecond: speedMetersPerSecond ??
             previousState?.lastReliableSpeedMetersPerSecond,
-        lastReliableBearingDegrees:
-            bearingDegrees ??
+        lastReliableBearingDegrees: bearingDegrees ??
             resolvedHeading ??
             previousState?.lastReliableBearingDegrees,
         isProjected: false,
@@ -3385,8 +3755,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         previousAuthoritativeSampleAt: currentState.lastAuthoritativeSampleAt,
         lastAuthoritativeSampleAt:
             sampleAt ?? currentState.lastAuthoritativeSampleAt,
-        expectedSampleGap:
-            expectedSampleGap ?? currentState.expectedSampleGap,
+        expectedSampleGap: expectedSampleGap ?? currentState.expectedSampleGap,
         lastReliableSpeedMetersPerSecond: 0,
         isProjected: false,
         projectionHandoffStarted: false,
@@ -3514,7 +3883,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                   animation.toHeading ?? updatedStates[tripId]?.targetHeading,
               isProjected: animation.isProjection,
               projectionHandoffStarted: true,
-        ) ??
+            ) ??
             currentState;
         updatedStates[tripId] = completedState;
         if (focusedTripId == tripId) {
@@ -3606,13 +3975,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         previousAuthoritativeSampleAt:
             existingState?.previousAuthoritativeSampleAt,
         lastAuthoritativeSampleAt: existingState?.lastAuthoritativeSampleAt,
-        expectedSampleGap:
-            existingState?.expectedSampleGap ??
+        expectedSampleGap: existingState?.expectedSampleGap ??
             _tripMarkerAnimationDefaultDuration,
         lastReliableSpeedMetersPerSecond:
             existingState?.lastReliableSpeedMetersPerSecond,
-        lastReliableBearingDegrees:
-            existingState?.lastReliableBearingDegrees,
+        lastReliableBearingDegrees: existingState?.lastReliableBearingDegrees,
         isProjected: false,
         projectionHandoffStarted: false,
       );
@@ -3766,10 +4133,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       return null;
     }
 
-    final baseProjectionDuration = state.expectedSampleGap <
-            _tripProjectionMaxDuration
-        ? state.expectedSampleGap
-        : _tripProjectionMaxDuration;
+    final baseProjectionDuration =
+        state.expectedSampleGap < _tripProjectionMaxDuration
+            ? state.expectedSampleGap
+            : _tripProjectionMaxDuration;
     final projectionDistanceMeters = math.min(
       _tripProjectionMaxDistanceMeters,
       speedMetersPerSecond * (baseProjectionDuration.inMilliseconds / 1000),
@@ -4050,7 +4417,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     if (selectedRouteId != null &&
         selectedRouteId.isNotEmpty &&
         _routes.any((route) => route.id == selectedRouteId)) {
-      setState(() => _selectedRouteId = selectedRouteId);
+      setState(() {
+        if (_selectedRouteId != selectedRouteId) {
+          _clearPassengerEtaSelection();
+        }
+        _selectedRouteId = selectedRouteId;
+      });
     }
 
     await _load(silent: true);
@@ -4143,6 +4515,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   void _selectPassengerRoute(String routeId) {
     final nextRoute = _routeById(routeId);
+    final routeChanged = _selectedRouteId != routeId;
 
     // Unsubscribe from previous route
     if (_selectedRouteId != null && _selectedRouteId != routeId) {
@@ -4150,6 +4523,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
 
     setState(() {
+      if (routeChanged) {
+        _clearPassengerEtaSelection();
+      }
       _selectedRouteId = routeId;
       _selectedTripId = _preferredTripIdForRoute(
         _trips,
@@ -4201,7 +4577,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   void _handlePassengerMapPositionChanged(MapCamera camera, bool hasGesture) {
     _lastPassengerMapCenter = camera.center;
-    _lastPassengerMapZoom = camera.zoom == 0 ? _lastPassengerMapZoom : camera.zoom;
+    _lastPassengerMapZoom =
+        camera.zoom == 0 ? _lastPassengerMapZoom : camera.zoom;
     if (!hasGesture) {
       return;
     }
@@ -4271,7 +4648,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     if (currentZoom != 0) {
       return currentZoom;
     }
-    return _lastPassengerMapZoom ?? (_currentPassengerLocation == null ? 14 : 16);
+    return _lastPassengerMapZoom ??
+        (_currentPassengerLocation == null ? 14 : 16);
   }
 
   void _syncPassengerSelectedTripCamera({
@@ -5618,17 +5996,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _distanceFromJeepneyToRideDestination(selectedTrip, activeRide);
     final passengerToDestinationMeters =
         _distanceFromPassengerToDestination(activeRide);
-    final etaToPickupSeconds = _estimatedEtaSeconds(
-      distanceMeters: jeepneyToPickupMeters,
-      route: selectedRoute,
-    );
     final etaToDestinationSeconds = _estimatedEtaSeconds(
       distanceMeters: jeepneyToDestinationMeters,
       route: selectedRoute,
     );
     final trackingEta = activeRide?.status == 'onboard'
         ? etaToDestinationSeconds
-        : etaToPickupSeconds;
+        : (_passengerEtaTripId == selectedTrip.id
+            ? _selectedJeepEta?.durationSeconds
+            : null);
     final approachingDestination =
         jeepneyToDestinationMeters != null && jeepneyToDestinationMeters <= 180;
 
@@ -5737,7 +6113,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                     : 'ETA to pickup',
                 value: _compactDurationLabel(
                   trackingEta,
-                  fallback: 'ETA pending',
+                  fallback: activeRide?.status == 'onboard'
+                      ? 'ETA pending'
+                      : 'ETA unavailable',
                 ),
                 icon: Icons.schedule_outlined,
               ),
@@ -5959,6 +6337,16 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                             const SizedBox(height: 8),
                           ] else ...[
                             const SizedBox(height: 8),
+                            if (_announcements.isNotEmpty) ...[
+                              AnnouncementCard(
+                                announcement: _announcements.first,
+                                compact: true,
+                                onDismiss: () => _dismissAnnouncement(
+                                  _announcements.first,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                            ],
                             if (_statusMessage != null) ...[
                               _InfoBanner(
                                 message: _statusMessage!,
@@ -6146,6 +6534,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                     PassengerDashboardTopBar(
                       unreadCount: unreadCount,
                       onMenuPressed: _openSideDrawer,
+                      onNoticesPressed: () =>
+                          unawaited(_showPassengerNoticesSheet()),
                       onRefreshPressed: () {
                         _showMapPromptNotification(route: selectedRoute);
                         unawaited(_refreshPassengerData());
@@ -6230,6 +6620,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                                       _mapSelectionMode =
                                           _PassengerMapSelectionMode.pickup;
                                     });
+                                    _refreshPassengerEtaForTargetChange();
                                   },
                           ),
                         ],
@@ -6414,20 +6805,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                             .toList(),
                         onChanged: (value) {
                           if (value == null) return;
-                          setState(() {
-                            _selectedRouteId = value;
-                            _selectedTripId = _preferredTripIdForRoute(
-                              _trips,
-                              value,
-                              anchor: _draftPickupPoint,
-                            );
-                            _draftPickupPoint = null;
-                            _draftUnloadPoint = null;
-                            _draftPickupLabel = null;
-                            _draftUnloadLabel = null;
-                            _mapSelectionMode =
-                                _PassengerMapSelectionMode.pickup;
-                          });
+                          _selectPassengerRoute(value);
                         },
                       ),
                       const SizedBox(height: 14),
@@ -6740,28 +7118,35 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    if (_notifications.isEmpty)
+                    if (_announcements.isEmpty && _notifications.isEmpty)
                       const Text('No notifications yet.')
                     else
-                      for (final notification in _notifications.take(5)) ...[
-                        ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: Icon(
-                            notification.isRead
-                                ? Icons.mark_email_read_outlined
-                                : Icons.notifications_active,
-                            color: notification.isRead
-                                ? Theme.of(context).colorScheme.outline
-                                : Theme.of(context).colorScheme.primary,
-                          ),
-                          title: Text(notification.title),
-                          subtitle: Text(
-                            '${notification.body}\n${ParagoFormat.relative(notification.createdAt)}',
-                          ),
-                          isThreeLine: true,
+                      for (final announcement in _announcements) ...[
+                        AnnouncementCard(
+                          announcement: announcement,
+                          onDismiss: () => _dismissAnnouncement(announcement),
                         ),
-                        const Divider(),
+                        const SizedBox(height: 12),
                       ],
+                    for (final notification in _notifications.take(5)) ...[
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(
+                          notification.isRead
+                              ? Icons.mark_email_read_outlined
+                              : Icons.notifications_active,
+                          color: notification.isRead
+                              ? Theme.of(context).colorScheme.outline
+                              : Theme.of(context).colorScheme.primary,
+                        ),
+                        title: Text(notification.title),
+                        subtitle: Text(
+                          '${notification.body}\n${ParagoFormat.relative(notification.createdAt)}',
+                        ),
+                        isThreeLine: true,
+                      ),
+                      const Divider(),
+                    ],
                   ],
                 ),
               ),
@@ -7138,8 +7523,7 @@ class _TripVehicleMotionState {
       lastAuthoritativeSampleAt:
           lastAuthoritativeSampleAt ?? this.lastAuthoritativeSampleAt,
       expectedSampleGap: expectedSampleGap ?? this.expectedSampleGap,
-      lastReliableSpeedMetersPerSecond:
-          lastReliableSpeedMetersPerSecond ??
+      lastReliableSpeedMetersPerSecond: lastReliableSpeedMetersPerSecond ??
           this.lastReliableSpeedMetersPerSecond,
       lastReliableBearingDegrees:
           lastReliableBearingDegrees ?? this.lastReliableBearingDegrees,
@@ -7332,11 +7716,25 @@ class _PassengerVehicleMarker extends StatelessWidget {
   const _PassengerVehicleMarker({
     required this.color,
     required this.size,
+    required this.selected,
+    required this.plateNumber,
+    required this.etaLabel,
+    required this.distanceLabel,
+    required this.seatsLabel,
+    required this.freshnessLabel,
+    required this.onTap,
     this.headingDegrees,
   });
 
   final Color color;
   final double size;
+  final bool selected;
+  final String plateNumber;
+  final String etaLabel;
+  final String distanceLabel;
+  final String seatsLabel;
+  final String freshnessLabel;
+  final VoidCallback onTap;
   final double? headingDegrees;
 
   @override
@@ -7347,9 +7745,101 @@ class _PassengerVehicleMarker extends StatelessWidget {
       size: size,
     );
 
-    return Transform.rotate(
-      angle: ((headingDegrees ?? 0) * math.pi) / 180,
-      child: icon,
+    return Semantics(
+      button: true,
+      label: selected
+          ? '$plateNumber, $etaLabel, $distanceLabel'
+          : 'Select jeepney $plateNumber',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: selected
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 214,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: const Color(0xFF0F6A5F).withValues(alpha: 0.24),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.18),
+                          blurRadius: 14,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                plateNumber,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Color(0xFF17312C),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                            Text(
+                              etaLabel,
+                              style: const TextStyle(
+                                color: Color(0xFF0F6A5F),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          '$distanceLabel · $seatsLabel',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF55615D),
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          freshnessLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF7A8580),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Transform.rotate(
+                    angle: ((headingDegrees ?? 0) * math.pi) / 180,
+                    child: icon,
+                  ),
+                ],
+              )
+            : Center(
+                child: Transform.rotate(
+                  angle: ((headingDegrees ?? 0) * math.pi) / 180,
+                  child: icon,
+                ),
+              ),
+      ),
     );
   }
 }
