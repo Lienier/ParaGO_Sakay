@@ -29,6 +29,7 @@ class _AdminSupportInboxScreenState extends State<AdminSupportInboxScreen> {
   final TextEditingController _replyController = TextEditingController();
   final Set<String> _knownThreadIds = <String>{};
   StreamSubscription<Map<String, dynamic>>? _supportSubscription;
+  Timer? _refreshTimer;
 
   List<SupportThreadModel> _threads = const <SupportThreadModel>[];
   List<SupportMessageModel> _messages = const <SupportMessageModel>[];
@@ -91,12 +92,18 @@ class _AdminSupportInboxScreenState extends State<AdminSupportInboxScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_loadThreads());
     });
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) {
+        unawaited(_loadThreads(silent: true));
+      }
+    });
   }
 
   @override
   void dispose() {
     _threadListGeneration++;
     _threadDetailGeneration++;
+    _refreshTimer?.cancel();
     _replyController.dispose();
     _supportSubscription?.cancel();
     super.dispose();

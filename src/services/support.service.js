@@ -236,6 +236,12 @@ const getActiveAdminUsers = async () =>
 const emitSupportThreadEvent = async ({ thread, eventName, userId = null }) => {
   const serialized = summarizeThread(thread);
   if (!serialized) return;
+  const eventPayload = {
+    ...serialized,
+    eventName,
+    notificationType: eventName,
+    threadId: serialized.id,
+  };
   emitOperationsChanged({
     notificationType: eventName,
     payload: {
@@ -246,9 +252,9 @@ const emitSupportThreadEvent = async ({ thread, eventName, userId = null }) => {
     },
     userId: userId ? String(userId) : undefined,
   });
-  emitToRole('admin', eventName, serialized);
+  emitToRole('admin', eventName, eventPayload);
   if (userId) {
-    emitToUser(userId, eventName, serialized);
+    emitToUser(userId, eventName, eventPayload);
   }
 };
 

@@ -54,6 +54,7 @@ class ApiClient {
   final Map<String, _ApiCachedResponse> _memoryCache = {};
   final Map<String, Future<Map<String, dynamic>>> _pendingGetRequests = {};
   final List<ApiRequestTelemetry> _recentTelemetry = <ApiRequestTelemetry>[];
+  int _cacheGeneration = 0;
   SharedPreferences? _cachePrefs;
   static const String _cachePrefix = 'parago_api_cache_v1:';
 
@@ -252,7 +253,41 @@ class ApiClient {
     _memoryCache.clear();
     final storage = await _cacheStorage;
     final keysToRemove =
-        storage.getKeys().where((key) => key.startsWith(_cachePrefix));
+        storage.getKeys().where((key) => key.startsWith(_cachePrefix)).toList();
+    for (final key in keysToRemove) {
+      await storage.remove(key);
+    }
+  }
+
+  Future<void> _clearCacheAfterMutation(String requestPath) async {
+    final normalized =
+        requestPath.startsWith('/') ? requestPath : '/$requestPath';
+    final isolatedPrefix = switch (normalized) {
+      final path when path.startsWith('/support/') || path == '/support' =>
+        '/support',
+      final path
+          when path.startsWith('/announcements/') || path == '/announcements' =>
+        '/announcements',
+      final path
+          when path.startsWith('/notifications/') || path == '/notifications' =>
+        '/notifications',
+      _ => null,
+    };
+    if (isolatedPrefix == null) {
+      await _clearAllCache();
+      return;
+    }
+
+    _memoryCache.removeWhere((key, _) => key.startsWith(isolatedPrefix));
+    final storage = await _cacheStorage;
+    final keysToRemove = storage
+        .getKeys()
+        .where(
+          (key) =>
+              key.startsWith('$_cachePrefix$isolatedPrefix') ||
+              key.startsWith('$_cachePrefix$isolatedPrefix?'),
+        )
+        .toList();
     for (final key in keysToRemove) {
       await storage.remove(key);
     }
@@ -339,6 +374,7 @@ class ApiClient {
     Duration? cacheTtl,
   }) async {
     final isGet = upperMethod == 'GET';
+    final cacheGeneration = _cacheGeneration;
     final startedAt = DateTime.now();
     final stopwatch = Stopwatch()..start();
 
@@ -371,7 +407,7 @@ class ApiClient {
         throw ApiException(status, message, errors: errors);
       }
 
-      if (isGet && useCache) {
+      if (isGet && useCache && cacheGeneration == _cacheGeneration) {
         final ttl = cacheTtl ?? _cacheTtlForPath(path);
         await _setCachedResponse(
           cacheKey: cacheKey,
@@ -379,7 +415,8 @@ class ApiClient {
           ttl: ttl,
         );
       } else if (!isGet) {
-        await _clearAllCache();
+        _cacheGeneration++;
+        await _clearCacheAfterMutation(requestPath);
       }
 
       _recordTelemetry(

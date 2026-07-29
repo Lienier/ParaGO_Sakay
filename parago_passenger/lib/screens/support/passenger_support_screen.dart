@@ -41,9 +41,13 @@ class PassengerSupportScreen extends StatefulWidget {
 class _PassengerSupportScreenState extends State<PassengerSupportScreen> {
   final Set<String> _knownThreadIds = <String>{};
   StreamSubscription<Map<String, dynamic>>? _supportSubscription;
+  Timer? _refreshTimer;
   List<SupportThreadModel> _threads = const <SupportThreadModel>[];
   bool _loading = true;
   bool _creating = false;
+  bool _threadsRequestInFlight = false;
+  bool _threadsRefreshPending = false;
+  int _threadListGeneration = 0;
   String? _message;
 
   SupportService get _supportService =>
@@ -68,22 +72,35 @@ class _PassengerSupportScreenState extends State<PassengerSupportScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_loadThreads());
     });
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) {
+        unawaited(_loadThreads(silent: true));
+      }
+    });
   }
 
   @override
   void dispose() {
+    _threadListGeneration++;
+    _refreshTimer?.cancel();
     _supportSubscription?.cancel();
     super.dispose();
   }
 
   Future<void> _loadThreads({bool silent = false}) async {
+    if (_threadsRequestInFlight) {
+      _threadsRefreshPending = true;
+      return;
+    }
+    _threadsRequestInFlight = true;
+    final generation = ++_threadListGeneration;
     if (!silent && mounted) {
       setState(() => _loading = true);
     }
 
     try {
       final threads = await _supportService.getMyThreads();
-      if (!mounted) return;
+      if (!mounted || generation != _threadListGeneration) return;
       setState(() {
         _threads = threads;
         _knownThreadIds
@@ -92,11 +109,16 @@ class _PassengerSupportScreenState extends State<PassengerSupportScreen> {
         _message = null;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _threadListGeneration) return;
       setState(() => _message = ActionFeedback.messageOf(error));
     } finally {
-      if (mounted && !silent) {
+      _threadsRequestInFlight = false;
+      if (mounted && generation == _threadListGeneration && !silent) {
         setState(() => _loading = false);
+      }
+      if (mounted && _threadsRefreshPending) {
+        _threadsRefreshPending = false;
+        unawaited(_loadThreads(silent: true));
       }
     }
   }
@@ -273,10 +295,14 @@ class _PassengerSupportThreadScreenState
     extends State<PassengerSupportThreadScreen> {
   final TextEditingController _composerController = TextEditingController();
   StreamSubscription<Map<String, dynamic>>? _supportSubscription;
+  Timer? _refreshTimer;
   SupportThreadModel? _thread;
   List<SupportMessageModel> _messages = const <SupportMessageModel>[];
   bool _loading = true;
   bool _sending = false;
+  bool _threadRequestInFlight = false;
+  bool _threadRefreshPending = false;
+  int _threadDetailGeneration = 0;
   String? _message;
 
   SupportService get _supportService =>
@@ -294,7 +320,9 @@ class _PassengerSupportThreadScreenState
         if (notificationType == 'support.thread.read') {
           return;
         }
-        final threadId = event['threadId']?.toString() ?? '';
+        final threadId =
+            (event['threadId'] ?? event['id'] ?? event['_id'])?.toString() ??
+                '';
         if (threadId.isNotEmpty && _thread?.id == threadId && mounted) {
           unawaited(_loadThread(silent: true));
         }
@@ -303,16 +331,29 @@ class _PassengerSupportThreadScreenState
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_loadThread());
     });
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) {
+        unawaited(_loadThread(silent: true));
+      }
+    });
   }
 
   @override
   void dispose() {
+    _threadDetailGeneration++;
+    _refreshTimer?.cancel();
     _composerController.dispose();
     _supportSubscription?.cancel();
     super.dispose();
   }
 
   Future<void> _loadThread({bool silent = false}) async {
+    if (_threadRequestInFlight) {
+      _threadRefreshPending = true;
+      return;
+    }
+    _threadRequestInFlight = true;
+    final generation = ++_threadDetailGeneration;
     if (!silent && mounted) {
       setState(() => _loading = true);
     }
@@ -328,7 +369,7 @@ class _PassengerSupportThreadScreenState
                   SupportMessageModel.fromJson(item.cast<String, dynamic>()))
               .toList(growable: false)
           : const <SupportMessageModel>[];
-      if (!mounted) return;
+      if (!mounted || generation != _threadDetailGeneration) return;
       setState(() {
         _thread = thread;
         _messages = parsedMessages;
@@ -336,11 +377,16 @@ class _PassengerSupportThreadScreenState
       });
       await _supportService.markRead(thread.id);
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _threadDetailGeneration) return;
       setState(() => _message = ActionFeedback.messageOf(error));
     } finally {
-      if (mounted && !silent) {
+      _threadRequestInFlight = false;
+      if (mounted && generation == _threadDetailGeneration && !silent) {
         setState(() => _loading = false);
+      }
+      if (mounted && _threadRefreshPending) {
+        _threadRefreshPending = false;
+        unawaited(_loadThread(silent: true));
       }
     }
   }

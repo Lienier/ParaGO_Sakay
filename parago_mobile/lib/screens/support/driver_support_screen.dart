@@ -35,9 +35,13 @@ class DriverSupportScreen extends StatefulWidget {
 class _DriverSupportScreenState extends State<DriverSupportScreen> {
   final Set<String> _knownThreadIds = <String>{};
   StreamSubscription<Map<String, dynamic>>? _supportSubscription;
+  Timer? _refreshTimer;
   List<SupportThreadModel> _threads = const <SupportThreadModel>[];
   bool _loading = true;
   bool _creating = false;
+  bool _threadsRequestInFlight = false;
+  bool _threadsRefreshPending = false;
+  int _threadListGeneration = 0;
   String? _message;
 
   @override
@@ -58,15 +62,28 @@ class _DriverSupportScreenState extends State<DriverSupportScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_loadThreads());
     });
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) {
+        unawaited(_loadThreads(silent: true));
+      }
+    });
   }
 
   @override
   void dispose() {
+    _threadListGeneration++;
+    _refreshTimer?.cancel();
     _supportSubscription?.cancel();
     super.dispose();
   }
 
   Future<void> _loadThreads({bool silent = false}) async {
+    if (_threadsRequestInFlight) {
+      _threadsRefreshPending = true;
+      return;
+    }
+    _threadsRequestInFlight = true;
+    final generation = ++_threadListGeneration;
     if (!silent && mounted) {
       setState(() => _loading = true);
     }
@@ -74,7 +91,7 @@ class _DriverSupportScreenState extends State<DriverSupportScreen> {
     try {
       final session = context.read<SessionController>();
       final threads = await SupportService(session.apiClient).getMyThreads();
-      if (!mounted) return;
+      if (!mounted || generation != _threadListGeneration) return;
       setState(() {
         _threads = threads;
         _knownThreadIds
@@ -83,11 +100,16 @@ class _DriverSupportScreenState extends State<DriverSupportScreen> {
         _message = null;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _threadListGeneration) return;
       setState(() => _message = ActionFeedback.messageOf(error));
     } finally {
-      if (mounted && !silent) {
+      _threadsRequestInFlight = false;
+      if (mounted && generation == _threadListGeneration && !silent) {
         setState(() => _loading = false);
+      }
+      if (mounted && _threadsRefreshPending) {
+        _threadsRefreshPending = false;
+        unawaited(_loadThreads(silent: true));
       }
     }
   }
@@ -118,10 +140,11 @@ class _DriverSupportScreenState extends State<DriverSupportScreen> {
         tripSessionId: widget.tripSessionId,
         routeId: widget.routeId,
       );
-      final thread =
-          SupportThreadModel.fromJson(response['thread'] as Map<String, dynamic>);
+      final thread = SupportThreadModel.fromJson(
+          response['thread'] as Map<String, dynamic>);
       if (!mounted) return;
       await _loadThreads(silent: true);
+      if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => DriverSupportThreadScreen(
@@ -175,8 +198,7 @@ class _DriverSupportScreenState extends State<DriverSupportScreen> {
       next.insert(0, thread);
     }
     next.sort(
-      (left, right) =>
-          (right.lastMessageAt ?? right.createdAt ?? '').compareTo(
+      (left, right) => (right.lastMessageAt ?? right.createdAt ?? '').compareTo(
         left.lastMessageAt ?? left.createdAt ?? '',
       ),
     );
@@ -254,10 +276,14 @@ class DriverSupportThreadScreen extends StatefulWidget {
 class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
   final TextEditingController _composerController = TextEditingController();
   StreamSubscription<Map<String, dynamic>>? _supportSubscription;
+  Timer? _refreshTimer;
   SupportThreadModel? _thread;
   List<SupportMessageModel> _messages = const <SupportMessageModel>[];
   bool _loading = true;
   bool _sending = false;
+  bool _threadRequestInFlight = false;
+  bool _threadRefreshPending = false;
+  int _threadDetailGeneration = 0;
   String? _message;
 
   @override
@@ -271,7 +297,9 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
         if (notificationType == 'support.thread.read') {
           return;
         }
-        final threadId = event['threadId']?.toString() ?? '';
+        final threadId =
+            (event['threadId'] ?? event['id'] ?? event['_id'])?.toString() ??
+                '';
         if (threadId.isNotEmpty && _thread?.id == threadId && mounted) {
           unawaited(_loadThread(silent: true));
         }
@@ -280,16 +308,29 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_loadThread());
     });
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) {
+        unawaited(_loadThread(silent: true));
+      }
+    });
   }
 
   @override
   void dispose() {
+    _threadDetailGeneration++;
+    _refreshTimer?.cancel();
     _composerController.dispose();
     _supportSubscription?.cancel();
     super.dispose();
   }
 
   Future<void> _loadThread({bool silent = false}) async {
+    if (_threadRequestInFlight) {
+      _threadRefreshPending = true;
+      return;
+    }
+    _threadRequestInFlight = true;
+    final generation = ++_threadDetailGeneration;
     if (!silent && mounted) {
       setState(() => _loading = true);
     }
@@ -305,10 +346,11 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
       final parsedMessages = messages is List
           ? messages
               .whereType<Map>()
-              .map((item) => SupportMessageModel.fromJson(item.cast<String, dynamic>()))
+              .map((item) =>
+                  SupportMessageModel.fromJson(item.cast<String, dynamic>()))
               .toList(growable: false)
           : const <SupportMessageModel>[];
-      if (!mounted) return;
+      if (!mounted || generation != _threadDetailGeneration) return;
       setState(() {
         _thread = thread;
         _messages = parsedMessages;
@@ -316,11 +358,16 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
       });
       await SupportService(session.apiClient).markRead(thread.id);
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _threadDetailGeneration) return;
       setState(() => _message = ActionFeedback.messageOf(error));
     } finally {
-      if (mounted && !silent) {
+      _threadRequestInFlight = false;
+      if (mounted && generation == _threadDetailGeneration && !silent) {
         setState(() => _loading = false);
+      }
+      if (mounted && _threadRefreshPending) {
+        _threadRefreshPending = false;
+        unawaited(_loadThread(silent: true));
       }
     }
   }
@@ -364,10 +411,11 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
     if (thread == null) return;
     try {
       final session = context.read<SessionController>();
-      final result = await SupportService(session.apiClient).reopenThread(thread.id);
+      final result =
+          await SupportService(session.apiClient).reopenThread(thread.id);
       if (!mounted) return;
       setState(() {
-        _thread = SupportThreadModel.fromJson(result as Map<String, dynamic>);
+        _thread = SupportThreadModel.fromJson(result);
       });
       await _loadThread(silent: true);
     } catch (error) {
@@ -383,10 +431,11 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
     if (thread == null) return;
     try {
       final session = context.read<SessionController>();
-      final result = await SupportService(session.apiClient).closeThread(thread.id);
+      final result =
+          await SupportService(session.apiClient).closeThread(thread.id);
       if (!mounted) return;
       setState(() {
-        _thread = SupportThreadModel.fromJson(result as Map<String, dynamic>);
+        _thread = SupportThreadModel.fromJson(result);
       });
       await _loadThread(silent: true);
     } catch (error) {
@@ -452,8 +501,9 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
                       borderRadius: BorderRadius.circular(18),
                     ),
                     child: Column(
-                      crossAxisAlignment:
-                          mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                      crossAxisAlignment: mine
+                          ? CrossAxisAlignment.end
+                          : CrossAxisAlignment.start,
                       children: [
                         Text(
                           mine ? 'You' : (message.senderName ?? 'Admin'),
@@ -516,7 +566,8 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
               child: Padding(
                 padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
                 child: _SupportNotice(
-                  message: 'This thread is closed. Reopen it to send another message.',
+                  message:
+                      'This thread is closed. Reopen it to send another message.',
                 ),
               ),
             ),
@@ -610,7 +661,7 @@ class _SupportThreadComposerState extends State<_SupportThreadComposer> {
               ),
               const SizedBox(height: 18),
               DropdownButtonFormField<String>(
-                value: _category,
+                initialValue: _category,
                 decoration: const InputDecoration(
                   labelText: 'Category',
                   border: OutlineInputBorder(),
@@ -835,8 +886,10 @@ class _ThreadSummaryCard extends StatelessWidget {
     final chips = <Widget>[
       _Pill(label: thread.status.replaceAll('_', ' ')),
       _Pill(label: thread.category.replaceAll('_', ' ')),
-      if (thread.tripSessionId?.isNotEmpty == true) _Pill(label: 'Trip ${thread.tripSessionId}'),
-      if (thread.routeId?.isNotEmpty == true) _Pill(label: 'Route ${thread.routeId}'),
+      if (thread.tripSessionId?.isNotEmpty == true)
+        _Pill(label: 'Trip ${thread.tripSessionId}'),
+      if (thread.routeId?.isNotEmpty == true)
+        _Pill(label: 'Route ${thread.routeId}'),
     ];
 
     return Container(

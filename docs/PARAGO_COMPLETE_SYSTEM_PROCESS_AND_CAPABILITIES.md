@@ -1,6 +1,6 @@
 # ParaGO Complete System Process And Capabilities
 
-Last updated: 2026-06-24
+Last updated: 2026-07-29
 
 ## 1. Purpose Of This Document
 
@@ -14,9 +14,9 @@ For focused implementation details, see the related documents listed at the end 
 
 ParaGO is a jeepney transportation operations system. It connects three user groups:
 
-- Admins, who configure and monitor the transport operation.
-- Drivers, who operate jeepney trips and handle passenger requests.
-- Passengers, who book rides, track rides, board, send stop alerts, and unload.
+- Admins, who configure and monitor the transport operation, publish service announcements, and answer support threads.
+- Drivers, who operate jeepney trips, handle passenger requests, receive announcements, and contact admin support.
+- Passengers, who book and track rides, view live jeep details and ETA, receive announcements, and contact admin support.
 
 The repository contains one backend and three Flutter clients:
 
@@ -41,7 +41,9 @@ The system is designed to support a jeepney ride lifecycle:
 8. Passenger rides, watches route/trip status, and can send a digital para/stop alert.
 9. Passenger unloads manually or is automatically marked offboard after separation from the jeepney.
 10. Backend completes the ride session and decreases passenger count.
-11. Admin monitors operations, reports, dashboard metrics, and terminal queue behavior.
+11. Passenger or driver can contact admin support when an issue needs assistance.
+12. Admin can publish targeted service announcements and manage support conversations.
+13. Admin monitors operations, reports, dashboard metrics, and terminal queue behavior.
 
 ## 4. What Must Exist For The System To Work
 
@@ -59,6 +61,8 @@ The backend needs:
 - Route registration through `src/config/apiRoutes.js`.
 - Optional Firebase configuration if Firebase Google login is used.
 - Optional Socket.IO support if realtime behavior is enabled in deployment.
+- `GOOGLE_ROUTES_API_KEY` when Google route previews or passenger traffic ETA are required.
+- Google Cloud billing with the Google Routes API enabled. ParaGO does not require every Google Maps Platform API.
 
 The client apps need:
 
@@ -67,6 +71,9 @@ The client apps need:
 - Local token storage support for persistent login.
 - Internet access to reach the backend.
 - Location permission for driver GPS, passenger location reporting, automatic onboarding, automatic offboarding, route proximity checks, and stop/unload checks.
+- `flutter_map` and the existing OSM tile/map configuration for visual map rendering.
+
+Google Routes API is a backend routing and ETA provider. It does not replace `flutter_map`, and the Google API key must never be embedded in a Flutter client.
 
 ### 4.2 Operational Requirements
 
@@ -121,6 +128,8 @@ The main API groups are:
 - `/ride-sessions`
 - `/stop-alerts`
 - `/notifications`
+- `/announcements`
+- `/support`
 - `/reports`
 
 The backend handles:
@@ -135,6 +144,9 @@ The backend handles:
 - Terminal queue state.
 - Passenger count changes.
 - Notification creation.
+- Traffic-aware route previews and passenger ETA where Google Routes API is configured.
+- Support thread/message authorization and persistence.
+- Announcement scheduling, targeting, revision, dismissal, and lifecycle reconciliation.
 - Optional realtime broadcasting.
 
 ### 5.2 Database Layer
@@ -146,7 +158,7 @@ Important model groups:
 - Identity: `User`, `Passenger`, `Driver`, `Admin`.
 - Transport setup: `Jeepney`, `Route`.
 - Live operations: `TripSession`, `PickupRequest`, `RideSession`, `StopAlert`.
-- Messaging and logs: `Notification`, `ActivityLog`.
+- Messaging and logs: `Notification`, `SupportThread`, `SupportMessage`, `Announcement`, `AnnouncementDismissal`, `ActivityLog`.
 - Security/workflow: `RefreshToken`, `PasswordResetToken`, `AdminLoginChallenge`.
 
 ### 5.3 Auth And Authorization Layer
@@ -166,7 +178,9 @@ The backend can create notifications and publish operational events.
 
 Notifications are durable records that users can fetch later.
 
-Realtime events are optional and allow clients to update faster when Socket.IO is available. When realtime is unavailable or disabled, the apps rely on refresh loops and normal API polling.
+Realtime events are optional and allow clients to update faster when Socket.IO is available. Authenticated sockets join user and role rooms, while passenger/driver map flows can also subscribe to route and trip rooms.
+
+Support and announcement clients reconcile from the API after relevant socket events and after `socket.ready`. Network failures preserve the socket context and schedule another connection attempt after 15 seconds. When realtime remains unavailable, support and announcement views use 30-second polling.
 
 ### 5.5 Client App Layer
 
@@ -180,6 +194,10 @@ All Flutter apps follow the same general pattern:
 6. Display the role-specific home screen.
 7. Use services to call backend APIs.
 8. Use cached data and refresh loops where appropriate.
+9. Keep core trip/dashboard loading independent from best-effort announcement loading.
+10. Reconcile support and announcements after realtime events and reconnects.
+
+GET requests can be coalesced and cached according to their volatility. Support, announcement, and notification mutations invalidate only their own cache groups. Cross-domain trip and booking mutations continue to clear the broader cache. A cache generation prevents an older GET response from writing stale data after a newer mutation.
 
 ## 6. Core Data Models
 
@@ -449,6 +467,66 @@ How it is used:
 - Admin dashboard can show recent activity.
 - Operational actions can be reviewed later.
 
+### 6.15 SupportThread
+
+The `SupportThread` model represents a two-way support conversation between one passenger or driver and the admin team.
+
+It stores:
+
+- Owning user and user role.
+- Optional assigned admin.
+- Subject and category.
+- Status: `open`, `awaiting_admin`, `awaiting_user`, `resolved`, or `closed`.
+- Optional trip, pickup request, ride session, and route context.
+- Last-message preview and sender role.
+- Separate user/admin unread counts and read timestamps.
+- Resolution, closure, and reopening audit fields.
+
+Only the owner and admins can access a thread. Closed threads must be reopened before another message is accepted.
+
+### 6.16 SupportMessage
+
+The `SupportMessage` model stores one text message in a support thread.
+
+It stores:
+
+- Thread reference.
+- Sender identity.
+- Sender role: `PASSENGER`, `DRIVER`, or `ADMIN`.
+- Text body.
+- Creation timestamp.
+
+Version 1 is text-only. File attachments and voice notes are not part of the current implementation.
+
+### 6.17 Announcement
+
+The `Announcement` model stores one role-targeted service notice.
+
+It stores:
+
+- Title and body.
+- Category: `service_change`, `disruption`, `maintenance`, `safety`, or `general`.
+- Severity: `info`, `warning`, or `critical`.
+- Passenger, driver, or shared audiences.
+- Status: `scheduled`, `published`, `expired`, or `archived`.
+- Revision number.
+- UTC start and optional expiry timestamps.
+- Creator and last-editor audit fields.
+
+Expired and archived announcements are immutable. An expired announcement can be duplicated through the create flow as a new record with revision `1`.
+
+### 6.18 AnnouncementDismissal
+
+The `AnnouncementDismissal` model records that a user dismissed a specific announcement revision.
+
+The unique identity is:
+
+- Announcement.
+- User.
+- Revision.
+
+A later published edit increments the revision and becomes visible again even if the user dismissed an older revision.
+
 ## 7. Authentication And One-Time Login
 
 ### 7.1 What The Feature Does
@@ -569,6 +647,8 @@ Admins can manage:
 - Route terminal settings.
 - Dashboard monitoring.
 - Terminal queue dispatch board.
+- Shared passenger/driver support inbox.
+- Service announcement workspace.
 - Reports.
 - Recent activity.
 
@@ -706,6 +786,42 @@ Reports are useful for:
 - Checking boarding and alert volumes.
 - Understanding route usage.
 - Supporting operational decisions.
+
+### 8.10 Support Inbox
+
+The admin support workspace is a shared inbox for passenger and driver concerns.
+
+Admins can:
+
+- Filter by status, category, user role, and closed state.
+- Select a thread and read its full message history.
+- Reply to the user.
+- Assign or take ownership of a thread.
+- Resolve, close, or reopen a thread.
+- Review optional trip, pickup request, ride session, and route context.
+
+The desktop layout uses a bounded, lazy inbox list and a separate detail pane. Narrow web widths show the list first and open detail in a sheet. Long subjects, previews, and complete messages wrap within constrained layouts to prevent render overflow and browser freezes.
+
+Realtime events refresh the inbox quickly. A silent 30-second API refresh remains active as fallback, and request generations prevent older responses from replacing newer filter or thread state.
+
+### 8.11 Announcement Workspace
+
+Admins use the announcement workspace to create service changes, disruptions, maintenance notices, safety notices, and general updates.
+
+Admins can:
+
+- Target passengers, drivers, or both.
+- Publish immediately or schedule a UTC start time from browser-local controls.
+- Set an optional expiry.
+- Choose info, warning, or critical severity.
+- Filter and paginate announcement history.
+- Edit scheduled or published announcements.
+- Duplicate an expired announcement into a new record.
+- Archive any non-archived announcement.
+
+The admin API uses a default page size of `25` and a maximum of `50`. List rows show bounded previews; the complete body is rendered only in the selected detail pane.
+
+Critical create/update operations require `confirmCritical: true`. Archiving a currently active announcement requires `confirmActiveArchive: true`. The UI sends those flags only after the admin accepts the matching confirmation dialog.
 
 ## 9. Terminal Settings
 
@@ -1185,6 +1301,31 @@ Expected effects:
 - Terminal queue state should no longer be active.
 - Remaining ride/request state must be handled according to backend rules.
 
+### 11.14 Driver Support
+
+Drivers can open support from the driver app for:
+
+- Complaints.
+- Lost items.
+- Fare concerns.
+- Trip issues.
+- Safety concerns.
+- General help.
+
+A thread may include the current trip or route context. The driver can send multiple text messages, read admin replies, close the thread, and reopen it when more assistance is needed.
+
+Support updates arrive through `support.*` socket events when available. The screen also refreshes every 30 seconds, coalesces overlapping refreshes, and ignores stale responses.
+
+### 11.15 Driver Announcements
+
+The driver app shows active driver-targeted announcements:
+
+- The newest active announcement on the home view.
+- All active announcements before ordinary notifications in the notifications area.
+- Teal/neutral styling for info, amber for warning, and red for critical.
+
+Dismissal applies only to the revision the driver saw. A stale revision response triggers an immediate refetch instead of hiding updated content.
+
 ## 12. Passenger Process
 
 ### 12.1 Passenger Registration And Login
@@ -1283,7 +1424,17 @@ Passengers can tap a visible jeepney marker to view:
 - Available seats.
 - Vehicle location freshness.
 
-The passenger app refreshes the selected jeep ETA every 30 seconds and after significant realtime movement. ETA is unavailable when Google routing is unavailable, the vehicle location is stale, or the jeepney has already passed the pickup point; no average-speed fallback is shown.
+The backend owns the ETA origin and resolves it from the active trip's authoritative jeepney location. It rejects inactive trips, invalid destinations, vehicle locations older than 60 seconds, and boarding points the jeepney has already passed.
+
+The jeep and destination are projected onto the trip route snapshot. The remaining route is sampled into Google via-points so the result follows the assigned jeepney route instead of proposing a shortcut or U-turn. Google is called with `TRAFFIC_AWARE_OPTIMAL`.
+
+The passenger app refreshes the selected jeep ETA:
+
+- Immediately after marker selection.
+- Every 30 seconds while the jeep remains selected.
+- After at least 100 meters of realtime movement when the previous request is at least 10 seconds old.
+
+Identical trip/destination calculations are rounded to approximately 10 meters, cached, and coalesced for 25 seconds by the backend. ETA is unavailable when Google routing is unavailable, the vehicle location is stale, or the jeepney has already passed the pickup point; no average-speed fallback is shown.
 
 ### 12.7 Request Submission
 
@@ -1353,6 +1504,29 @@ Completion can be:
 
 - Manual.
 - Automatic by separation.
+
+### 12.15 Passenger Support
+
+Passengers can create a two-way admin support thread for complaints or help. Optional booking and ride context can include the passenger-owned pickup request, ride session, trip session, or route.
+
+The passenger can:
+
+- Create a categorized thread.
+- Send and receive multiple text messages.
+- See unread and status changes.
+- Close or reopen the conversation.
+
+The support list and detail screen use realtime updates, 30-second polling fallback, request coalescing, and generation guards. A failed support refresh does not stop booking, maps, ride tracking, or other dashboard operations.
+
+### 12.16 Passenger Announcements
+
+The passenger app shows active passenger-targeted announcements:
+
+- The newest active card on the main home view.
+- All active cards before ordinary notices.
+- Category, title, complete or compact body, relative publication time, optional expiry, and severity styling.
+
+Announcement loading is best-effort and does not participate in the blocking dashboard `Future.wait`. The app keeps the last successful snapshot when possible and shows no blocking announcement error on first-load failure.
 
 ## 13. Pickup Request Lifecycle
 
@@ -2175,10 +2349,29 @@ Realtime is optional.
 
 When enabled:
 
-- Backend emits socket events.
-- Clients can subscribe to route/trip/user contexts.
+- The backend authenticates the socket using the user's access token.
+- Every socket joins `user:<userId>` and `role:<role>` rooms.
+- Clients can subscribe to route and trip rooms where needed.
 - Passenger maps can update quickly.
 - Admin dashboard can refresh faster.
+- Support and announcement views can reconcile immediately.
+
+Important events include:
+
+- `notification.created`
+- `ops.changed`
+- `jeepney.location.updated`
+- `support.thread.created`
+- `support.message.created`
+- `support.thread.updated`
+- `support.thread.read`
+- `announcement.published`
+- `announcement.updated`
+- `announcement.archived`
+
+Support event payloads include both the event name and canonical `threadId`. The Flutter clients also accept older payloads where the thread identifier was returned as `id` or `_id`.
+
+When the backend emits `socket.ready`, support and announcement clients refetch their API state. A network failure does not erase route/trip subscription intent. Clients retry the same socket after 15 seconds and restore route/trip subscriptions after connection.
 
 ### 21.5 Polling Fallback
 
@@ -2187,6 +2380,9 @@ When realtime is disabled or unavailable:
 - Apps continue to use API refresh loops.
 - Users may see updates with slight delay.
 - Core operations still work through REST endpoints.
+- Support lists and open thread details refresh silently every 30 seconds.
+- Announcement feeds reconcile on their existing 30-second refresh cycle.
+- Overlapping support refreshes are coalesced and one pending refresh is retained.
 
 ### 21.6 Driver Location Broadcast
 
@@ -2226,6 +2422,59 @@ and makes the updated announcement visible again.
 
 Scheduled and expired states are reconciled every 30 seconds, and active
 queries also enforce start and expiry times directly.
+
+Lifecycle transitions use atomic conditional updates so multiple backend instances cannot publish or expire the same record twice. Admin edits to expired or archived records are rejected.
+
+Dismiss requests must include the revision shown to the user:
+
+```json
+{
+  "revision": 3
+}
+```
+
+If the revision is stale, the backend returns `409` with the current revision. The client removes the old optimistic card and refetches instead of restoring content that has already been superseded.
+
+Announcement loading remains independent from core passenger and driver dashboard loading. Endpoint failure keeps the last successful snapshot or uses an empty first-load result without showing a blocking error.
+
+### 21.9 Support Chat Realtime
+
+Support chat is passenger-to-admin and driver-to-admin only. It is not a general user-to-user chat system.
+
+The normal flow is:
+
+1. Passenger or driver creates a thread with category, subject, initial message, and optional operational context.
+2. Backend validates ownership and stores the thread and first message.
+3. Admin role sockets and the owner socket receive `support.thread.created`.
+4. Either side sends another message.
+5. Backend updates last-message, unread, and lifecycle fields.
+6. Both sides receive `support.message.created` and refetch the thread.
+7. Read, assignment, resolution, close, and reopen actions emit thread updates.
+
+Direct support socket payloads and `ops.changed` use the same canonical thread identifier. User-specific durable notifications may still be generated for support replies, but the support conversation itself is stored in `SupportThread` and `SupportMessage`.
+
+### 21.10 Client Cache And Race Protection
+
+The three Flutter clients use an API cache for selected GET requests:
+
+- Routes: up to 6 hours.
+- Active/mine trips: 8 seconds.
+- Notifications: 20 seconds.
+- Pickup, ride, and stop-alert views: 10 seconds.
+- Other cache-enabled GET requests: 30 seconds by default.
+
+Concurrent identical GET requests are coalesced. An expired cached response may be used as a network-failure fallback when that request opted into caching.
+
+Mutation behavior is intentionally split:
+
+- Support mutations invalidate only support cache entries.
+- Announcement mutations invalidate only announcement entries.
+- Notification mutations invalidate only notification entries.
+- Cross-domain operations such as trips and bookings clear the broader cache.
+
+Every successful mutation increments a cache generation. A GET that started before that mutation may still return to its caller, but it cannot write its older response back into the cache.
+
+Logout clears all memory and persisted API cache entries before another account can use the app.
 
 ## 22. Reports And Monitoring
 
@@ -2427,6 +2676,15 @@ Capabilities:
 - Fare configuration.
 - Terminal settings update through route payload.
 
+Admin route preview routing supports normalized navigation sources:
+
+- `google`
+- `tomtom`
+- `openstreetmap`
+- `cached`
+
+When `GOOGLE_ROUTES_API_KEY` is configured, route preview tries Google traffic-aware routing first. Google results populate existing `durationSeconds`, `rawDurationSeconds`, and `trafficDelayInSeconds` fields. Server-side Google failures fall back to TomTom when `TOMTOM_API_KEY` is configured. Existing OSM/OSRM client route generation remains a separate compatibility path. All clients continue to draw the returned geometry with `flutter_map`.
+
 ### 23.8 Trips
 
 API group:
@@ -2447,6 +2705,24 @@ Capabilities:
 - Passenger-only live traffic ETA through `POST /trips/:tripId/passenger-eta`.
 
 The live ETA endpoint derives the origin from the active jeepney location, follows the trip route using pass-through waypoints, returns the authoritative plate number, and caches matching requests for 25 seconds. The Google API key remains server-side.
+
+Response data includes:
+
+```json
+{
+  "tripId": "...",
+  "jeepneyId": "...",
+  "plateNumber": "...",
+  "distanceMeters": 0,
+  "durationSeconds": 0,
+  "rawDurationSeconds": 0,
+  "trafficDelayInSeconds": 0,
+  "source": "google",
+  "vehicleLocationLastSeenAt": "...",
+  "calculatedAt": "...",
+  "expiresAt": "..."
+}
+```
 
 ### 23.9 Pickup Requests
 
@@ -2540,6 +2816,70 @@ Capabilities:
 - Trip activity reports.
 - Route demand reports.
 - Passenger flow reports.
+
+### 23.15 Announcements
+
+API group:
+
+```http
+/announcements
+```
+
+Passenger and driver endpoints:
+
+```http
+GET /announcements/active
+POST /announcements/:id/dismiss
+```
+
+Admin endpoints:
+
+```http
+GET /announcements/admin
+POST /announcements/admin
+PATCH /announcements/admin/:id
+POST /announcements/admin/:id/archive
+```
+
+Capabilities:
+
+- Role-targeted active list.
+- Revision-specific dismissal.
+- Paginated and filtered admin history.
+- Immediate or scheduled creation.
+- Scheduled/published editing with revision increment.
+- Atomic publish/expiry reconciliation.
+- Critical-publication and active-archive confirmations.
+- Archive without hard deletion.
+
+### 23.16 Support
+
+API group:
+
+```http
+/support
+```
+
+Passenger and driver endpoints:
+
+```http
+POST /support/threads
+GET /support/threads
+GET /support/threads/:id/messages
+POST /support/threads/:id/messages
+PATCH /support/threads/:id/read
+PATCH /support/threads/:id/close
+PATCH /support/threads/:id/reopen
+```
+
+Admin capabilities add:
+
+- Shared inbox listing and filters.
+- Assignment.
+- Resolution.
+- Access to passenger and driver threads.
+
+Ownership rules prevent one passenger or driver from reading another user's support thread.
 
 ## 24. Runtime Configuration
 
@@ -2669,9 +3009,26 @@ These support:
 - SMS API integration.
 - Route/geocoding provider integrations where used.
 
+`GOOGLE_ROUTES_API_KEY` is used only by the backend. In Google Cloud:
+
+1. Select the intended Google Cloud project.
+2. Attach a billing account.
+3. Enable **Routes API**.
+4. Create an API key.
+5. Restrict the key to Routes API and, where practical, the backend's server/network environment.
+6. Store it as the backend environment variable.
+
+Do not select every Google Maps Platform API. ParaGO's current Google traffic route and ETA integration requires Routes API; unrelated APIs add unnecessary key exposure and quota surface.
+
 ### 24.11 Client Build-Time Configuration
 
 The Flutter clients need a reachable API base URL.
+
+Important client defines/configuration include:
+
+- API base URL.
+- Realtime enabled/disabled flag.
+- Socket connection target derived from the API URL.
 
 If the API URL is wrong:
 
@@ -2680,6 +3037,29 @@ If the API URL is wrong:
 - Route/trip data cannot load.
 - Location automation cannot report.
 - Realtime/polling cannot update.
+
+If a newly added API such as `/announcements/admin` returns `404` from DigitalOcean while it exists locally, the deployed backend is older than the local source. Commit/push the backend changes and redeploy DigitalOcean before rebuilding clients around that endpoint.
+
+### 24.12 Maps, Branding, And Release Artifacts
+
+ParaGO keeps `flutter_map` for map rendering in admin, driver, and passenger clients. Google Routes API supplies route intelligence; it does not provide the map widget.
+
+The Android apps use:
+
+- App labels `SAKAY Driver` and `SAKAY Passenger`.
+- SAKAY launcher icons.
+- SAKAY centered native splash images.
+
+Current release artifact names are:
+
+```text
+dist/sakay-driver.apk
+dist/sakay-passenger.apk
+```
+
+These files are build artifacts, not live-updating packages. Rebuild and replace both APKs after mobile source changes before distributing them.
+
+The checked-in native Android splash background is currently `#F8F4EA`. If the approved branding requires dark green, update both apps' `sakay_splash_background`, rebuild both release APKs, and visually verify the native startup frame before distribution.
 
 ## 25. Testing And Verification
 
@@ -2709,7 +3089,16 @@ Current documented coverage includes:
 - API response format.
 - Trip state rules.
 - Notification payload rules.
+- Passenger traffic ETA destination validation, route sampling, passed-pickup rejection, and request cache keys.
+- Announcement payload and timing status rules.
 - Rate limit configuration.
+
+The current backend command runs:
+
+- 62 backend unit tests.
+- 6 isolated announcement HTTP/database integration tests using in-memory MongoDB.
+
+The announcement integration tests do not connect to or modify the configured development database.
 
 ### 25.2 One-Time Login Tests
 
@@ -2777,12 +3166,51 @@ Use at least one passenger device and one driver device.
 16. Confirm automatic offboarding after repeated/sustained separation.
 17. Confirm driver passenger count decreases.
 18. Disable GPS or internet and confirm manual boarding/unload fallback remains usable.
+19. Tap a visible jeep and confirm plate, seats, freshness, distance, and traffic ETA.
+20. Confirm ETA uses the pickup pin before phone GPS.
+21. Create a passenger support thread and exchange messages with admin.
+22. Create a driver support thread and exchange messages with admin.
+23. Disconnect realtime temporarily and confirm support refreshes through polling.
+24. Restore network and confirm socket reconnection reconciles support and announcements.
+25. Publish passenger-only, driver-only, and shared announcements.
+26. Confirm audience isolation and severity styling.
+27. Dismiss an announcement, edit it as admin, and confirm the new revision reappears.
+28. Archive an active announcement and confirm cards disappear.
+29. Disable the announcement endpoint temporarily and confirm core dashboards still load.
+30. Test long support and announcement messages at desktop and narrow widths.
 
-### 25.8 Known Local Tooling Note
+### 25.8 Announcement And Support Verification
 
-During recent implementation work, backend tests passed, but local Flutter/Dart formatting or analysis commands timed out in the workspace. This appears to be a local tooling issue rather than a documented backend test failure.
+Announcement verification includes:
 
-When verifying Flutter changes, rerun Flutter tooling in a stable local environment.
+- Authorization and audience isolation.
+- Required critical and active-archive confirmation flags.
+- Revision-specific dismissals and `409` stale-revision behavior.
+- Pagination, filters, ordering, and maximum page size.
+- Timestamp/range validation and immutable expired state.
+- Concurrent scheduler reconciliation.
+
+Support verification should include:
+
+- Owner/admin authorization boundaries.
+- Passenger and driver thread creation.
+- Message, read, assignment, resolve, close, and reopen flows.
+- Canonical `threadId` in realtime payloads.
+- Reconnect reconciliation and 30-second polling.
+- Long-message wrapping and narrow-screen behavior.
+- Dashboard continuity when support endpoints fail.
+
+### 25.9 Known Local Tooling Note
+
+During the 2026-07-29 realtime/cache update:
+
+- Backend unit and announcement integration tests passed.
+- Targeted Dart analysis for changed passenger, driver, and admin files reported no issues.
+- `git diff --check` passed.
+- Focused Flutter widget-test commands could not acquire the Flutter SDK lock because other Flutter sessions were already running.
+- Direct Dart commands completed analysis but the workspace sandbox prevented Dart from updating its global telemetry timestamp outside the repository.
+
+Rerun focused Flutter widget tests after existing Flutter sessions release the SDK lock.
 
 ## 26. What Can Fail And What To Check
 
@@ -2882,6 +3310,61 @@ Check:
 - Are driver/admin views showing stale cached data?
 - Does backend trip occupancy match ride sessions?
 
+### 26.9 Passenger ETA Is Unavailable
+
+Check:
+
+- `GOOGLE_ROUTES_API_KEY` exists in the deployed backend environment.
+- Google Cloud billing is active.
+- Routes API is enabled for that key.
+- Trip and jeepney are active.
+- Jeepney location is no older than 60 seconds.
+- Destination coordinates are valid.
+- Pickup/destination has not already been passed along the route snapshot.
+- Google quota or API restrictions are not rejecting the server.
+
+The passenger ETA intentionally returns unavailable instead of an average-speed fallback.
+
+### 26.10 Support Chat Does Not Update
+
+Check:
+
+- `/support` routes are present in the deployed backend.
+- User is the thread owner or an admin.
+- Thread is not closed when sending a message.
+- Socket is authenticated and joined to the correct user/role room.
+- Support event contains `threadId`, `id`, or `_id`.
+- The 30-second API refresh can reach the backend.
+- A slower request is not being discarded correctly by a newer generation.
+
+Support failure must not freeze maps, trips, bookings, or dashboard navigation.
+
+### 26.11 Announcements Do Not Appear
+
+Check:
+
+- Announcement audience matches the current role.
+- Status and current UTC time make it active.
+- User has not dismissed the current revision.
+- Announcement is not archived or expired.
+- `/announcements/active` is deployed and reachable.
+- Socket role room received the event or the next polling refresh completed.
+- Critical confirmation was included when required.
+
+Ordinary notification unread counts do not include announcements.
+
+### 26.12 Admin Endpoint Returns 404
+
+If the browser requests an endpoint that exists locally but production returns `404`, check:
+
+- Latest backend changes were committed and pushed.
+- DigitalOcean deployed the expected branch/commit.
+- Build and start commands point to this repository's `src/server.js`.
+- `/api/v1` prefix and compatibility route registration are active.
+- The service was restarted after environment/configuration changes.
+
+This is normally deployment version drift, not a Flutter rendering problem.
+
 ## 27. Related Documents
 
 - [ONE_TIME_LOGIN.md](ONE_TIME_LOGIN.md)
@@ -2900,7 +3383,7 @@ Check:
 
 ## 28. Final Summary
 
-ParaGO is a multi-app jeepney operations platform. Admins configure the system, drivers operate trips, and passengers request and complete rides. The backend coordinates identity, route data, trip state, pickup requests, boarding, ride sessions, stop alerts, notifications, terminal queue behavior, passenger counts, and reports.
+ParaGO is a multi-app jeepney operations platform. Admins configure the system, publish announcements, answer support conversations, and monitor operations. Drivers operate trips and contact support. Passengers request and complete rides, inspect jeep plate/seat/location details, receive Google traffic-aware ETA, and contact support. The backend coordinates identity, route data, trip state, pickup requests, boarding, ride sessions, stop alerts, notifications, announcements, support threads, terminal queue behavior, passenger counts, routing intelligence, and reports.
 
 The most important operational chain is:
 
@@ -2914,6 +3397,8 @@ The most important operational chain is:
 8. Passenger rides and can send stop alert.
 9. Passenger unloads manually or automatically.
 10. Passenger count decreases.
-11. Admin monitors operations and reports.
+11. Passenger and driver receive targeted service announcements.
+12. Passenger or driver can open a support thread when assistance is needed.
+13. Admin replies, resolves operational concerns, and monitors operations and reports.
 
-Manual fallback remains important throughout the system. Automatic features improve convenience and accuracy, but they intentionally pause when GPS, internet, or state is not reliable enough to make a safe decision.
+Manual and polling fallbacks remain important throughout the system. Automatic features improve convenience and accuracy, but they intentionally pause when GPS, internet, provider availability, or state is not reliable enough to make a safe decision. Announcement or support failures are isolated from core trip, booking, map, and driver operations.

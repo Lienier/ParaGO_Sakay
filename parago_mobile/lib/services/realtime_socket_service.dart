@@ -22,6 +22,7 @@ class RealtimeSocketService {
   String? _currentSocketBaseUrl;
   String? _currentToken;
   bool _networkFailureReported = false;
+  Timer? _retryTimer;
   final Set<String> _subscribedTrips = <String>{};
 
   Stream<Map<String, dynamic>> get notificationCreatedStream =>
@@ -97,6 +98,8 @@ class RealtimeSocketService {
     );
 
     socket.onConnect((_) {
+      _retryTimer?.cancel();
+      _retryTimer = null;
       _networkFailureReported = false;
       debugPrint('Realtime socket connected.');
       _restoreSubscriptions();
@@ -129,6 +132,7 @@ class RealtimeSocketService {
     });
     socket.on('socket.ready', (payload) {
       debugPrint('Realtime socket ready: $payload');
+      _emitReconciliationEvent(payload);
     });
     socket.on('notification.created', (payload) {
       final normalized = _normalizePayload(payload);
@@ -148,30 +152,16 @@ class RealtimeSocketService {
         _pickupRequestController.add(normalized);
       }
     });
-    socket.on('support.thread.created', (payload) {
-      final normalized = _normalizePayload(payload);
-      if (normalized.isNotEmpty) {
-        _supportController.add(normalized);
-      }
-    });
-    socket.on('support.message.created', (payload) {
-      final normalized = _normalizePayload(payload);
-      if (normalized.isNotEmpty) {
-        _supportController.add(normalized);
-      }
-    });
-    socket.on('support.thread.updated', (payload) {
-      final normalized = _normalizePayload(payload);
-      if (normalized.isNotEmpty) {
-        _supportController.add(normalized);
-      }
-    });
-    socket.on('support.thread.read', (payload) {
-      final normalized = _normalizePayload(payload);
-      if (normalized.isNotEmpty) {
-        _supportController.add(normalized);
-      }
-    });
+    for (final eventName in const [
+      'support.thread.created',
+      'support.message.created',
+      'support.thread.updated',
+      'support.thread.read',
+    ]) {
+      socket.on(eventName, (payload) {
+        _emitSupportEvent(eventName, payload);
+      });
+    }
     for (final eventName in const [
       'announcement.published',
       'announcement.updated',
@@ -191,6 +181,8 @@ class RealtimeSocketService {
 
   void disconnect() {
     final socket = _socket;
+    _retryTimer?.cancel();
+    _retryTimer = null;
     _socket = null;
     _currentSocketBaseUrl = null;
     _currentToken = null;
@@ -249,6 +241,38 @@ class RealtimeSocketService {
     return const <String, dynamic>{};
   }
 
+  void _emitSupportEvent(String eventName, dynamic payload) {
+    final normalized = _normalizePayload(payload);
+    if (normalized.isEmpty) return;
+
+    final nestedPayload = _normalizePayload(normalized['payload']);
+    final nestedThread = _normalizePayload(normalized['thread']);
+    final threadId = normalized['threadId'] ??
+        normalized['id'] ??
+        normalized['_id'] ??
+        nestedPayload['threadId'] ??
+        nestedThread['id'] ??
+        nestedThread['_id'];
+    _supportController.add({
+      ...normalized,
+      'eventName': eventName,
+      'notificationType': eventName,
+      if (threadId != null && threadId.toString().trim().isNotEmpty)
+        'threadId': threadId.toString(),
+    });
+  }
+
+  void _emitReconciliationEvent(dynamic payload) {
+    final normalized = _normalizePayload(payload);
+    final event = <String, dynamic>{
+      ...normalized,
+      'eventName': 'socket.ready',
+      'notificationType': 'socket.ready',
+    };
+    _supportController.add(event);
+    _announcementController.add(event);
+  }
+
   String _socketBaseUrl(String apiBaseUrl) {
     final trimmed = apiBaseUrl.trim();
     final uri = Uri.tryParse(trimmed);
@@ -287,11 +311,21 @@ class RealtimeSocketService {
 
     if (!_networkFailureReported) {
       debugPrint(
-        'Realtime socket stopped after $source network failure. Waiting for an explicit reconnect.',
+        'Realtime socket hit a $source network failure. Retrying in the background.',
       );
       _networkFailureReported = true;
     }
-    disconnect();
+    _scheduleReconnect(socket);
+  }
+
+  void _scheduleReconnect(io.Socket socket) {
+    if (_retryTimer?.isActive == true) return;
+    _retryTimer = Timer(const Duration(seconds: 15), () {
+      _retryTimer = null;
+      if (!identical(_socket, socket) || socket.connected) return;
+      _networkFailureReported = false;
+      socket.connect();
+    });
   }
 
   bool _looksLikeConnectivityIssue(Object error) {
