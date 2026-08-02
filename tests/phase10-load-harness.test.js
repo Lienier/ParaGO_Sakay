@@ -109,6 +109,8 @@ test('k6 workload has production and live Google safety interlocks', () => {
   assert.match(source, /p\(95\)<250/);
   assert.match(source, /p\(95\)<500/);
   assert.match(source, /rate<0\.01/);
+  assert.match(source, /randomUuidV4\(\)/);
+  assert.doesNotMatch(source, /streamId: `phase10-/);
 });
 
 test('DigitalOcean staging spec isolates data, jobs, source branch, and namespace', () => {

@@ -55,6 +55,13 @@ const headersFor = (token) => ({
   'Content-Type': 'application/json',
 });
 
+const randomUuidV4 = () =>
+  'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = character === 'x' ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+
 const driverState = new Map();
 
 export function driverTraffic() {
@@ -62,7 +69,7 @@ export function driverTraffic() {
   const account = manifest.drivers[index];
   const state = driverState.get(__VU) || {
     sequence: 0,
-    streamId: `phase10-${index}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    streamId: randomUuidV4(),
   };
   state.sequence += 1;
   driverState.set(__VU, state);
