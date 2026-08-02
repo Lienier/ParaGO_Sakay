@@ -426,6 +426,25 @@ test('active trips can be route-scoped without returning full populated routes',
   assert.equal(invalid.status, 400, invalid.text);
 });
 
+test('account suspension immediately invalidates cached authentication', async () => {
+  const fixture = await seedCoreFixture();
+  const warm = await request(app)
+    .get('/api/v1/routes')
+    .set(auth(fixture.tokens.passenger));
+  assert.equal(warm.status, 200, warm.text);
+
+  const suspended = await request(app)
+    .patch(`/api/v1/users/${fixture.users.passenger._id}/status`)
+    .set(auth(fixture.tokens.admin))
+    .send({ status: 'suspended' });
+  assert.equal(suspended.status, 200, suspended.text);
+
+  const rejected = await request(app)
+    .get('/api/v1/routes')
+    .set(auth(fixture.tokens.passenger));
+  assert.equal(rejected.status, 401, rejected.text);
+});
+
 test('route batcher coalesces 50 jeep updates into one bounded route event', () => {
   const batches = [];
   let tick = 0;

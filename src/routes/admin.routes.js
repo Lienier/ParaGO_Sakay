@@ -11,6 +11,9 @@ const TripSession = require('../models/tripSession');
 const ReportMetadata = require('../models/reportMetadata');
 const ActivityLog = require('../models/activityLog');
 const User = require('../models/user');
+const {
+  invalidateAuthenticatedUser,
+} = require('../services/authUserCache.service');
 const Driver = require('../models/driver');
 const Jeepney = require('../models/jeepney');
 const RouteModel = require('../models/route');
@@ -658,6 +661,7 @@ router.patch(
       if (!updatedUser) {
         throw new ApiError(404, 'Driver user account not found');
       }
+      await invalidateAuthenticatedUser(updatedUser._id);
     }
 
     if (updates.assignedRouteId) {

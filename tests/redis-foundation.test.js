@@ -22,6 +22,11 @@ const {
   invalidateCachedRead,
   resetReadCacheForTests,
 } = require('../src/services/readCache.service');
+const {
+  authUserCacheKey,
+  getOrLoadAuthenticatedUser,
+  invalidateAuthenticatedUser,
+} = require('../src/services/authUserCache.service');
 
 class FakeRedisClient {
   constructor() {
@@ -141,6 +146,33 @@ test('read-through cache coalesces MongoDB fallback while Redis is unavailable',
   );
   assert.equal(loads, 1);
   assert.equal(getRedisHealth().status, 'unhealthy');
+});
+
+test('authenticated users are briefly cached and explicitly invalidated', async () => {
+  const fake = new FakeRedisClient();
+  injectRedisClientForTests({ testClient: fake });
+  let loads = 0;
+  const loader = async () => {
+    loads += 1;
+    return { _id: 'user-1', role: 'PASSENGER', status: 'active' };
+  };
+
+  const firstWave = await Promise.all(
+    Array.from({ length: 3 }, () =>
+      getOrLoadAuthenticatedUser({ userId: 'user-1', loader })
+    )
+  );
+  assert.equal(loads, 1);
+  assert.equal(firstWave[0].value.status, 'active');
+  assert.equal(fake.setCalls.at(-1).options.EX, 5);
+  assert.equal(
+    authUserCacheKey('user-1'),
+    `${namespace}:auth:user:user-1`
+  );
+
+  await invalidateAuthenticatedUser('user-1');
+  await getOrLoadAuthenticatedUser({ userId: 'user-1', loader });
+  assert.equal(loads, 2);
 });
 
 test('Redis keys are environment-namespaced and reject empty parts', () => {

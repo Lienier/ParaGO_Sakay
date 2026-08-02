@@ -7,6 +7,9 @@ const ApiError = require('../utils/apiError');
 const { ok } = require('../utils/response');
 const { PASSENGER, DRIVER, ADMIN } = require('../constants/roles');
 const { ensureObjectId } = require('../utils/validators');
+const {
+  invalidateAuthenticatedUser,
+} = require('../services/authUserCache.service');
 
 const router = express.Router();
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -67,6 +70,7 @@ router.patch(
     if (!user) throw new ApiError(404, 'User not found');
     user.status = status;
     await user.save();
+    await invalidateAuthenticatedUser(user._id);
     return ok(res, user, 'User status updated');
   })
 );
@@ -101,6 +105,7 @@ router.put(
     }
 
     await user.save();
+    await invalidateAuthenticatedUser(user._id);
     return ok(res, { fullName: user.fullName, email: user.email }, 'Profile updated');
   })
 );
@@ -115,6 +120,7 @@ router.delete(
     if (!user) throw new ApiError(404, 'User not found');
     user.status = 'deactivated';
     await user.save();
+    await invalidateAuthenticatedUser(user._id);
     return ok(res, null, 'User deactivated');
   })
 );
