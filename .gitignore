@@ -13,3 +13,11 @@ artifacts/
 .env*
 .tools/
 .secure-backups/
+
+infra/aws/**/.terraform/
+infra/aws/**/*.tfstate
+infra/aws/**/*.tfstate.*
+infra/aws/**/*.tfplan
+infra/aws/**/backend.hcl
+infra/aws/**/*.tfvars
+infra/aws/**/*.tfvars.json

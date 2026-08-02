@@ -1,0 +1,39 @@
+name: Deploy AWS Staging
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: aws-staging-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-1
+  AWS_STAGING_DEPLOY_ROLE_ARN: arn:aws:iam::793140950230:role/parago-github-staging-deploy
+
+jobs:
+  deploy:
+    name: Deploy backend to AWS staging
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_STAGING_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy through SSM
+        run: bash scripts/deploy-aws-staging.sh

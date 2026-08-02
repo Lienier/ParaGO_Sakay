@@ -47,16 +47,19 @@ Register this Android app in your Google/Firebase project:
   - `lib/firebase_options.dart`
   - `android/app/google-services.json`
 
-Run the app with the backend URL:
+Run the app with the AWS backend URL:
 
 ```bash
 flutter run -d <device> \
-  --dart-define=PARAGO_API_BASE_URL=https://paragosakay-app-qulmw.ondigitalocean.app/api/v1 \
+  --dart-define=PARAGO_API_BASE_URL=https://<aws-cloudfront-domain>/api/v1 \
+  --dart-define=PARAGO_API_BASE_URLS=https://paragosakay-app-qulmw.ondigitalocean.app/api/v1 \
   --dart-define=ORS_API_KEY=<your-openrouteservice-key> \
   --dart-define=PARAGO_ENABLE_REALTIME=false
 ```
 
 The app no longer uses a bundled `.env`. Pass app config through `--dart-define`.
+DigitalOcean remains available as a fallback URL; set `PARAGO_API_BASE_URL`
+back to the DigitalOcean URL when you need to temporarily restore it.
 
 Backend note:
 

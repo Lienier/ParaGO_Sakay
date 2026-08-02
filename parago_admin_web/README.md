@@ -41,11 +41,12 @@ Register the web app in your Google/Firebase project as needed for your setup.
 - Generated files:
   - `lib/firebase_options.dart`
 
-Run the app with the backend URL:
+Run the app with the AWS backend URL:
 
 ```bash
 flutter run -d chrome \
-  --dart-define=PARAGO_API_BASE_URL=https://paragosakay-app-qulmw.ondigitalocean.app/api/v1 \
+  --dart-define=PARAGO_API_BASE_URL=https://<aws-cloudfront-domain>/api/v1 \
+  --dart-define=PARAGO_API_BASE_URLS=https://paragosakay-app-qulmw.ondigitalocean.app/api/v1 \
   --dart-define=PARAGO_ENABLE_REALTIME=false
 ```
 
@@ -59,7 +60,8 @@ In Vercel, configure only these values:
 
 1. Root Directory: `parago_admin_web`
 2. Environment Variables:
-  - `PARAGO_API_BASE_URL` = `https://paragosakay-app-qulmw.ondigitalocean.app/api/v1`
+  - `PARAGO_API_BASE_URL` = `https://<aws-cloudfront-domain>/api/v1`
+  - `PARAGO_API_BASE_URLS` = `https://paragosakay-app-qulmw.ondigitalocean.app/api/v1`
   - `PARAGO_ENABLE_REALTIME` = `false`
 
 Then deploy. Vercel will run `bash ./vercel-build.sh` and publish `build/web`.

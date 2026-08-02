@@ -2,13 +2,18 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 class AppConfig {
+  static const String awsApiBaseUrl =
+      'https://d1gznxbzaizbg0.cloudfront.net/api/v1';
+  static const String digitalOceanApiBaseUrl =
+      'https://paragosakay-app-qulmw.ondigitalocean.app/api/v1';
+
   static const String _apiBaseUrlFallback = String.fromEnvironment(
     'PARAGO_API_BASE_URL',
-    defaultValue: 'https://paragosakay-app-qulmw.ondigitalocean.app/api/v1',
+    defaultValue: awsApiBaseUrl,
   );
   static const String _apiBaseUrlsFallback = String.fromEnvironment(
     'PARAGO_API_BASE_URLS',
-    defaultValue: '',
+    defaultValue: digitalOceanApiBaseUrl,
   );
   static const String googleFallbackClientId =
       String.fromEnvironment('PARAGO_GOOGLE_CLIENT_ID', defaultValue: '');
