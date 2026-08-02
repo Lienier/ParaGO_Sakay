@@ -6,6 +6,18 @@ const {
 
 const pendingReads = new Map();
 
+const coalesceRead = async ({ key, loader }) => {
+  const existing = pendingReads.get(key);
+  if (existing) return existing;
+  const pending = Promise.resolve()
+    .then(loader)
+    .finally(() => {
+      pendingReads.delete(key);
+    });
+  pendingReads.set(key, pending);
+  return pending;
+};
+
 const getOrLoadCachedRead = async ({ key, ttlSeconds, loader }) => {
   const cached = await redisGetJson(key);
   if (cached.value != null) {
@@ -40,6 +52,7 @@ const resetReadCacheForTests = () => {
 };
 
 module.exports = {
+  coalesceRead,
   getOrLoadCachedRead,
   invalidateCachedRead,
   resetReadCacheForTests,

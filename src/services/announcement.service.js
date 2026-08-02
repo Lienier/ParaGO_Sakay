@@ -2,6 +2,7 @@ const Announcement = require('../models/announcement');
 const AnnouncementDismissal = require('../models/announcementDismissal');
 const ApiError = require('../utils/apiError');
 const { emitToRole } = require('../realtime/socketServer');
+const { coalesceRead } = require('./readCache.service');
 
 const ANNOUNCEMENT_CATEGORIES = [
   'service_change',
@@ -206,14 +207,18 @@ const buildPayload = (input, existing = null) => {
 
 const listActiveAnnouncements = async ({ user }) => {
   const now = new Date();
-  const announcements = await populateAudit(
-    Announcement.find({
-      status: { $ne: 'archived' },
-      audiences: user.role,
-      startsAt: { $lte: now },
-      $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
-    }).sort({ startsAt: -1, createdAt: -1 })
-  );
+  const announcements = await coalesceRead({
+    key: `active-announcements:${user.role}`,
+    loader: () =>
+      populateAudit(
+        Announcement.find({
+          status: { $ne: 'archived' },
+          audiences: user.role,
+          startsAt: { $lte: now },
+          $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
+        }).sort({ startsAt: -1, createdAt: -1 })
+      ).lean(),
+  });
   if (announcements.length === 0) return [];
 
   const dismissals = await AnnouncementDismissal.find({

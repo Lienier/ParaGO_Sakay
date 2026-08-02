@@ -18,6 +18,7 @@ const {
   coalesceEtaRequest,
 } = require('../src/services/transientState.service');
 const {
+  coalesceRead,
   getOrLoadCachedRead,
   invalidateCachedRead,
   resetReadCacheForTests,
@@ -124,6 +125,26 @@ test('read-through cache coalesces identical loads and supports invalidation', a
 
   await invalidateCachedRead(key);
   await getOrLoadCachedRead({ key, ttlSeconds: 30, loader });
+  assert.equal(loads, 2);
+});
+
+test('uncached read coalescing shares only concurrent work', async () => {
+  let loads = 0;
+  const loader = async () => {
+    loads += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return ['announcement'];
+  };
+
+  const firstWave = await Promise.all(
+    Array.from({ length: 20 }, () =>
+      coalesceRead({ key: 'active-announcements:PASSENGER', loader })
+    )
+  );
+  assert.equal(loads, 1);
+  assert.deepEqual(firstWave[0], ['announcement']);
+
+  await coalesceRead({ key: 'active-announcements:PASSENGER', loader });
   assert.equal(loads, 2);
 });
 
