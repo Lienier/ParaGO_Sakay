@@ -29,6 +29,8 @@ const {
 const {
   invalidateDriverActiveContext,
 } = require('../services/activeDriverContext.service');
+const { redisKey } = require('../services/redis.service');
+const { getOrLoadCachedRead } = require('../services/readCache.service');
 
 const router = express.Router();
 const terminalQueueCreateRetryLimit = 4;
@@ -175,17 +177,27 @@ router.get(
       ensureObjectId(req.query.routeId, 'routeId');
       filter.routeId = req.query.routeId;
     }
-    const activeTrips = await TripSession.find(filter)
-      .select('-__v')
-      .populate(
-        'jeepneyId',
-        'plateNumber jeepneyName vehicleTag capacity status lastKnownLocation lastSeenAt'
-      )
-      .populate('driverId', 'userId status licenseNumber employeeNumber')
-      .populate('routeId', 'name code direction status')
-      .sort({ startedAt: -1 })
-      .lean();
-    return ok(res, activeTrips, 'Active trips');
+    const cacheKey = redisKey(
+      'read',
+      'active-trips',
+      filter.routeId || 'all'
+    );
+    const activeTrips = await getOrLoadCachedRead({
+      key: cacheKey,
+      ttlSeconds: 2,
+      loader: () =>
+        TripSession.find(filter)
+          .select('-__v')
+          .populate(
+            'jeepneyId',
+            'plateNumber jeepneyName vehicleTag capacity status lastKnownLocation lastSeenAt'
+          )
+          .populate('driverId', 'userId status licenseNumber employeeNumber')
+          .populate('routeId', 'name code direction status')
+          .sort({ startedAt: -1 })
+          .lean(),
+    });
+    return ok(res, activeTrips.value, 'Active trips');
   })
 );
 

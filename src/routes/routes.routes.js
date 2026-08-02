@@ -12,8 +12,14 @@ const {
   buildRouteCreatePayload,
   buildRouteUpdatePayload,
 } = require('../utils/transportPayloads');
+const { redisKey } = require('../services/redis.service');
+const {
+  getOrLoadCachedRead,
+  invalidateCachedRead,
+} = require('../services/readCache.service');
 
 const router = express.Router();
+const routeListCacheKey = redisKey('read', 'routes', 'all');
 
 const buildRoutePathSnapshot = (route) => {
   const coordinates = Array.isArray(route?.path?.coordinates)
@@ -33,9 +39,13 @@ const buildRoutePathSnapshot = (route) => {
 router.get(
   '/',
   authenticate,
-  asyncHandler(async (req, res) => {
-    const routes = await RouteModel.find().sort({ name: 1 });
-    return ok(res, routes, 'Route list');
+  asyncHandler(async (_req, res) => {
+    const routes = await getOrLoadCachedRead({
+      key: routeListCacheKey,
+      ttlSeconds: 30,
+      loader: () => RouteModel.find().sort({ name: 1 }).lean(),
+    });
+    return ok(res, routes.value, 'Route list');
   })
 );
 
@@ -45,6 +55,7 @@ router.post(
   authorize(ADMIN),
   asyncHandler(async (req, res) => {
     const route = await RouteModel.create(buildRouteCreatePayload(req.body || {}));
+    await invalidateCachedRead(routeListCacheKey);
     return ok(res, route, 'Route created', 201);
   })
 );
@@ -76,6 +87,7 @@ router.put(
         },
       }
     );
+    await invalidateCachedRead(routeListCacheKey);
     return ok(res, updated, 'Route updated');
   })
 );
@@ -92,6 +104,7 @@ router.delete(
       { new: true }
     );
     if (!updated) throw new ApiError(404, 'Route not found');
+    await invalidateCachedRead(routeListCacheKey);
     return ok(res, updated, 'Route deactivated');
   })
 );

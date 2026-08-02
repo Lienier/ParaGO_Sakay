@@ -17,6 +17,11 @@ const {
   invalidateDriverActiveContext,
   coalesceEtaRequest,
 } = require('../src/services/transientState.service');
+const {
+  getOrLoadCachedRead,
+  invalidateCachedRead,
+  resetReadCacheForTests,
+} = require('../src/services/readCache.service');
 
 class FakeRedisClient {
   constructor() {
@@ -84,7 +89,58 @@ class FakeRedisClient {
 }
 
 afterEach(() => {
+  resetReadCacheForTests();
   resetRedisForTests();
+});
+
+test('read-through cache coalesces identical loads and supports invalidation', async () => {
+  const fake = new FakeRedisClient();
+  injectRedisClientForTests({ testClient: fake });
+  const key = redisKey('read', 'routes', 'all');
+  let loads = 0;
+  const loader = async () => {
+    loads += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return [{ id: 'route-1' }];
+  };
+
+  const results = await Promise.all(
+    Array.from({ length: 20 }, () =>
+      getOrLoadCachedRead({ key, ttlSeconds: 30, loader })
+    )
+  );
+  assert.equal(loads, 1);
+  assert.deepEqual(results[0].value, [{ id: 'route-1' }]);
+  assert.equal(results.some((entry) => entry.source === 'coalesced'), true);
+
+  const cached = await getOrLoadCachedRead({ key, ttlSeconds: 30, loader });
+  assert.equal(cached.source, 'redis');
+  assert.equal(loads, 1);
+
+  await invalidateCachedRead(key);
+  await getOrLoadCachedRead({ key, ttlSeconds: 30, loader });
+  assert.equal(loads, 2);
+});
+
+test('read-through cache coalesces MongoDB fallback while Redis is unavailable', async () => {
+  const fake = new FakeRedisClient();
+  fake.failOperations = true;
+  injectRedisClientForTests({ testClient: fake });
+  let loads = 0;
+  const key = redisKey('read', 'active-trips', 'route-1');
+  const loader = async () => {
+    loads += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return [];
+  };
+
+  await Promise.all(
+    Array.from({ length: 10 }, () =>
+      getOrLoadCachedRead({ key, ttlSeconds: 2, loader })
+    )
+  );
+  assert.equal(loads, 1);
+  assert.equal(getRedisHealth().status, 'unhealthy');
 });
 
 test('Redis keys are environment-namespaced and reject empty parts', () => {
