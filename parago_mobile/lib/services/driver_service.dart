@@ -1,5 +1,6 @@
 import '../core/network/api_client.dart';
 import '../core/exceptions/api_exception.dart';
+import '../models/operations/driver_location_update.dart';
 import '../models/operations/pickup_request.dart';
 
 class DriverService {
@@ -52,16 +53,13 @@ class DriverService {
     if (lastError != null) {
       throw lastError;
     }
+    throw StateError('No driver status endpoint was attempted');
   }
 
-  Future<void> updateLocation({
-    required double lat,
-    required double lng,
-  }) async {
-    final body = {
-      'lat': lat,
-      'lng': lng,
-    };
+  Future<DriverLocationAcknowledgement> updateLocation(
+    DriverLocationUpdate update,
+  ) async {
+    final body = update.toJson();
 
     ApiException? lastError;
     final attempts = <Map<String, String>>[
@@ -79,12 +77,14 @@ class DriverService {
 
     for (final attempt in attempts) {
       try {
-        await _client.request(
+        final response = await _client.request(
           method: attempt['method']!,
           path: attempt['path']!,
           body: body,
         );
-        return;
+        return DriverLocationAcknowledgement.fromJson(
+          response['data'] as Map<String, dynamic>,
+        );
       } on ApiException catch (error) {
         lastError = error;
         if (!isRouteNotFound(error)) {
@@ -96,6 +96,7 @@ class DriverService {
     if (lastError != null) {
       throw lastError;
     }
+    throw StateError('No driver location endpoint was attempted');
   }
 
   Future<List<PickupRequestModel>> getRequestsForTrip(

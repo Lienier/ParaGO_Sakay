@@ -21,6 +21,12 @@ const jeepneySchema = new Schema(
       coordinates: { type: [Number] },
     },
     lastSeenAt: { type: Date },
+    latestLocationOrder: {
+      streamId: { type: String, trim: true },
+      sequence: { type: Number, min: 1 },
+      capturedAt: { type: Date },
+      serverReceivedAt: { type: Date },
+    },
   },
   { timestamps: true }
 );

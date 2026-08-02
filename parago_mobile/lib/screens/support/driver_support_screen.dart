@@ -263,10 +263,12 @@ class DriverSupportThreadScreen extends StatefulWidget {
     super.key,
     required this.thread,
     required this.realtimeSocketService,
+    this.supportService,
   });
 
   final SupportThreadModel thread;
   final RealtimeSocketService realtimeSocketService;
+  final SupportService? supportService;
 
   @override
   State<DriverSupportThreadScreen> createState() =>
@@ -275,6 +277,7 @@ class DriverSupportThreadScreen extends StatefulWidget {
 
 class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
   final TextEditingController _composerController = TextEditingController();
+  final ScrollController _messageScrollController = ScrollController();
   StreamSubscription<Map<String, dynamic>>? _supportSubscription;
   Timer? _refreshTimer;
   SupportThreadModel? _thread;
@@ -285,6 +288,10 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
   bool _threadRefreshPending = false;
   int _threadDetailGeneration = 0;
   String? _message;
+
+  SupportService get _supportService =>
+      widget.supportService ??
+      SupportService(context.read<SessionController>().apiClient);
 
   @override
   void initState() {
@@ -320,8 +327,20 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
     _threadDetailGeneration++;
     _refreshTimer?.cancel();
     _composerController.dispose();
+    _messageScrollController.dispose();
     _supportSubscription?.cancel();
     super.dispose();
+  }
+
+  void _scrollToLatestMessage() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_messageScrollController.hasClients) {
+        return;
+      }
+      _messageScrollController.jumpTo(
+        _messageScrollController.position.maxScrollExtent,
+      );
+    });
   }
 
   Future<void> _loadThread({bool silent = false}) async {
@@ -335,10 +354,7 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
       setState(() => _loading = true);
     }
     try {
-      final session = context.read<SessionController>();
-      final data = await SupportService(session.apiClient).getThreadMessages(
-        _thread!.id,
-      );
+      final data = await _supportService.getThreadMessages(_thread!.id);
       final thread = SupportThreadModel.fromJson(
         data['thread'] as Map<String, dynamic>,
       );
@@ -356,7 +372,8 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
         _messages = parsedMessages;
         _message = null;
       });
-      await SupportService(session.apiClient).markRead(thread.id);
+      _scrollToLatestMessage();
+      await _supportService.markRead(thread.id);
     } catch (error) {
       if (!mounted || generation != _threadDetailGeneration) return;
       setState(() => _message = ActionFeedback.messageOf(error));
@@ -380,8 +397,7 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
 
     setState(() => _sending = true);
     try {
-      final session = context.read<SessionController>();
-      final result = await SupportService(session.apiClient).sendMessage(
+      final result = await _supportService.sendMessage(
         threadId: _thread!.id,
         body: body,
       );
@@ -410,9 +426,7 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
     final thread = _thread;
     if (thread == null) return;
     try {
-      final session = context.read<SessionController>();
-      final result =
-          await SupportService(session.apiClient).reopenThread(thread.id);
+      final result = await _supportService.reopenThread(thread.id);
       if (!mounted) return;
       setState(() {
         _thread = SupportThreadModel.fromJson(result);
@@ -430,9 +444,7 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
     final thread = _thread;
     if (thread == null) return;
     try {
-      final session = context.read<SessionController>();
-      final result =
-          await SupportService(session.apiClient).closeThread(thread.id);
+      final result = await _supportService.closeThread(thread.id);
       if (!mounted) return;
       setState(() {
         _thread = SupportThreadModel.fromJson(result);
@@ -466,113 +478,153 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
             ),
         ],
       ),
-      body: Column(
-        children: [
-          Material(
-            color: Colors.transparent,
+      body: CustomScrollView(
+        controller: _messageScrollController,
+        primary: false,
+        slivers: [
+          SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
               child: _ThreadSummaryCard(thread: thread),
             ),
           ),
-          if (_loading) const LinearProgressIndicator(),
+          if (_loading)
+            const SliverToBoxAdapter(child: LinearProgressIndicator()),
           if (_message != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: _SupportNotice(message: _message!),
-            ),
-          Expanded(
-            child: ListView.separated(
-              reverse: false,
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-              itemBuilder: (context, index) {
-                final message = _messages[index];
-                final mine = message.senderRole == 'DRIVER';
-                return Align(
-                  alignment:
-                      mine ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    constraints: const BoxConstraints(maxWidth: 460),
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: mine
-                          ? const Color(0xFFDDF1EB)
-                          : const Color(0xFFF4F5F7),
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: mine
-                          ? CrossAxisAlignment.end
-                          : CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          mine ? 'You' : (message.senderName ?? 'Admin'),
-                          style:
-                              Theme.of(context).textTheme.labelMedium?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(message.body),
-                        if ((message.createdAt ?? '').isNotEmpty) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            message.createdAt!,
-                            style:
-                                Theme.of(context).textTheme.bodySmall?.copyWith(
-                                      color: const Color(0xFF68716C),
-                                    ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                );
-              },
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
-              itemCount: _messages.length,
-            ),
-          ),
-          if (!closed)
-            SafeArea(
-              top: false,
+            SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _composerController,
-                        minLines: 1,
-                        maxLines: 4,
-                        decoration: const InputDecoration(
-                          hintText: 'Type your message',
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    FilledButton(
-                      onPressed: _sending ? null : _sendMessage,
-                      child: const Text('Send'),
-                    ),
-                  ],
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: _SupportNotice(message: _message!),
+              ),
+            ),
+          if (_messages.isEmpty && !_loading)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'No messages yet.',
+                    textAlign: TextAlign.center,
+                  ),
                 ),
               ),
             )
           else
-            const SafeArea(
-              top: false,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
-                child: _SupportNotice(
-                  message:
-                      'This thread is closed. Reopen it to send another message.',
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, itemIndex) {
+                    if (itemIndex.isOdd) {
+                      return const SizedBox(height: 10);
+                    }
+                    final message = _messages[itemIndex ~/ 2];
+                    final mine = message.senderRole == 'DRIVER';
+                    return Align(
+                      alignment:
+                          mine ? Alignment.centerRight : Alignment.centerLeft,
+                      child: Container(
+                        constraints: const BoxConstraints(maxWidth: 460),
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: mine
+                              ? const Color(0xFFDDF1EB)
+                              : const Color(0xFFF4F5F7),
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: mine
+                              ? CrossAxisAlignment.end
+                              : CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              mine ? 'You' : (message.senderName ?? 'Admin'),
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelMedium
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              message.body,
+                              softWrap: true,
+                              overflow: TextOverflow.visible,
+                            ),
+                            if ((message.createdAt ?? '').isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                message.createdAt!,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
+                                      color: const Color(0xFF68716C),
+                                    ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                  childCount:
+                      _messages.isEmpty ? 0 : (_messages.length * 2) - 1,
                 ),
               ),
             ),
         ],
       ),
+      bottomNavigationBar: closed
+          ? const SafeArea(
+              top: false,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: _SupportNotice(
+                  message:
+                      'This thread is closed. Reopen it to send another message.',
+                ),
+              ),
+            )
+          : SafeArea(
+              top: false,
+              child: Material(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _composerController,
+                          minLines: 1,
+                          maxLines: 4,
+                          decoration: const InputDecoration(
+                            hintText: 'Type your message',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      IconButton.filled(
+                        tooltip: 'Send message',
+                        onPressed: _sending ? null : _sendMessage,
+                        icon: _sending
+                            ? const SizedBox.square(
+                                dimension: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Icon(Icons.send_rounded),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
     );
   }
 }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
+import 'adaptive_location_transmitter.dart';
 import 'driver_service.dart';
 
 class LocationTrackingService {
@@ -10,30 +11,48 @@ class LocationTrackingService {
     this._driverService, {
     this.onPosition,
     this.onError,
-  });
+  }) {
+    _transmitter = AdaptiveLocationTransmitter(
+      sender: _driverService.updateLocation,
+      onAccepted: (update, acknowledgement) {
+        if (kDebugMode) {
+          debugPrint(
+            'Driver location accepted: stream=${update.streamId} '
+            'sequence=${update.sequence} '
+            'serverReceivedAt=${acknowledgement.serverReceivedAt.toIso8601String()}',
+          );
+        }
+      },
+      onFailed: (update, error) {
+        if (kDebugMode) {
+          debugPrint(
+            'Driver location rejected/failed: stream=${update.streamId} '
+            'sequence=${update.sequence} error=$error',
+          );
+        }
+      },
+    );
+  }
 
   final DriverService _driverService;
   final ValueChanged<Position>? onPosition;
   final ValueChanged<Object>? onError;
+  late final AdaptiveLocationTransmitter _transmitter;
   StreamSubscription<Position>? _positionSubscription;
   Timer? _fallbackTimer;
   Position? _lastPosition;
-  Position? _lastSentPosition;
-  DateTime? _lastUpdateSentAt;
+  DateTime? _lastSampleAt;
   bool _isTracking = false;
-  int _updatesSent = 0;
-  int _updatesFailed = 0;
+  bool _fallbackRequestInFlight = false;
 
-  static const Duration _updateInterval = Duration(seconds: 1);
-  static const Duration _fallbackInterval = Duration(seconds: 2);
-  static const double _minimumDistanceMeters = 1.5;
+  static const Duration _fallbackInterval = Duration(seconds: 3);
   static const double _maxAcceptedAccuracyMeters = 20.0;
 
   bool get isTracking => _isTracking;
-  int get updatesSent => _updatesSent;
-  int get updatesFailed => _updatesFailed;
+  int get updatesSent => _transmitter.updatesSent;
+  int get updatesFailed => _transmitter.updatesFailed;
   Position? get lastPosition => _lastPosition;
-  DateTime? get lastUpdateSentAt => _lastUpdateSentAt;
+  DateTime? get lastUpdateSentAt => _transmitter.lastAttemptAt;
 
   Future<void> startTracking() async {
     if (_isTracking) {
@@ -57,9 +76,8 @@ class LocationTrackingService {
     }
 
     _isTracking = true;
-    _updatesSent = 0;
-    _updatesFailed = 0;
-    debugPrint('Starting ultra-low-latency location tracking (1s interval)');
+    _transmitter.start();
+    debugPrint('Starting adaptive location tracking (1s sample, 2s/5s send)');
 
     _positionSubscription = Geolocator.getPositionStream(
       locationSettings: _streamLocationSettings(),
@@ -67,20 +85,20 @@ class LocationTrackingService {
       _handlePositionUpdate,
       onError: (error) {
         debugPrint('Location stream error: $error');
-        _updatesFailed++;
         onError?.call(error);
       },
       cancelOnError: false,
     );
 
     _fallbackTimer = Timer.periodic(_fallbackInterval, (_) async {
-      if (!_isTracking) return;
+      if (!_isTracking || _fallbackRequestInFlight) return;
 
       final now = DateTime.now();
-      final lastUpdate = _lastUpdateSentAt;
+      final lastSample = _lastSampleAt;
 
-      if (lastUpdate == null ||
-          now.difference(lastUpdate) >= _fallbackInterval) {
+      if (lastSample == null ||
+          now.difference(lastSample) >= _fallbackInterval) {
+        _fallbackRequestInFlight = true;
         debugPrint('Fallback: forcing location update');
         try {
           final position = await Geolocator.getCurrentPosition(
@@ -89,8 +107,9 @@ class LocationTrackingService {
           await _handlePositionUpdate(position);
         } catch (error) {
           debugPrint('Fallback location update failed: $error');
-          _updatesFailed++;
           onError?.call(error);
+        } finally {
+          _fallbackRequestInFlight = false;
         }
       }
     });
@@ -101,56 +120,33 @@ class LocationTrackingService {
 
     final previousSample = _lastPosition;
     _lastPosition = position;
+    _lastSampleAt = DateTime.now();
 
-    if (_looksLikeNoisyFix(position, previousSample ?? _lastSentPosition)) {
+    if (_looksLikeNoisyFix(position, previousSample)) {
       return;
     }
 
     onPosition?.call(position);
 
-    final now = DateTime.now();
-    final lastSent = _lastUpdateSentAt;
-
-    if (lastSent != null && now.difference(lastSent) < _updateInterval) {
-      return;
-    }
-
-    final lastPos = _lastSentPosition;
-    if (lastPos != null && lastSent != null) {
-      final distance = Geolocator.distanceBetween(
-        lastPos.latitude,
-        lastPos.longitude,
-        position.latitude,
-        position.longitude,
-      );
-
-      if (distance < _minimumDistanceMeters &&
-          now.difference(lastSent) < _fallbackInterval) {
-        return;
-      }
-    }
-
-    try {
-      await _driverService.updateLocation(
-        lat: position.latitude,
-        lng: position.longitude,
-      );
-
-      _lastSentPosition = position;
-      _lastUpdateSentAt = now;
-      _updatesSent++;
-
-      debugPrint(
-        'Location sent: ${position.latitude.toStringAsFixed(6)}, '
-        '${position.longitude.toStringAsFixed(6)} '
-        '(accuracy: ${position.accuracy.toStringAsFixed(1)}m, '
-        'total: $_updatesSent)',
-      );
-    } catch (error) {
-      _updatesFailed++;
-      debugPrint('Failed to send location update: $error');
-    }
+    final speed =
+        position.speed.isFinite && position.speed >= 0 ? position.speed : 0.0;
+    final heading = position.heading.isFinite && position.heading >= 0
+        ? position.heading % 360
+        : 0.0;
+    _transmitter.addSample(
+      DriverLocationSample(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracyMeters:
+            position.accuracy.isFinite ? position.accuracy.clamp(0, 500) : 500,
+        speedMetersPerSecond: speed.clamp(0, 100),
+        headingDegrees: heading,
+        capturedAt: position.timestamp,
+      ),
+    );
   }
+
+  Future<void> sendLatestNow() => _transmitter.sendLatestNow();
 
   Future<void> stopTracking() async {
     if (!_isTracking) {
@@ -158,25 +154,34 @@ class LocationTrackingService {
     }
 
     debugPrint(
-        'Stopping location tracking (sent: $_updatesSent, failed: $_updatesFailed)');
+      'Stopping location tracking '
+      '(sent: ${_transmitter.updatesSent}, '
+      'failed: ${_transmitter.updatesFailed})',
+    );
 
-    _isTracking = false;
     await _positionSubscription?.cancel();
     _positionSubscription = null;
     _fallbackTimer?.cancel();
     _fallbackTimer = null;
+    _fallbackRequestInFlight = false;
+    await _transmitter.stop();
+    _isTracking = false;
   }
 
   void dispose() {
-    stopTracking();
+    _isTracking = false;
+    _positionSubscription?.cancel();
+    _fallbackTimer?.cancel();
+    _fallbackRequestInFlight = false;
+    _transmitter.dispose();
   }
 
   LocationSettings _streamLocationSettings() {
     if (kIsWeb) {
-        return const LocationSettings(
-          accuracy: LocationAccuracy.bestForNavigation,
-          distanceFilter: 1,
-        );
+      return const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 1,
+      );
     }
 
     switch (defaultTargetPlatform) {
@@ -213,10 +218,10 @@ class LocationTrackingService {
 
   LocationSettings _singleFixLocationSettings() {
     if (kIsWeb) {
-        return const LocationSettings(
-          accuracy: LocationAccuracy.bestForNavigation,
-          timeLimit: Duration(seconds: 4),
-        );
+      return const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        timeLimit: Duration(seconds: 4),
+      );
     }
 
     switch (defaultTargetPlatform) {

@@ -1,26 +1,16 @@
 const mongoose = require('mongoose');
 const { mongoUri } = require('./env');
-const User = require('../models/user');
 
 let isConnected = false;
 
-const syncCriticalIndexes = async () => {
-  await User.collection.updateMany(
-    { providerId: { $in: [null, ''] } },
-    { $unset: { providerId: '' } }
-  );
-  await User.syncIndexes();
-};
-
 const connectDb = async () => {
-  if (isConnected) return;
+  if (isConnected && mongoose.connection.readyState === 1) return;
 
   try {
     await mongoose.connect(mongoUri, {
-      autoIndex: true,
+      autoIndex: false,
       serverSelectionTimeoutMS: 12000,
     });
-    await syncCriticalIndexes();
     isConnected = true;
     // eslint-disable-next-line no-console
     console.log('Connected to MongoDB Atlas');
@@ -31,4 +21,12 @@ const connectDb = async () => {
   }
 };
 
+const disconnectDb = async () => {
+  if (mongoose.connection.readyState !== 0) {
+    await mongoose.disconnect();
+  }
+  isConnected = false;
+};
+
 module.exports = connectDb;
+module.exports.disconnectDb = disconnectDb;

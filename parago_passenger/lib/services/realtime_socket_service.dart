@@ -4,33 +4,58 @@ import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import '../core/config/app_config.dart';
+import 'realtime_subscription_registry.dart';
+
+enum RealtimeSocketLifecycleType {
+  connected,
+  disconnected,
+  ready,
+}
+
+class RealtimeSocketLifecycleEvent {
+  const RealtimeSocketLifecycleEvent({
+    required this.type,
+    required this.occurredAt,
+  });
+
+  final RealtimeSocketLifecycleType type;
+  final DateTime occurredAt;
+}
 
 class RealtimeSocketService {
   final StreamController<Map<String, dynamic>> _notificationController =
       StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<Map<String, dynamic>> _locationController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _routeVehicleBatchController =
+      StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<Map<String, dynamic>> _supportController =
       StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<Map<String, dynamic>> _announcementController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<RealtimeSocketLifecycleEvent> _lifecycleController =
+      StreamController<RealtimeSocketLifecycleEvent>.broadcast();
 
   io.Socket? _socket;
   String? _currentSocketBaseUrl;
   String? _currentToken;
   bool _networkFailureReported = false;
   Timer? _retryTimer;
-  final Set<String> _subscribedRoutes = {};
-  final Set<String> _subscribedTrips = {};
+  final RealtimeSubscriptionRegistry _subscriptions =
+      RealtimeSubscriptionRegistry();
 
   Stream<Map<String, dynamic>> get notificationCreatedStream =>
       _notificationController.stream;
   Stream<Map<String, dynamic>> get jeepneyLocationStream =>
       _locationController.stream;
+  Stream<Map<String, dynamic>> get routeVehicleBatchStream =>
+      _routeVehicleBatchController.stream;
   Stream<Map<String, dynamic>> get supportActivityStream =>
       _supportController.stream;
   Stream<Map<String, dynamic>> get announcementActivityStream =>
       _announcementController.stream;
+  Stream<RealtimeSocketLifecycleEvent> get lifecycleStream =>
+      _lifecycleController.stream;
   bool get isConnected => _socket?.connected == true;
   bool get hasActiveSocket => _socket != null;
 
@@ -82,7 +107,6 @@ class RealtimeSocketService {
           .setReconnectionDelay(1000)
           .setReconnectionDelayMax(10000)
           .setTimeout(30000)
-          .setQuery(<String, dynamic>{'token': trimmedToken})
           .setExtraHeaders(<String, dynamic>{
             'Authorization': 'Bearer $trimmedToken',
           })
@@ -95,10 +119,12 @@ class RealtimeSocketService {
       _retryTimer = null;
       _networkFailureReported = false;
       debugPrint('Realtime socket connected.');
+      _emitLifecycle(RealtimeSocketLifecycleType.connected);
       _restoreSubscriptions();
     });
     socket.onDisconnect((reason) {
       debugPrint('Realtime socket disconnected: $reason');
+      _emitLifecycle(RealtimeSocketLifecycleType.disconnected);
     });
     socket.onReconnect((attempt) {
       debugPrint('Realtime socket reconnected on attempt $attempt.');
@@ -125,6 +151,7 @@ class RealtimeSocketService {
     });
     socket.on('socket.ready', (payload) {
       debugPrint('Realtime socket ready: $payload');
+      _emitLifecycle(RealtimeSocketLifecycleType.ready);
       _emitReconciliationEvent(payload);
     });
     socket.on('notification.created', (payload) {
@@ -137,6 +164,12 @@ class RealtimeSocketService {
       final normalized = _normalizePayload(payload);
       if (normalized.isNotEmpty) {
         _locationController.add(normalized);
+      }
+    });
+    socket.on('route.vehicles.updated', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) {
+        _routeVehicleBatchController.add(normalized);
       }
     });
     for (final eventName in const [
@@ -174,8 +207,7 @@ class RealtimeSocketService {
     _currentSocketBaseUrl = null;
     _currentToken = null;
     _networkFailureReported = false;
-    _subscribedRoutes.clear();
-    _subscribedTrips.clear();
+    _subscriptions.clear();
     socket?.disconnect();
     socket?.dispose();
   }
@@ -184,69 +216,62 @@ class RealtimeSocketService {
     disconnect();
     _notificationController.close();
     _locationController.close();
+    _routeVehicleBatchController.close();
     _supportController.close();
     _announcementController.close();
+    _lifecycleController.close();
   }
 
   void subscribeToRoute(String routeId) {
     final trimmedRouteId = routeId.trim();
     if (trimmedRouteId.isEmpty) return;
-    final isNewSubscription = _subscribedRoutes.add(trimmedRouteId);
+    final isNewSubscription = _subscriptions.addRoute(trimmedRouteId);
     if (!isNewSubscription || _socket == null || !_socket!.connected) {
       return;
     }
 
-    _socket!.emit('subscribe.route', trimmedRouteId);
-    debugPrint('Subscribed to route updates: $trimmedRouteId');
+    _requestSubscription(
+      RealtimeSubscription('subscribe.route', trimmedRouteId),
+    );
   }
 
   void unsubscribeFromRoute(String routeId) {
     final trimmedRouteId = routeId.trim();
     if (trimmedRouteId.isEmpty) return;
-    final removed = _subscribedRoutes.remove(trimmedRouteId);
+    final removed = _subscriptions.removeRoute(trimmedRouteId);
     if (!removed || _socket == null || !_socket!.connected) {
       return;
     }
 
-    _socket!.emit('unsubscribe.route', trimmedRouteId);
-    debugPrint('Unsubscribed from route updates: $trimmedRouteId');
+    _requestUnsubscribe('unsubscribe.route', trimmedRouteId);
   }
 
   void subscribeToTrip(String tripId) {
     final trimmedTripId = tripId.trim();
     if (trimmedTripId.isEmpty) return;
-    final isNewSubscription = _subscribedTrips.add(trimmedTripId);
+    final isNewSubscription = _subscriptions.addTrip(trimmedTripId);
     if (!isNewSubscription || _socket == null || !_socket!.connected) {
       return;
     }
 
-    _socket!.emit('subscribe.trip', trimmedTripId);
-    debugPrint('Subscribed to trip updates: $trimmedTripId');
+    _requestSubscription(
+      RealtimeSubscription('subscribe.trip', trimmedTripId),
+    );
   }
 
   void unsubscribeFromTrip(String tripId) {
     final trimmedTripId = tripId.trim();
     if (trimmedTripId.isEmpty) return;
-    final removed = _subscribedTrips.remove(trimmedTripId);
+    final removed = _subscriptions.removeTrip(trimmedTripId);
     if (!removed || _socket == null || !_socket!.connected) {
       return;
     }
 
-    _socket!.emit('unsubscribe.trip', trimmedTripId);
-    debugPrint('Unsubscribed from trip updates: $trimmedTripId');
+    _requestUnsubscribe('unsubscribe.trip', trimmedTripId);
   }
 
-  Map<String, dynamic> _normalizePayload(dynamic payload) {
-    if (payload is Map<String, dynamic>) {
-      return payload;
-    }
-    if (payload is Map) {
-      return payload.map(
-        (key, value) => MapEntry(key.toString(), value),
-      );
-    }
-    return const <String, dynamic>{};
-  }
+  Map<String, dynamic> _normalizePayload(dynamic payload) =>
+      normalizeRealtimePayload(payload);
 
   void _emitSupportEvent(String eventName, dynamic payload) {
     final normalized = _normalizePayload(payload);
@@ -280,6 +305,13 @@ class RealtimeSocketService {
     _announcementController.add(event);
   }
 
+  void _emitLifecycle(RealtimeSocketLifecycleType type) {
+    if (_lifecycleController.isClosed) return;
+    _lifecycleController.add(
+      RealtimeSocketLifecycleEvent(type: type, occurredAt: DateTime.now()),
+    );
+  }
+
   String _socketBaseUrl(String apiBaseUrl) {
     final trimmed = apiBaseUrl.trim();
     final uri = Uri.tryParse(trimmed);
@@ -302,12 +334,61 @@ class RealtimeSocketService {
     if (socket == null || !socket.connected) {
       return;
     }
-    for (final routeId in _subscribedRoutes) {
-      socket.emit('subscribe.route', routeId);
+    for (final subscription in _subscriptions.restorationEvents) {
+      _requestSubscription(subscription);
     }
-    for (final tripId in _subscribedTrips) {
-      socket.emit('subscribe.trip', tripId);
+    for (final subscription in _subscriptions.pendingAuthorizationEvents) {
+      _requestSubscription(subscription);
     }
+  }
+
+  void _requestSubscription(RealtimeSubscription subscription) {
+    final socket = _socket;
+    if (socket == null || !socket.connected) return;
+    socket.emitWithAck(
+      subscription.eventName,
+      subscription.identifier,
+      ack: (dynamic response, [dynamic _]) {
+        final result = _normalizePayload(response);
+        if (result['ok'] == true) {
+          _subscriptions.markAuthorized(
+            subscription.eventName,
+            subscription.identifier,
+          );
+          debugPrint(
+            'Realtime subscription authorized: '
+            '${subscription.eventName} ${subscription.identifier}',
+          );
+          return;
+        }
+        _subscriptions.reject(
+          subscription.eventName,
+          subscription.identifier,
+        );
+        debugPrint(
+          'Realtime subscription rejected: '
+          '${result['code'] ?? 'UNKNOWN'}',
+        );
+      },
+    );
+  }
+
+  void _requestUnsubscribe(String eventName, String identifier) {
+    final socket = _socket;
+    if (socket == null || !socket.connected) return;
+    socket.emitWithAck(
+      eventName,
+      identifier,
+      ack: (dynamic response, [dynamic _]) {
+        final result = _normalizePayload(response);
+        if (result['ok'] != true) {
+          debugPrint(
+            'Realtime unsubscribe rejected: '
+            '${result['code'] ?? 'UNKNOWN'}',
+          );
+        }
+      },
+    );
   }
 
   void _stopRetryingOnNetworkError(

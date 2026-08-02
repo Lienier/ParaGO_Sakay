@@ -3,6 +3,7 @@ const Passenger = require('../models/passenger');
 const asyncHandler = require('../utils/asyncHandler');
 const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
+const { apiRateLimiters } = require('../middlewares/rateLimits');
 const { PASSENGER, ADMIN } = require('../constants/roles');
 const { ok } = require('../utils/response');
 const ApiError = require('../utils/apiError');
@@ -137,6 +138,7 @@ for (const method of ['patch', 'post', 'put']) {
     '/me/location',
     authenticate,
     authorize(PASSENGER),
+    apiRateLimiters.passengerLocation,
     asyncHandler(updatePassengerLocation)
   );
 }

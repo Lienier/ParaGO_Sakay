@@ -1,12 +1,28 @@
 const { Server } = require('socket.io');
+const mongoose = require('mongoose');
 
 const User = require('../models/user');
 const { verifyAccessToken } = require('../utils/jwt');
 const { createCorsOriginDelegate } = require('../utils/cors');
+const {
+  authorizeRouteSubscription,
+  authorizeTripSubscription,
+} = require('./subscriptionAuthorizer');
+const { RouteLocationBatcher } = require('./routeLocationBatcher');
+const {
+  publishOperationalEvent,
+  startOperationalEventSubscriber,
+} = require('../services/operationalEventBridge.service');
 
 let ioInstance = null;
+let routeLocationBatcher = null;
+let stopOperationalEventSubscriber = null;
+const subscriptionWindowMs = 10_000;
+const maxSubscriptionEventsPerWindow = 20;
+const maxCustomRoomsPerSocket = 8;
 
 const normalizeRoomKey = (value) => String(value || '').trim();
+const safeResourceId = (value) => normalizeRoomKey(value).slice(0, 64);
 const toUserRoom = (userId) => `user:${String(userId)}`;
 const toRoleRoom = (role) => `role:${String(role || '').trim().toLowerCase()}`;
 const toRouteRoom = (routeId) => `route:${normalizeRoomKey(routeId)}`;
@@ -21,11 +37,6 @@ const extractToken = (socket) => {
   const header = socket.handshake.headers?.authorization;
   if (typeof header === 'string' && header.startsWith('Bearer ')) {
     return header.slice(7).trim();
-  }
-
-  const queryToken = socket.handshake.query?.token;
-  if (typeof queryToken === 'string' && queryToken.trim()) {
-    return queryToken.trim();
   }
 
   return '';
@@ -60,6 +71,192 @@ const withRoomKey = (value, callback) => {
   callback(roomKey);
 };
 
+const acknowledgement = (callback, payload) => {
+  if (typeof callback === 'function') {
+    callback(payload);
+  }
+};
+
+const securityLog = (socket, eventName, reason, resourceId = '') => {
+  const entry = {
+    type: 'socket.subscription.rejected',
+    eventName,
+    reason,
+    userId: socket.data.user?.id || null,
+    role: socket.data.user?.role || null,
+    socketId: socket.id,
+    resourceId: safeResourceId(resourceId) || null,
+    occurredAt: new Date().toISOString(),
+  };
+  console.warn(JSON.stringify(entry));
+};
+
+const rejectSubscription = (
+  socket,
+  eventName,
+  callback,
+  { code, message, resourceId = '' }
+) => {
+  const payload = {
+    ok: false,
+    eventName,
+    code,
+    message,
+    resourceId: safeResourceId(resourceId),
+  };
+  securityLog(socket, eventName, code, resourceId);
+  acknowledgement(callback, payload);
+  return payload;
+};
+
+const consumeSubscriptionEvent = (socket) => {
+  const now = Date.now();
+  const current = socket.data.subscriptionRate || {
+    windowStartedAt: now,
+    count: 0,
+  };
+  if (now - current.windowStartedAt >= subscriptionWindowMs) {
+    current.windowStartedAt = now;
+    current.count = 0;
+  }
+  current.count += 1;
+  socket.data.subscriptionRate = current;
+  return current.count <= maxSubscriptionEventsPerWindow;
+};
+
+const isValidResourceId = (value) =>
+  mongoose.isObjectIdOrHexString(normalizeRoomKey(value));
+
+const removeTrackedRoom = async (socket, roomName) => {
+  await socket.leave(roomName);
+  socket.data.customRooms?.delete(roomName);
+};
+
+const replacePassengerRouteRoom = async (socket, nextRoomName) => {
+  if (socket.data.user?.role !== 'PASSENGER') return null;
+  const currentRouteRoom = Array.from(socket.data.customRooms || []).find(
+    (roomName) => roomName.startsWith('route:') && roomName !== nextRoomName
+  );
+  if (!currentRouteRoom) return null;
+  await removeTrackedRoom(socket, currentRouteRoom);
+  return currentRouteRoom.slice('route:'.length);
+};
+
+const subscribeToResource = async ({
+  socket,
+  eventName,
+  resourceType,
+  resourceId,
+  callback,
+  authorize,
+  toRoom,
+}) => {
+  const normalizedId = normalizeRoomKey(resourceId);
+  if (!consumeSubscriptionEvent(socket)) {
+    return rejectSubscription(socket, eventName, callback, {
+      code: 'RATE_LIMITED',
+      message: 'Too many subscription requests',
+      resourceId: normalizedId,
+    });
+  }
+  if (!isValidResourceId(normalizedId)) {
+    return rejectSubscription(socket, eventName, callback, {
+      code: 'INVALID_IDENTIFIER',
+      message: `Invalid ${resourceType} identifier`,
+      resourceId: normalizedId,
+    });
+  }
+
+  let authorization;
+  try {
+    authorization = await authorize({
+      user: socket.data.user,
+      [`${resourceType}Id`]: normalizedId,
+    });
+  } catch (_error) {
+    return rejectSubscription(socket, eventName, callback, {
+      code: 'AUTHORIZATION_UNAVAILABLE',
+      message: 'Subscription authorization is temporarily unavailable',
+      resourceId: normalizedId,
+    });
+  }
+  if (!authorization.allowed) {
+    return rejectSubscription(socket, eventName, callback, {
+      code: authorization.code || 'FORBIDDEN',
+      message: 'You are not authorized for this subscription',
+      resourceId: normalizedId,
+    });
+  }
+
+  const roomName = toRoom(normalizedId);
+  const replacedRouteId =
+    resourceType === 'route'
+      ? await replacePassengerRouteRoom(socket, roomName)
+      : null;
+  const isAlreadyJoined = socket.data.customRooms.has(roomName);
+  if (
+    !isAlreadyJoined &&
+    socket.data.customRooms.size >= maxCustomRoomsPerSocket
+  ) {
+    return rejectSubscription(socket, eventName, callback, {
+      code: 'ROOM_LIMIT',
+      message: 'Socket subscription room limit reached',
+      resourceId: normalizedId,
+    });
+  }
+
+  await socket.join(roomName);
+  socket.data.customRooms.add(roomName);
+  const payload = {
+    ok: true,
+    eventName,
+    resourceType,
+    resourceId: normalizedId,
+    alreadySubscribed: isAlreadyJoined,
+    ...(replacedRouteId ? { replacedRouteId } : {}),
+  };
+  acknowledgement(callback, payload);
+  return payload;
+};
+
+const unsubscribeFromResource = async ({
+  socket,
+  eventName,
+  resourceType,
+  resourceId,
+  callback,
+  toRoom,
+}) => {
+  const normalizedId = normalizeRoomKey(resourceId);
+  if (!consumeSubscriptionEvent(socket)) {
+    return rejectSubscription(socket, eventName, callback, {
+      code: 'RATE_LIMITED',
+      message: 'Too many subscription requests',
+      resourceId: normalizedId,
+    });
+  }
+  if (!isValidResourceId(normalizedId)) {
+    return rejectSubscription(socket, eventName, callback, {
+      code: 'INVALID_IDENTIFIER',
+      message: `Invalid ${resourceType} identifier`,
+      resourceId: normalizedId,
+    });
+  }
+
+  const roomName = toRoom(normalizedId);
+  const wasSubscribed = socket.data.customRooms.has(roomName);
+  await removeTrackedRoom(socket, roomName);
+  const payload = {
+    ok: true,
+    eventName,
+    resourceType,
+    resourceId: normalizedId,
+    wasSubscribed,
+  };
+  acknowledgement(callback, payload);
+  return payload;
+};
+
 const attachSocketServer = (httpServer, { corsOrigins = [] } = {}) => {
   if (ioInstance) {
     return ioInstance;
@@ -76,6 +273,11 @@ const attachSocketServer = (httpServer, { corsOrigins = [] } = {}) => {
     path: '/socket.io',
     pingInterval: 25000,
     pingTimeout: 60000,
+  });
+  routeLocationBatcher = new RouteLocationBatcher({
+    onBatch: (payload) => {
+      emitToRoute(payload.routeId, 'route.vehicles.updated', payload);
+    },
   });
 
   io.use(async (socket, next) => {
@@ -97,6 +299,7 @@ const attachSocketServer = (httpServer, { corsOrigins = [] } = {}) => {
         fullName: user.fullName,
         role: user.role,
       };
+      socket.data.customRooms = new Set();
       next();
     } catch (_error) {
       next(new Error('Invalid or expired token'));
@@ -117,37 +320,111 @@ const attachSocketServer = (httpServer, { corsOrigins = [] } = {}) => {
       });
     }
 
-    // Allow clients to subscribe to route/trip updates
-    socket.on('subscribe.route', (routeId) => {
-      withRoomKey(routeId, (roomKey) => socket.join(toRouteRoom(roomKey)));
+    socket.on('subscribe.route', (routeId, callback) => {
+      void subscribeToResource({
+        socket,
+        eventName: 'subscribe.route',
+        resourceType: 'route',
+        resourceId: routeId,
+        callback,
+        authorize: authorizeRouteSubscription,
+        toRoom: toRouteRoom,
+      }).then((result) => {
+        if (!result?.ok) return;
+        const snapshot = routeLocationBatcher?.snapshot(result.resourceId);
+        if (snapshot) {
+          socket.emit('route.vehicles.updated', snapshot);
+        }
+      });
     });
 
-    socket.on('subscribe.trip', (tripId) => {
-      withRoomKey(tripId, (roomKey) => socket.join(toTripRoom(roomKey)));
+    socket.on('subscribe.trip', (tripId, callback) => {
+      void subscribeToResource({
+        socket,
+        eventName: 'subscribe.trip',
+        resourceType: 'trip',
+        resourceId: tripId,
+        callback,
+        authorize: authorizeTripSubscription,
+        toRoom: toTripRoom,
+      });
     });
 
-    socket.on('unsubscribe.route', (routeId) => {
-      withRoomKey(routeId, (roomKey) => socket.leave(toRouteRoom(roomKey)));
+    socket.on('unsubscribe.route', (routeId, callback) => {
+      void unsubscribeFromResource({
+        socket,
+        eventName: 'unsubscribe.route',
+        resourceType: 'route',
+        resourceId: routeId,
+        callback,
+        toRoom: toRouteRoom,
+      });
     });
 
-    socket.on('unsubscribe.trip', (tripId) => {
-      withRoomKey(tripId, (roomKey) => socket.leave(toTripRoom(roomKey)));
+    socket.on('unsubscribe.trip', (tripId, callback) => {
+      void unsubscribeFromResource({
+        socket,
+        eventName: 'unsubscribe.trip',
+        resourceType: 'trip',
+        resourceId: tripId,
+        callback,
+        toRoom: toTripRoom,
+      });
     });
   });
 
   ioInstance = io;
+  void startOperationalEventSubscriber((event) => {
+    if (!event?.eventName || !event?.targetId) return;
+    if (event.target === 'user') {
+      emitToUserLocal(event.targetId, event.eventName, event.payload);
+    } else if (event.target === 'role') {
+      emitToRoleLocal(event.targetId, event.eventName, event.payload);
+    } else if (event.target === 'trip') {
+      emitToTripLocal(event.targetId, event.eventName, event.payload);
+    } else if (event.target === 'route') {
+      emitToRouteLocal(event.targetId, event.eventName, event.payload);
+    }
+  }).then((stop) => {
+    stopOperationalEventSubscriber = stop;
+  });
   return io;
 };
 
-const emitToUser = (userId, eventName, payload) => {
-  if (!ioInstance || !userId || !eventName) return;
+const emitToUserLocal = (userId, eventName, payload) => {
+  if (!ioInstance || !userId || !eventName) return false;
   ioInstance.to(toUserRoom(userId)).emit(eventName, payload);
+  return true;
+};
+
+const emitToUser = (userId, eventName, payload) => {
+  if (!userId || !eventName) return;
+  if (emitToUserLocal(userId, eventName, payload)) return;
+  void publishOperationalEvent({
+    target: 'user',
+    targetId: userId,
+    eventName,
+    payload,
+  });
+};
+
+const emitToRoleLocal = (role, eventName, payload) => {
+  const normalizedRole = String(role || '').trim().toLowerCase();
+  if (!ioInstance || !normalizedRole || !eventName) return false;
+  ioInstance.to(toRoleRoom(normalizedRole)).emit(eventName, payload);
+  return true;
 };
 
 const emitToRole = (role, eventName, payload) => {
   const normalizedRole = String(role || '').trim().toLowerCase();
-  if (!ioInstance || !normalizedRole || !eventName) return;
-  ioInstance.to(toRoleRoom(normalizedRole)).emit(eventName, payload);
+  if (!normalizedRole || !eventName) return;
+  if (emitToRoleLocal(normalizedRole, eventName, payload)) return;
+  void publishOperationalEvent({
+    target: 'role',
+    targetId: normalizedRole,
+    eventName,
+    payload,
+  });
 };
 
 const emitNotificationCreated = (notification) => {
@@ -173,14 +450,38 @@ const joinTripRoom = (socket, tripId) => {
   withRoomKey(tripId, (roomKey) => socket.join(toTripRoom(roomKey)));
 };
 
-const emitToRoute = (routeId, eventName, payload) => {
-  if (!ioInstance || !routeId || !eventName) return;
+const emitToRouteLocal = (routeId, eventName, payload) => {
+  if (!ioInstance || !routeId || !eventName) return false;
   ioInstance.to(toRouteRoom(routeId)).emit(eventName, payload);
+  return true;
+};
+
+const emitToRoute = (routeId, eventName, payload) => {
+  if (!routeId || !eventName) return;
+  if (emitToRouteLocal(routeId, eventName, payload)) return;
+  void publishOperationalEvent({
+    target: 'route',
+    targetId: routeId,
+    eventName,
+    payload,
+  });
+};
+
+const emitToTripLocal = (tripId, eventName, payload) => {
+  if (!ioInstance || !tripId || !eventName) return false;
+  ioInstance.to(toTripRoom(tripId)).emit(eventName, payload);
+  return true;
 };
 
 const emitToTrip = (tripId, eventName, payload) => {
-  if (!ioInstance || !tripId || !eventName) return;
-  ioInstance.to(toTripRoom(tripId)).emit(eventName, payload);
+  if (!tripId || !eventName) return;
+  if (emitToTripLocal(tripId, eventName, payload)) return;
+  void publishOperationalEvent({
+    target: 'trip',
+    targetId: tripId,
+    eventName,
+    payload,
+  });
 };
 
 const emitJeepneyLocationUpdate = ({
@@ -190,6 +491,8 @@ const emitJeepneyLocationUpdate = ({
   latitude,
   longitude,
   timestamp,
+  speedMetersPerSecond,
+  headingDegrees,
 }) => {
   if (!ioInstance) return;
 
@@ -202,22 +505,37 @@ const emitJeepneyLocationUpdate = ({
     timestamp: timestamp || new Date().toISOString(),
   };
 
-  // Broadcast to all passengers watching this route
   if (routeId) {
     emitToRoute(routeId, 'jeepney.location.updated', payload);
+    routeLocationBatcher?.enqueue({
+      ...payload,
+      speedMetersPerSecond,
+      headingDegrees,
+    });
+  }
+};
+
+const closeSocketServer = async () => {
+  routeLocationBatcher?.flushAll();
+  routeLocationBatcher?.stop();
+  routeLocationBatcher?.clear();
+  routeLocationBatcher = null;
+
+  const stopSubscriber = stopOperationalEventSubscriber;
+  stopOperationalEventSubscriber = null;
+  if (typeof stopSubscriber === 'function') {
+    await stopSubscriber();
   }
 
-  // Broadcast to all passengers/drivers on this specific trip
-  if (tripId) {
-    emitToTrip(tripId, 'jeepney.location.updated', payload);
-  }
-
-  // Broadcast to all passengers (for active trips view)
-  emitToRole('passenger', 'jeepney.location.updated', payload);
+  const io = ioInstance;
+  ioInstance = null;
+  if (!io) return;
+  await new Promise((resolve) => io.close(() => resolve()));
 };
 
 module.exports = {
   attachSocketServer,
+  closeSocketServer,
   emitNotificationCreated,
   emitOperationsChanged,
   emitJeepneyLocationUpdate,
@@ -227,5 +545,8 @@ module.exports = {
   emitToTrip,
   joinRouteRoom,
   joinTripRoom,
+  maxCustomRoomsPerSocket,
+  maxSubscriptionEventsPerWindow,
+  getRouteLocationBatcher: () => routeLocationBatcher,
   getSocketServer: () => ioInstance,
 };

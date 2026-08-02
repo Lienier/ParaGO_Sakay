@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const { boardingWindowMinutes } = require('../config/env');
 const ApiError = require('../utils/apiError');
 const { haversineMeters } = require('../utils/geo');
@@ -19,8 +20,10 @@ const {
   normalizeTerminalQueueStatus,
 } = require('./hybridDispatch.service');
 
-const ensureTripHasBoardingCapacity = async (trip) => {
-  const jeepney = await Jeepney.findById(trip.jeepneyId).select('capacity');
+const ensureTripHasBoardingCapacity = async (trip, { session } = {}) => {
+  const jeepney = await Jeepney.findById(trip.jeepneyId)
+    .select('capacity')
+    .session(session || null);
   const seatCapacity = Number(jeepney?.capacity);
   const occupiedSeats = Number.isFinite(Number(trip.occupancyCount))
     ? Number(trip.occupancyCount)
@@ -33,6 +36,8 @@ const ensureTripHasBoardingCapacity = async (trip) => {
     throw new ApiError(409, 'Trip is already at full capacity');
   }
 };
+
+const isDuplicateKeyError = (error) => error?.code === 11000;
 
 const syncTerminalQueueAfterBoarding = async ({ trip, pickupType, now }) => {
   if (!isTerminalPickupType(pickupType) || trip.operatingMode !== 'terminal_queue') {
@@ -73,20 +78,6 @@ const completeBoardingForPickupRequest = async ({
   boardingMethod = 'manual',
   allowExisting = false,
 }) => {
-  const existing = await RideSession.findOne({
-    passengerId,
-    tripSessionId: trip._id,
-    status: { $in: ['waiting', 'onboard'] },
-  });
-  if (existing) {
-    if (allowExisting) {
-      return existing;
-    }
-    throw new ApiError(409, 'Passenger already has an active ride session for this trip');
-  }
-
-  await ensureTripHasBoardingCapacity(trip);
-
   const pickupType = pickupRequest.pickupType || 'roadside';
   const pickupReference = isTerminalPickupType(pickupType)
     ? pickupRequest.terminalLocation || pickupRequest.pickupLocation
@@ -116,7 +107,7 @@ const completeBoardingForPickupRequest = async ({
     throw new ApiError(409, 'Pickup request is missing valid unload destination coordinates');
   }
 
-  const rideSession = await RideSession.create({
+  const rideDocument = {
     passengerId,
     tripSessionId: trip._id,
     pickupRequestId: pickupRequest._id,
@@ -124,9 +115,9 @@ const completeBoardingForPickupRequest = async ({
     boardingMethod,
     boardingStopRef: String(
       pickupRequest.terminalStopRef ||
-          pickupRequest.stopRef ||
-          pickupRequest.fareSnapshot?.boardingStopRef ||
-          ''
+        pickupRequest.stopRef ||
+        pickupRequest.fareSnapshot?.boardingStopRef ||
+        ''
     ).trim(),
     boardingLocation: {
       type: 'Point',
@@ -141,39 +132,141 @@ const completeBoardingForPickupRequest = async ({
     status: 'onboard',
     boardedAt: now,
     canSendStopAlert: true,
-  });
+  };
+
+  const session = await mongoose.startSession();
+  let rideSession;
+  let created = false;
+  try {
+    await session.withTransaction(async () => {
+      created = false;
+      const exactExisting = await RideSession.findOne({
+        pickupRequestId: pickupRequest._id,
+      }).session(session);
+      if (exactExisting) {
+        rideSession = exactExisting;
+        return;
+      }
+
+      const activeExisting = await RideSession.findOne({
+        passengerId,
+        tripSessionId: trip._id,
+        status: { $in: ['waiting', 'onboard'] },
+      }).session(session);
+      if (activeExisting) {
+        if (allowExisting && String(activeExisting.pickupRequestId) === String(pickupRequest._id)) {
+          rideSession = activeExisting;
+          return;
+        }
+        throw new ApiError(
+          409,
+          'Passenger already has an active ride session for this trip'
+        );
+      }
+
+      const freshPickup = await PickupRequest.findOne({
+        _id: pickupRequest._id,
+        passengerId,
+        tripSessionId: trip._id,
+        status: { $in: ['pending', 'acknowledged'] },
+      }).session(session);
+      if (!freshPickup) {
+        throw new ApiError(409, 'Pickup request is no longer available for boarding');
+      }
+
+      const freshTrip = await TripSession.findOne({
+        _id: trip._id,
+        status: 'active',
+      }).session(session);
+      if (!freshTrip) {
+        throw new ApiError(409, 'Trip session is not active');
+      }
+      await ensureTripHasBoardingCapacity(freshTrip, { session });
+
+      [rideSession] = await RideSession.create([rideDocument], { session });
+      await PickupRequest.updateOne(
+        { _id: pickupRequest._id },
+        {
+          $set: {
+            status: 'completed',
+            destinationStopRef: normalizedDestinationStopRef,
+            destinationLocation: {
+              type: 'Point',
+              coordinates: [resolvedDestinationLng, resolvedDestinationLat],
+            },
+          },
+        },
+        { session }
+      );
+      await TripSession.updateOne(
+        { _id: trip._id },
+        { $inc: { occupancyCount: 1 } },
+        { session }
+      );
+      created = true;
+    });
+  } catch (error) {
+    if (isDuplicateKeyError(error)) {
+      rideSession = await RideSession.findOne({
+        pickupRequestId: pickupRequest._id,
+      });
+      if (rideSession) {
+        created = false;
+      } else {
+        throw error;
+      }
+    } else {
+      throw error;
+    }
+  } finally {
+    await session.endSession();
+  }
+
+  if (!rideSession) {
+    throw new ApiError(409, 'Boarding could not be completed safely');
+  }
+  if (!created) {
+    return rideSession;
+  }
 
   pickupRequest.status = 'completed';
-  await pickupRequest.save();
-  await TripSession.findByIdAndUpdate(trip._id, {
-    $inc: { occupancyCount: 1 },
-  });
-  await syncTerminalQueueAfterBoarding({ trip, pickupType, now });
+  const updatedTrip = await TripSession.findById(trip._id);
+  if (updatedTrip) {
+    await syncTerminalQueueAfterBoarding({
+      trip: updatedTrip,
+      pickupType,
+      now,
+    });
+  }
 
   const tripDriver = trip.driverId
     ? await Driver.findById(trip.driverId).select('userId')
     : null;
-  await publishNotification({
-    userId: tripDriver?.userId,
-    type: 'passenger_boarded',
-    title:
-      boardingMethod === 'auto_proximity'
-        ? 'Passenger auto-boarded'
-        : 'Passenger boarded',
-    body: `Passenger boarded near ${
-      pickupRequest.terminalStopRef ||
-      pickupRequest.stopRef ||
-      'the selected pickup point'
-    }.`,
-    payload: {
-      requestId: pickupRequest._id.toString(),
-      tripSessionId: trip._id.toString(),
-      boardingMethod,
-      request: serializePickupRequest(pickupRequest),
-      rideSession: serializeRideSession(rideSession),
-    },
-    category: 'trip',
-  });
+  try {
+    await publishNotification({
+      userId: tripDriver?.userId,
+      type: 'passenger_boarded',
+      title:
+        boardingMethod === 'auto_proximity'
+          ? 'Passenger auto-boarded'
+          : 'Passenger boarded',
+      body: `Passenger boarded near ${
+        pickupRequest.terminalStopRef ||
+        pickupRequest.stopRef ||
+        'the selected pickup point'
+      }.`,
+      payload: {
+        requestId: pickupRequest._id.toString(),
+        tripSessionId: trip._id.toString(),
+        boardingMethod,
+        request: serializePickupRequest(pickupRequest),
+        rideSession: serializeRideSession(rideSession),
+      },
+      category: 'trip',
+    });
+  } catch (error) {
+    console.error('[Boarding] Notification publication failed:', error.message);
+  }
 
   return rideSession;
 };

@@ -20,6 +20,10 @@ class AppConfig {
     'PARAGO_ENABLE_REALTIME',
     defaultValue: true,
   );
+  static const bool _enableRouteLocationBatchesFallback = bool.fromEnvironment(
+    'PARAGO_ENABLE_ROUTE_LOCATION_BATCHES',
+    defaultValue: false,
+  );
 
   static String? _resolvedApiBaseUrl;
 
@@ -27,6 +31,8 @@ class AppConfig {
   static String get openRouteServiceApiKey => _openRouteServiceApiKeyFallback;
   static bool get hasGoogleClientId => googleFallbackClientId.trim().isNotEmpty;
   static bool get enableRealtime => _enableRealtimeFallback;
+  static bool get enableRouteLocationBatches =>
+      _enableRouteLocationBatchesFallback;
 
   static Future<void> load() async {}
 

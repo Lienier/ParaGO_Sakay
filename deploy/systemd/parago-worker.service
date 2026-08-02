@@ -1,0 +1,31 @@
+[Unit]
+Description=ParaGO asynchronous worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=parago
+Group=parago
+WorkingDirectory=/opt/parago/current
+EnvironmentFile=/etc/parago/parago.env
+Environment=RUN_API_JOBS=false
+Environment=RUN_WORKER_JOBS=true
+ExecStart=/usr/bin/node src/worker.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

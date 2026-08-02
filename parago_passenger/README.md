@@ -59,6 +59,17 @@ flutter run -d <device> \
 
 The app no longer uses a bundled `.env`. Pass app config through `--dart-define`.
 
+The batched route-location protocol is staged but disabled by default. Enable
+it only against a compatible backend build:
+
+```powershell
+flutter run -d <device> `
+  --dart-define=PARAGO_ENABLE_ROUTE_LOCATION_BATCHES=true
+```
+
+Until the coordinated protocol cutover, the backend continues emitting the
+authorized legacy location event alongside route batches.
+
 Backend note:
 
 - Add Firebase Admin service-account values to the root `.env`.

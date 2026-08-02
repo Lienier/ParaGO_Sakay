@@ -10,11 +10,24 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "start:worker": "node src/worker.js",
     "dev": "nodemon src/server.js",
     "route:build": "node scripts/generate_route_payload.js",
-    "test": "node test.js && node --test tests/announcements.integration.test.js",
+    "test": "node test.js && node --test tests/staging-launcher.test.js tests/announcements.integration.test.js tests/realtime-capacity.characterization.test.js tests/phase5-database-migration.test.js tests/redis-foundation.test.js tests/async-worker.test.js tests/worker-process-controls.test.js tests/deployment-hardening.test.js tests/phase10-load-harness.test.js",
     "test:unit": "node test.js",
-    "test:announcements": "node --test tests/announcements.integration.test.js"
+    "test:announcements": "node --test tests/announcements.integration.test.js",
+    "test:characterization": "node --test tests/realtime-capacity.characterization.test.js",
+    "test:staging-guard": "node --test tests/staging-launcher.test.js",
+    "phase10:fixtures": "node scripts/prepare-phase10-load-data.js",
+    "phase10:spec": "node scripts/build-phase10-digitalocean-spec.js",
+    "phase10:socket": "node load-tests/socket-capacity.js",
+    "phase10:socket:dry-run": "node load-tests/socket-capacity.js --dry-run=true",
+    "phase10:summary": "node scripts/summarize-phase10-results.js",
+    "audit:phase5:production": "node scripts/audit-phase5-database.js --environment=production",
+    "audit:phase5:staging": "node scripts/audit-phase5-database.js --environment=staging",
+    "audit:phase5:production:forensics": "node scripts/audit-phase5-database.js --environment=production --forensics",
+    "migrate:phase5:production:dry-run": "node scripts/migrate-phase5-database.js --environment=production",
+    "migrate:phase5:staging:dry-run": "node scripts/migrate-phase5-database.js --environment=staging"
   },
   "keywords": [
     "parago",
@@ -27,23 +40,25 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "axios": "^1.7.7",
+    "axios": "^1.18.1",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
+    "express": "^4.22.2",
     "express-rate-limit": "^7.2.0",
-    "firebase-admin": "^13.7.0",
-    "google-auth-library": "^9.14.1",
+    "firebase-admin": "^14.2.0",
+    "google-auth-library": "^10.9.1",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.5.4",
-    "morgan": "^1.10.0",
+    "mongoose": "^8.24.2",
+    "morgan": "^1.11.0",
+    "redis": "^6.1.0",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
     "mongodb-memory-server": "^11.2.0",
     "nodemon": "^3.1.4",
+    "socket.io-client": "^4.8.1",
     "supertest": "^7.2.2"
   }
 }

@@ -22,7 +22,9 @@ const createCorsOriginDelegate = ({
       return;
     }
 
-    callback(new Error('Origin not allowed by CORS'));
+    const error = new Error('Origin not allowed by CORS');
+    error.statusCode = 403;
+    callback(error);
   };
 };
 

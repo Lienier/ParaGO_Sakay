@@ -75,6 +75,16 @@ const rideSessionSchema = new Schema(
 
 rideSessionSchema.index({ passengerId: 1, tripSessionId: 1, status: 1 });
 rideSessionSchema.index({ tripSessionId: 1, status: 1 });
+rideSessionSchema.index(
+  { pickupRequestId: 1 },
+  {
+    name: 'uniq_ride_session_pickup_request',
+    unique: true,
+    partialFilterExpression: {
+      pickupRequestId: { $type: 'objectId' },
+    },
+  }
+);
 rideSessionSchema.index({ boardingLocation: '2dsphere' });
 rideSessionSchema.index({ destinationLocation: '2dsphere' });
 

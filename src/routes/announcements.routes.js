@@ -1,6 +1,7 @@
 const express = require('express');
 const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
+const { apiRateLimiters } = require('../middlewares/rateLimits');
 const asyncHandler = require('../utils/asyncHandler');
 const { ok } = require('../utils/response');
 const { ensureObjectId } = require('../utils/validators');
@@ -45,6 +46,7 @@ router.get(
   '/admin',
   authenticate,
   authorize(ADMIN),
+  apiRateLimiters.admin,
   asyncHandler(async (req, res) => {
     const list = await listAdminAnnouncements({ filters: req.query });
     return ok(res, list, 'Announcements');
@@ -55,6 +57,7 @@ router.post(
   '/admin',
   authenticate,
   authorize(ADMIN),
+  apiRateLimiters.admin,
   asyncHandler(async (req, res) => {
     const announcement = await createAnnouncement({
       admin: req.user,
@@ -68,6 +71,7 @@ router.patch(
   '/admin/:id',
   authenticate,
   authorize(ADMIN),
+  apiRateLimiters.admin,
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'announcement id');
     const announcement = await updateAnnouncement({
@@ -83,6 +87,7 @@ router.post(
   '/admin/:id/archive',
   authenticate,
   authorize(ADMIN),
+  apiRateLimiters.admin,
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'announcement id');
     const announcement = await archiveAnnouncement({

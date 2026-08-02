@@ -1,7 +1,7 @@
 const ApiError = require('../utils/apiError');
 
 const notFound = (req, res, next) => {
-  next(new ApiError(404, `Route not found: ${req.originalUrl}`));
+  next(new ApiError(404, `Route not found: ${req.path}`));
 };
 
 const normalizeError = (error) => {
@@ -32,7 +32,7 @@ const normalizeError = (error) => {
   }
 
   return {
-    status: error.statusCode || 500,
+    status: error.statusCode || error.status || 500,
     message: error.message || 'Internal Server Error',
     errors: error.errors || [],
   };

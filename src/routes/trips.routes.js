@@ -7,6 +7,7 @@ const Route = require('../models/route');
 const asyncHandler = require('../utils/asyncHandler');
 const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
+const { apiRateLimiters } = require('../middlewares/rateLimits');
 const ApiError = require('../utils/apiError');
 const { ok } = require('../utils/response');
 const { DRIVER, ADMIN, PASSENGER } = require('../constants/roles');
@@ -25,6 +26,9 @@ const {
 const {
   calculatePassengerEta,
 } = require('../services/passengerEta.service');
+const {
+  invalidateDriverActiveContext,
+} = require('../services/activeDriverContext.service');
 
 const router = express.Router();
 const terminalQueueCreateRetryLimit = 4;
@@ -193,6 +197,7 @@ router.post(
   '/:id/passenger-eta',
   authenticate,
   authorize(PASSENGER),
+  apiRateLimiters.eta,
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'trip id');
     const eta = await calculatePassengerEta({
@@ -273,6 +278,7 @@ router.post(
     if (trip.status === 'active' && trip.driverId) {
       await syncDriverActiveTripState({ driverId: trip.driverId, trip });
     }
+    await invalidateDriverActiveContext(trip.driverId);
     return ok(res, trip, 'Trip session created', 201);
   })
 );
@@ -358,6 +364,7 @@ router.patch(
     if (trip.driverId) {
       await syncDriverActiveTripState({ driverId: trip.driverId, trip });
     }
+    await invalidateDriverActiveContext(trip.driverId);
     return ok(res, trip, 'Trip started');
   })
 );
@@ -389,6 +396,7 @@ router.patch(
         trip: { operatingMode: 'route', terminalQueueStatus: 'off_queue' },
       });
     }
+    await invalidateDriverActiveContext(trip.driverId);
     return ok(res, trip, 'Trip ended');
   })
 );

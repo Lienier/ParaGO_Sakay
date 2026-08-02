@@ -31,6 +31,9 @@ const {
   resolveRouteTerminalStop,
 } = require('../services/hybridDispatch.service');
 const { deriveDriverPresence } = require('../services/driverPresence.service');
+const {
+  invalidateDriverActiveContext,
+} = require('../services/activeDriverContext.service');
 
 const router = express.Router();
 
@@ -216,6 +219,7 @@ const setTerminalQueueStatus = async (trip, terminalQueueStatus) => {
   if (!newJeepneyId) {
     driver.assignedJeepneyId = undefined;
     await driver.save();
+    await invalidateDriverActiveContext(driver._id);
     return buildDriverProfile(driver);
   }
 
@@ -234,6 +238,7 @@ const setTerminalQueueStatus = async (trip, terminalQueueStatus) => {
   await driver.save();
   jeepney.currentDriverId = driver._id;
   await jeepney.save();
+  await invalidateDriverActiveContext(driver._id);
   return buildDriverProfile(driver);
 };
 
@@ -718,6 +723,7 @@ router.patch(
       }
     }
 
+    await invalidateDriverActiveContext(profile._id);
     return ok(res, await buildDriverProfile(profile), 'Driver updated');
   })
 );

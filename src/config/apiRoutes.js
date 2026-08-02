@@ -14,13 +14,14 @@ const supportRoutes = require('../routes/support.routes');
 const notificationRoutes = require('../routes/notifications.routes');
 const announcementRoutes = require('../routes/announcements.routes');
 const reportRoutes = require('../routes/reports.routes');
+const operationsRoutes = require('../routes/operations.routes');
 
 const routeDefinitions = [
-  { path: '/auth', router: authRoutes, useAuthLimiter: true },
+  { path: '/auth', router: authRoutes, rateLimitGroup: 'auth' },
   { path: '/users', router: userRoutes },
   { path: '/passengers', router: passengerRoutes },
   { path: '/drivers', router: driverRoutes },
-  { path: '/admin', router: adminRoutes },
+  { path: '/admin', router: adminRoutes, rateLimitGroup: 'admin' },
   { path: '/jeepneys', router: jeepneyRoutes },
   { path: '/routes', router: routeRoutes },
   { path: '/trips', router: tripRoutes },
@@ -28,17 +29,21 @@ const routeDefinitions = [
   { path: '/boarding', router: boardingRoutes },
   { path: '/ride-sessions', router: rideSessionRoutes },
   { path: '/stop-alerts', router: stopAlertRoutes },
-  { path: '/support', router: supportRoutes },
+  { path: '/support', router: supportRoutes, rateLimitGroup: 'support' },
   { path: '/notifications', router: notificationRoutes },
   { path: '/announcements', router: announcementRoutes },
-  { path: '/reports', router: reportRoutes },
+  { path: '/reports', router: reportRoutes, rateLimitGroup: 'admin' },
+  { path: '/operations', router: operationsRoutes, rateLimitGroup: 'admin' },
 ];
 
-const registerApiRoutes = (app, { prefix = '', authLimiter } = {}) => {
+const registerApiRoutes = (app, { prefix = '', rateLimiters = {} } = {}) => {
   for (const definition of routeDefinitions) {
     const middlewares = [];
-    if (definition.useAuthLimiter && authLimiter) {
-      middlewares.push(authLimiter);
+    const limiter =
+      rateLimiters[definition.rateLimitGroup || 'general'] ||
+      rateLimiters.general;
+    if (limiter) {
+      middlewares.push(limiter);
     }
     middlewares.push(definition.router);
     app.use(`${prefix}${definition.path}`, ...middlewares);

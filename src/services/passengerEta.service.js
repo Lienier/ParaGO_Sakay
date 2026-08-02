@@ -12,6 +12,10 @@ const {
   orderedRouteCoordinates,
 } = require('../utils/routeGeo');
 const { parseDurationSeconds } = require('./routePreview.service');
+const {
+  getLatestJeepLocation,
+  coalesceEtaRequest,
+} = require('./transientState.service');
 
 const GOOGLE_ROUTES_API_URL =
   'https://routes.googleapis.com/directions/v2:computeRoutes';
@@ -50,6 +54,25 @@ const pointCoordinates = (value) => {
     return null;
   }
   return [longitude, latitude];
+};
+
+const validTransientLocation = (value) => {
+  const latitude = Number(value?.latitude);
+  const longitude = Number(value?.longitude);
+  const lastSeenAt = value?.lastSeenAt ? new Date(value.lastSeenAt) : null;
+  if (
+    !Number.isFinite(latitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    !Number.isFinite(longitude) ||
+    longitude < -180 ||
+    longitude > 180 ||
+    !lastSeenAt ||
+    Number.isNaN(lastSeenAt.getTime())
+  ) {
+    return null;
+  }
+  return { latitude, longitude, lastSeenAt };
 };
 
 const buildRouteGeometry = ({ trip, route }) => {
@@ -262,7 +285,10 @@ const calculatePassengerEta = async ({ tripId, destination }) => {
     return pending;
   }
 
-  const request = (async () => {
+  const request = coalesceEtaRequest({
+    key: cacheKey,
+    ttlSeconds: Math.ceil(ETA_CACHE_TTL_MS / 1000),
+    loader: async () => {
     const trip = await TripSession.findById(tripId).populate(
       'jeepneyId',
       'plateNumber status lastKnownLocation lastSeenAt'
@@ -278,9 +304,25 @@ const calculatePassengerEta = async ({ tripId, destination }) => {
     if (!jeepney || jeepney.status !== 'active') {
       throw new ApiError(409, 'The trip jeepney is not active');
     }
-    const jeepneyCoordinates = pointCoordinates(jeepney.lastKnownLocation);
-    const lastSeenAt = jeepney.lastSeenAt
+    const transientLocation = await getLatestJeepLocation(jeepney._id);
+    const cachedLocation = validTransientLocation(transientLocation.value);
+    const mongoCoordinates = pointCoordinates(jeepney.lastKnownLocation);
+    const mongoLastSeenAt = jeepney.lastSeenAt
       ? new Date(jeepney.lastSeenAt)
+      : null;
+    const useCachedLocation =
+      cachedLocation &&
+      (!mongoLastSeenAt ||
+        Number.isNaN(mongoLastSeenAt.getTime()) ||
+        cachedLocation.lastSeenAt >= mongoLastSeenAt);
+    const jeepneyCoordinates = useCachedLocation
+      ? [cachedLocation.longitude, cachedLocation.latitude]
+      : mongoCoordinates;
+    const locationLastSeenAt = useCachedLocation
+      ? cachedLocation.lastSeenAt
+      : mongoLastSeenAt;
+    const lastSeenAt = locationLastSeenAt
+      ? new Date(locationLastSeenAt)
       : null;
     if (
       !jeepneyCoordinates ||
@@ -320,12 +362,18 @@ const calculatePassengerEta = async ({ tripId, destination }) => {
       expiresAt: expiresAt.toISOString(),
     };
 
+    return payload;
+    },
+  }).then((payload) => {
+    const expiresAtMs = Date.parse(payload.expiresAt);
     etaCache.set(cacheKey, {
       payload,
-      expiresAtMs: expiresAt.getTime(),
+      expiresAtMs: Number.isFinite(expiresAtMs)
+        ? expiresAtMs
+        : Date.now() + ETA_CACHE_TTL_MS,
     });
     return payload;
-  })().finally(() => {
+  }).finally(() => {
     pendingEtaRequests.delete(cacheKey);
   });
 

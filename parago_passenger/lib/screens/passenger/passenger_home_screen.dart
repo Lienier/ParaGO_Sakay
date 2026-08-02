@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/config/app_config.dart';
 import '../../core/utils/action_feedback.dart';
 import '../../core/utils/parago_format.dart';
 import '../../models/operations/notification.dart';
@@ -20,6 +21,9 @@ import '../../models/trip/trip_session.dart';
 import '../../services/notification_service.dart';
 import '../../services/announcement_service.dart';
 import '../../services/passenger_service.dart';
+import '../../services/passenger_route_vehicle_batch.dart';
+import '../../services/passenger_refresh_coordinator.dart';
+import '../../services/passenger_vehicle_reconciliation.dart';
 import '../../services/passenger_profile_service.dart';
 import '../../services/realtime_socket_service.dart';
 import '../../services/route_service.dart';
@@ -61,12 +65,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const Duration _tripMarkerAnimationMaxDuration =
       Duration(milliseconds: 1400);
   static const Duration _tripRealtimeStaleAfter = Duration(seconds: 8);
-  static const Duration _liveRefreshInterval = Duration(seconds: 8);
+  static const Duration _liveRefreshInterval = Duration(seconds: 15);
   static const Duration _backgroundLocationRefreshInterval =
       Duration(seconds: 25);
   static const Duration _passengerLocationReportInterval = Duration(seconds: 5);
   static const double _passengerLocationReportDistanceMeters = 8;
-  static const Duration _metadataRefreshInterval = Duration(seconds: 12);
+  static const Duration _metadataRefreshInterval = Duration(seconds: 45);
   static const Duration _socketRefreshThrottle = Duration(seconds: 4);
   static const double _tripProjectionHandoffThreshold = 0.88;
   static const Duration _tripProjectionMaxDuration = Duration(seconds: 1);
@@ -112,7 +116,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   Timer? _tripMarkerAnimationTimer;
   StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
   StreamSubscription<Map<String, dynamic>>? _realtimeLocationSubscription;
+  StreamSubscription<Map<String, dynamic>>? _realtimeVehicleBatchSubscription;
   StreamSubscription<Map<String, dynamic>>? _realtimeAnnouncementSubscription;
+  StreamSubscription<RealtimeSocketLifecycleEvent>?
+      _realtimeLifecycleSubscription;
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
   bool _locatingPassenger = false;
@@ -132,6 +139,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   DateTime? _lastPassengerSyncAt;
   DateTime? _lastSocketRefreshAt;
   DateTime? _lastAnnouncementRefreshAttemptAt;
+  DateTime? _lastRouteMetadataRefreshAt;
   String? _lastMapPromptMessage;
   Set<String> _knownNotificationIds = <String>{};
   final Set<String> _destinationReminderRideIds = <String>{};
@@ -150,6 +158,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       <String, _TripMarkerAnimation>{};
   final Map<String, _TripVehicleMotionState> _tripVehicleStates =
       <String, _TripVehicleMotionState>{};
+  final PassengerRouteVehicleBatchReconciler _routeVehicleBatchReconciler =
+      PassengerRouteVehicleBatchReconciler();
+  final PassengerRefreshCoordinator _refreshCoordinator =
+      PassengerRefreshCoordinator();
+  final PassengerRealtimeReconciliationGate _realtimeReconciliationGate =
+      PassengerRealtimeReconciliationGate();
+  Future<void>? _socketReconciliationOperation;
+  bool _socketReconciliationQueued = false;
+  int _dashboardLoadGeneration = 0;
   PassengerJeepEta? _selectedJeepEta;
   String? _passengerEtaTripId;
   String? _passengerEtaError;
@@ -308,6 +325,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final notificationService = NotificationService(session.apiClient);
     final routeService = RouteService(session.apiClient);
     final requestStartedAt = DateTime.now();
+    final loadGeneration = ++_dashboardLoadGeneration;
     final previousRouteId = _selectedRouteId;
 
     if (!silent) {
@@ -356,7 +374,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         anchor: _draftPickupPoint,
       );
 
-      if (!mounted) return;
+      if (!mounted || loadGeneration != _dashboardLoadGeneration) return;
       setState(() {
         if (_passengerEtaTripId != null && _passengerEtaTripId != nextTripId) {
           _clearPassengerEtaSelection();
@@ -369,6 +387,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _selectedTripId = nextTripId;
         _selectedRouteId = nextRouteId;
         _lastPassengerSyncAt = DateTime.now();
+        _lastRouteMetadataRefreshAt = DateTime.now();
         _showingCachedPassengerSnapshot = usedStaleCache;
         _syncMessage = usedStaleCache
             ? 'Showing cached trip data while reconnecting.'
@@ -428,15 +447,13 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
             forceRefresh: true,
           );
         }
-        if (_hasFreshRealtimeVehicleState()) {
-          if (_shouldRefreshPassengerMetadata()) {
-            await _refreshPassengerMetadata(silent: true);
-          }
-        } else {
-          await _load(
-            silent: true,
-            preferFresh: !_realtimeSocketService.isConnected,
+        if (!_hasFreshRealtimeVehicleState()) {
+          await _refreshTripsOnly(
+            useCache: _realtimeSocketService.isConnected,
           );
+        }
+        if (_shouldRefreshPassengerMetadata()) {
+          await _refreshPassengerMetadata(silent: true);
         }
         _refreshAnnouncementsIfDue();
       } finally {
@@ -446,78 +463,197 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 
   Future<void> _refreshPassengerMetadata({bool silent = false}) async {
-    final session = context.read<SessionController>();
-    final passengerService = PassengerService(session.apiClient);
-    final notificationService = NotificationService(session.apiClient);
-    final routeService = RouteService(session.apiClient);
-    final previousRouteId = _selectedRouteId;
-
     if (!silent) {
       setState(() => _loading = true);
     }
 
     try {
       _refreshAnnouncementsIfDue(useCache: true);
-      final results = await Future.wait<dynamic>([
-        passengerService.getMyPickupRequests(useCache: true),
-        passengerService.getMyRides(useCache: true),
-        notificationService.getMine(useCache: true),
-        routeService.getRoutes(useCache: true),
-      ]);
+      final refreshes = <Future<void>>[
+        _refreshBookings(useCache: true),
+        _refreshNotifications(useCache: true, silent: silent),
+      ];
+      final routeRefreshAt = _lastRouteMetadataRefreshAt;
+      if (routeRefreshAt == null ||
+          DateTime.now().difference(routeRefreshAt) >=
+              const Duration(minutes: 5)) {
+        refreshes.add(_refreshRoutes(useCache: true));
+      }
+      await Future.wait(refreshes);
+      if (mounted) {
+        _lastPassengerSyncAt = DateTime.now();
+      }
+    } finally {
+      if (mounted && !silent) {
+        setState(() => _loading = false);
+      }
+    }
+  }
 
-      final requests = results[0] as List<PickupRequestModel>;
-      final rides = results[1] as List<RideSessionModel>;
-      final notifications = results[2] as List<NotificationModel>;
-      final routes = results[3] as List<RouteSummaryModel>;
-      final selectableRoutes = routes
-          .where((route) => route.status == 'active')
-          .toList(growable: false);
-      final nextRouteId = _selectRouteId(
-        routes: selectableRoutes.isEmpty ? routes : selectableRoutes,
-        trips: _trips,
-        requests: requests,
-        rides: rides,
+  Future<bool> _refreshTripsOnly({
+    required bool useCache,
+    bool replacePending = false,
+  }) async {
+    final session = context.read<SessionController>();
+    try {
+      final result = await _refreshCoordinator.run<List<TripSession>>(
+        PassengerRefreshDomain.trips,
+        () => TripService(session.apiClient).getActiveTrips(useCache: useCache),
+        replacePending: replacePending,
       );
+      if (!mounted || !result.isCurrent) return false;
+      final previousRouteId = _selectedRouteId;
       final nextTripId = _selectTripIdForRoute(
-        trips: _trips,
-        requests: requests,
-        rides: rides,
-        routeId: nextRouteId,
+        trips: result.value,
+        requests: _requests,
+        rides: _rides,
+        routeId: _selectedRouteId,
         anchor: _draftPickupPoint,
       );
-
-      if (!mounted) {
-        return;
-      }
-
       setState(() {
         if (_passengerEtaTripId != null && _passengerEtaTripId != nextTripId) {
           _clearPassengerEtaSelection();
         }
-        _requests = requests;
-        _rides = rides;
-        _notifications = notifications;
-        _routes = routes;
+        _trips = result.value;
         _selectedTripId = nextTripId;
+      });
+      _reconcileTripVehicleStates(result.value);
+      _pruneTripMarkerAnimations();
+      _syncRealtimeRouteSubscription(
+        previousRouteId: previousRouteId,
+        nextRouteId: _selectedRouteId,
+      );
+      return true;
+    } catch (_) {
+      // Trip polling is best-effort; retain the last authoritative snapshot.
+      return false;
+    }
+  }
+
+  Future<void> _refreshBookings({
+    required bool useCache,
+    bool replacePending = false,
+  }) async {
+    final session = context.read<SessionController>();
+    final service = PassengerService(session.apiClient);
+    try {
+      final result = await _refreshCoordinator.run<_PassengerBookingSnapshot>(
+        PassengerRefreshDomain.bookings,
+        () async {
+          final values = await Future.wait<dynamic>([
+            service.getMyPickupRequests(useCache: useCache),
+            service.getMyRides(useCache: useCache),
+          ]);
+          return _PassengerBookingSnapshot(
+            requests: values[0] as List<PickupRequestModel>,
+            rides: values[1] as List<RideSessionModel>,
+          );
+        },
+        replacePending: replacePending,
+      );
+      if (!mounted || !result.isCurrent) return;
+      final previousRouteId = _selectedRouteId;
+      final nextRouteId = _selectRouteId(
+        routes: _routes,
+        trips: _trips,
+        requests: result.value.requests,
+        rides: result.value.rides,
+      );
+      final nextTripId = _selectTripIdForRoute(
+        trips: _trips,
+        requests: result.value.requests,
+        rides: result.value.rides,
+        routeId: nextRouteId,
+        anchor: _draftPickupPoint,
+      );
+      setState(() {
+        _requests = result.value.requests;
+        _rides = result.value.rides;
         _selectedRouteId = nextRouteId;
-        _lastPassengerSyncAt = DateTime.now();
+        _selectedTripId = nextTripId;
       });
       _syncRealtimeRouteSubscription(
         previousRouteId: previousRouteId,
         nextRouteId: nextRouteId,
       );
-      _handleRealtimePassengerUpdates(
-        notifications: notifications,
-        silent: silent,
-      );
       unawaited(_maybeAutoUnloadWhenSeparated());
       unawaited(_maybeAutoHandleDestinationApproach());
     } catch (_) {
-      // Keep the current live view stable if metadata refresh fails.
-    } finally {
-      if (mounted && !silent) {
-        setState(() => _loading = false);
-      }
+      // Booking failures must not hide trips or stop map interaction.
+    }
+  }
+
+  Future<void> _refreshNotifications({
+    required bool useCache,
+    bool silent = true,
+    bool replacePending = false,
+  }) async {
+    final session = context.read<SessionController>();
+    try {
+      final result = await _refreshCoordinator.run<List<NotificationModel>>(
+        PassengerRefreshDomain.notifications,
+        () =>
+            NotificationService(session.apiClient).getMine(useCache: useCache),
+        replacePending: replacePending,
+      );
+      if (!mounted || !result.isCurrent) return;
+      setState(() => _notifications = result.value);
+      _handleRealtimePassengerUpdates(
+        notifications: result.value,
+        silent: silent,
+      );
+    } catch (_) {
+      // Notification failures do not affect booking or vehicle state.
+    }
+  }
+
+  Future<void> _refreshRoutes({
+    required bool useCache,
+    bool replacePending = false,
+  }) async {
+    final session = context.read<SessionController>();
+    try {
+      final result = await _refreshCoordinator.run<List<RouteSummaryModel>>(
+        PassengerRefreshDomain.routes,
+        () => RouteService(session.apiClient).getRoutes(useCache: useCache),
+        replacePending: replacePending,
+      );
+      if (!mounted || !result.isCurrent) return;
+      final previousRouteId = _selectedRouteId;
+      final currentRouteStillAvailable = previousRouteId != null &&
+          result.value.any(
+            (route) => route.id == previousRouteId && route.status == 'active',
+          );
+      final activeRoutes = result.value
+          .where((route) => route.status == 'active')
+          .toList(growable: false);
+      final nextRouteId = currentRouteStillAvailable
+          ? previousRouteId
+          : _selectRouteId(
+              routes: activeRoutes.isEmpty ? result.value : activeRoutes,
+              trips: _trips,
+              requests: _requests,
+              rides: _rides,
+            );
+      final nextTripId = _selectTripIdForRoute(
+        trips: _trips,
+        requests: _requests,
+        rides: _rides,
+        routeId: nextRouteId,
+        anchor: _draftPickupPoint,
+      );
+      setState(() {
+        _routes = result.value;
+        _selectedRouteId = nextRouteId;
+        _selectedTripId = nextTripId;
+        _lastRouteMetadataRefreshAt = DateTime.now();
+      });
+      _syncRealtimeRouteSubscription(
+        previousRouteId: previousRouteId,
+        nextRouteId: nextRouteId,
+      );
+    } catch (_) {
+      // Route metadata is stable; preserve the last valid list on failure.
     }
   }
 
@@ -546,6 +682,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   bool _applyRealtimePassengerNotification(NotificationModel notification) {
     var needsFallback = false;
+    _refreshCoordinator.invalidate(PassengerRefreshDomain.notifications);
 
     setState(() {
       _notifications = _upsertNotificationList(_notifications, notification);
@@ -553,6 +690,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       switch (notification.type) {
         case 'pickup_request_acknowledged':
         case 'pickup_request_completed':
+          _refreshCoordinator.invalidate(PassengerRefreshDomain.bookings);
           final request = _readPassengerPickupRequest(notification.payload);
           if (request == null) {
             needsFallback = true;
@@ -566,6 +704,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           }
           break;
         case 'ride_completed':
+          _refreshCoordinator.invalidate(PassengerRefreshDomain.bookings);
           final ride = _readPassengerRideSession(notification.payload);
           if (ride == null) {
             needsFallback = true;
@@ -3301,8 +3440,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      _connectRealtimeSocket();
       await _load(preferFresh: true);
+      if (!mounted) return;
+      _connectRealtimeSocket();
       if (mounted) {
         _showMapPromptNotification(route: _selectedRoute, force: true);
       }
@@ -3319,10 +3459,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     _tripMarkerAnimationTimer?.cancel();
     _realtimeNotificationSubscription?.cancel();
     _realtimeLocationSubscription?.cancel();
+    _realtimeVehicleBatchSubscription?.cancel();
     _realtimeAnnouncementSubscription?.cancel();
+    _realtimeLifecycleSubscription?.cancel();
     _dismissMapPromptNotification();
     _announcementFeedController?.dispose();
+    _refreshCoordinator.dispose();
     _realtimeSocketService.dispose();
+    _routeVehicleBatchReconciler.clear();
     super.dispose();
   }
 
@@ -3335,7 +3479,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
     _realtimeNotificationSubscription?.cancel();
     _realtimeLocationSubscription?.cancel();
+    _realtimeVehicleBatchSubscription?.cancel();
     _realtimeAnnouncementSubscription?.cancel();
+    _realtimeLifecycleSubscription?.cancel();
 
     _realtimeNotificationSubscription =
         _realtimeSocketService.notificationCreatedStream.listen(
@@ -3344,11 +3490,27 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
     _realtimeLocationSubscription =
         _realtimeSocketService.jeepneyLocationStream.listen(
-      _handleRealtimeLocationUpdate,
+      (event) {
+        if (!AppConfig.enableRouteLocationBatches) {
+          unawaited(_handleRealtimeLocationUpdate(event));
+        }
+      },
+    );
+    _realtimeVehicleBatchSubscription =
+        _realtimeSocketService.routeVehicleBatchStream.listen(
+      (event) {
+        if (AppConfig.enableRouteLocationBatches) {
+          unawaited(_handleRealtimeVehicleBatch(event));
+        }
+      },
     );
     _realtimeAnnouncementSubscription =
         _realtimeSocketService.announcementActivityStream.listen(
       (_) => unawaited(_refreshAnnouncements()),
+    );
+    _realtimeLifecycleSubscription =
+        _realtimeSocketService.lifecycleStream.listen(
+      _handleRealtimeSocketLifecycle,
     );
 
     _realtimeSocketService.connect(
@@ -3486,6 +3648,70 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     _connectRealtimeSocket();
   }
 
+  void _handleRealtimeSocketLifecycle(RealtimeSocketLifecycleEvent event) {
+    if (!mounted) return;
+    switch (event.type) {
+      case RealtimeSocketLifecycleType.connected:
+        return;
+      case RealtimeSocketLifecycleType.disconnected:
+        _realtimeReconciliationGate.disconnected();
+        return;
+      case RealtimeSocketLifecycleType.ready:
+        _realtimeReconciliationGate.socketReady();
+        unawaited(_reconcileAfterSocketReady());
+    }
+  }
+
+  Future<void> _reconcileAfterSocketReady() {
+    final active = _socketReconciliationOperation;
+    if (active != null) {
+      _socketReconciliationQueued = true;
+      return active;
+    }
+    late final Future<void> operation;
+    operation = _performSocketReconciliation();
+    _socketReconciliationOperation = operation;
+    unawaited(
+      operation.then<void>(
+        (_) => _clearSocketReconciliation(operation),
+        onError: (Object _, StackTrace __) =>
+            _clearSocketReconciliation(operation),
+      ),
+    );
+    return operation;
+  }
+
+  void _clearSocketReconciliation(Future<void> operation) {
+    if (identical(_socketReconciliationOperation, operation)) {
+      _socketReconciliationOperation = null;
+    }
+  }
+
+  Future<void> _performSocketReconciliation() async {
+    do {
+      _socketReconciliationQueued = false;
+      _realtimeReconciliationGate.socketReady();
+      final routeAtStart = _selectedRouteId;
+      final refreshed = await _refreshTripsOnly(
+        useCache: false,
+        replacePending: true,
+      );
+      if (!mounted || !refreshed || routeAtStart != _selectedRouteId) return;
+      final buffered = _realtimeReconciliationGate.completeSnapshot();
+      final batch = buffered.latestBatch;
+      if (batch != null && AppConfig.enableRouteLocationBatches) {
+        await _handleRealtimeVehicleBatch(batch);
+      }
+      if (!AppConfig.enableRouteLocationBatches) {
+        for (final location in buffered.legacyLocations) {
+          await _handleRealtimeLocationUpdate(location);
+        }
+      }
+    } while (_socketReconciliationQueued && mounted);
+    unawaited(_refreshPassengerMetadata(silent: true));
+    _refreshAnnouncementsIfDue(useCache: false);
+  }
+
   void _syncRealtimeRouteSubscription({
     required String? previousRouteId,
     required String? nextRouteId,
@@ -3493,11 +3719,32 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final previous = previousRouteId?.trim() ?? '';
     final next = nextRouteId?.trim() ?? '';
     if (previous.isNotEmpty && previous != next) {
+      _clearRealtimeRouteState(next);
+    }
+    _routeVehicleBatchReconciler.selectRoute(next);
+    if (previous.isNotEmpty && previous != next) {
       _realtimeSocketService.unsubscribeFromRoute(previous);
     }
     if (next.isNotEmpty) {
       _realtimeSocketService.subscribeToRoute(next);
     }
+  }
+
+  void _clearRealtimeRouteState(String nextRouteId) {
+    final keepTripIds = _trips
+        .where((trip) => trip.routeId == nextRouteId)
+        .map((trip) => trip.id)
+        .toSet();
+    _tripVehicleStates
+        .removeWhere((tripId, _) => !keepTripIds.contains(tripId));
+    _tripMarkerAnimations
+        .removeWhere((tripId, _) => !keepTripIds.contains(tripId));
+    _routeVehicleBatchReconciler.selectRoute(nextRouteId);
+    _realtimeReconciliationGate.routeChanged();
+    _clearPassengerEtaSelection();
+    _passengerEtaTimer?.cancel();
+    _startPassengerEtaRefreshLoop();
+    _stopTripMarkerAnimationLoopIfIdle();
   }
 
   Future<void> _handleRealtimeSocketNotification(
@@ -3507,6 +3754,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       return;
     }
 
+    _dashboardLoadGeneration += 1;
     final notification = NotificationModel.fromJson(event);
     if (notification.id.isEmpty) {
       return;
@@ -3519,7 +3767,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     _realtimePrimed = true;
 
     if (!applied) {
-      await _refreshFromSocketEvent();
+      await Future.wait<void>([
+        _refreshBookings(useCache: false, replacePending: true),
+        _refreshNotifications(
+          useCache: false,
+          silent: true,
+          replacePending: true,
+        ),
+      ]);
       return;
     }
 
@@ -3534,166 +3789,221 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     if (!mounted) {
       return;
     }
-
-    final tripId = event['tripId']?.toString() ?? '';
-    final routeId = event['routeId']?.toString() ?? '';
-    final jeepneyId = event['jeepneyId']?.toString() ?? '';
-    final latitude = _parseDouble(event['latitude']);
-    final longitude = _parseDouble(event['longitude']);
-
-    if (latitude == null || longitude == null) {
+    if (_realtimeReconciliationGate.awaitingSnapshot) {
+      _realtimeReconciliationGate.bufferLegacy(event);
       return;
     }
 
-    final tripIndex = _findRealtimeTripIndex(
-      tripId: tripId,
-      jeepneyId: jeepneyId,
-      routeId: routeId,
+    final receivedAt = DateTime.now();
+    const policy = PassengerVehicleReconciliationPolicy();
+    final initialDecision = policy.decide(
+      payload: event,
+      trips: _trips,
+      receivedAt: receivedAt,
     );
+    if (!initialDecision.hasValidEvent) {
+      return;
+    }
+    final tripIndex = initialDecision.tripIndex;
     if (tripIndex < 0) {
       await _refreshFromSocketEvent();
       return;
     }
 
     final trip = _trips[tripIndex];
-    final nextPoint = LatLng(latitude, longitude);
-    final currentPoint = _tripVehiclePoint(trip);
-    final currentHeading = _tripVehicleHeading(trip);
-    final receivedAt = DateTime.now();
-    final sampleAt = _parseRealtimeSampleTime(event['timestamp'], receivedAt);
     final previousState = _tripVehicleStates[trip.id];
-    final sampleGap = _motionSampleGap(
-      sampleAt: sampleAt,
+    final decision = policy.decide(
+      payload: event,
+      trips: _trips,
+      receivedAt: receivedAt,
       previousSampleAt: previousState?.lastAuthoritativeSampleAt,
-      defaultDuration: _tripMarkerAnimationDefaultDuration,
-      minDuration: _tripMarkerAnimationMinDuration,
-      maxDuration: _tripMarkerAnimationMaxDuration,
     );
-    if (currentPoint == null) {
-      _setTripMarkerPosition(
-        tripIndex,
-        nextPoint,
-        headingDegrees: currentHeading,
-        lastRealtimeUpdateAt: receivedAt,
-        sampleAt: sampleAt,
-        expectedSampleGap: sampleGap,
-      );
-      _syncPassengerSelectedTripCamera(
-        tripId: trip.id,
-        target: nextPoint,
-      );
-      _maybeRefreshPassengerEtaForMovement(trip, nextPoint);
+    if (!decision.shouldApply) {
       return;
     }
-    final distanceMeters = Geolocator.distanceBetween(
-      currentPoint.latitude,
-      currentPoint.longitude,
-      nextPoint.latitude,
-      nextPoint.longitude,
-    );
+    _applyRealtimeVehicleEvents(<PassengerVehicleLocationEvent>[
+      decision.event!,
+    ]);
+  }
 
-    if (distanceMeters < _tripMarkerJitterMeters) {
-      _setTripVehicleRealtimeTimestamp(
-        trip.id,
-        receivedAt,
-        sampleAt: sampleAt,
-        expectedSampleGap: sampleGap,
-      );
+  Future<void> _handleRealtimeVehicleBatch(
+    Map<String, dynamic> payload,
+  ) async {
+    if (!mounted || !AppConfig.enableRouteLocationBatches) return;
+    if (_realtimeReconciliationGate.awaitingSnapshot) {
+      _realtimeReconciliationGate.bufferBatch(payload);
       return;
     }
-    _maybeRefreshPassengerEtaForMovement(trip, nextPoint);
-
-    final nextHeading = _resolveTripMarkerHeading(
-      previousPoint: currentPoint,
-      nextPoint: nextPoint,
-      currentHeading: currentHeading,
+    final decision = _routeVehicleBatchReconciler.reconcile(
+      payload: payload,
+      selectedRouteId: _selectedRouteId,
+      trips: _trips,
     );
-
-    if (_shouldSnapTripMarkerPosition(
-      distanceMeters: distanceMeters,
-      sampleGap: sampleGap,
-    )) {
-      _setTripMarkerPosition(
-        tripIndex,
-        nextPoint,
-        headingDegrees: nextHeading,
-        lastRealtimeUpdateAt: receivedAt,
-        sampleAt: sampleAt,
-        expectedSampleGap: sampleGap,
-        speedMetersPerSecond: _metersPerSecond(distanceMeters, sampleGap) ?? 0,
-        bearingDegrees: nextHeading,
-      );
-      _syncPassengerSelectedTripCamera(
-        tripId: trip.id,
-        target: nextPoint,
-      );
-      return;
+    if (!decision.acceptedSequence) return;
+    if (decision.acceptedVehicles.isNotEmpty) {
+      _applyRealtimeVehicleEvents(decision.acceptedVehicles);
     }
+    if (decision.unmatchedVehicleCount > 0) {
+      await _refreshFromSocketEvent();
+    }
+  }
 
-    final animationDuration = _tripMarkerAnimationDuration(
-      distanceMeters: distanceMeters,
-      sampleGap: sampleGap,
-    );
-    final speedMetersPerSecond = _metersPerSecond(distanceMeters, sampleGap);
+  void _applyRealtimeVehicleEvents(
+    List<PassengerVehicleLocationEvent> events,
+  ) {
+    if (!mounted || events.isEmpty) return;
+    final receivedAt = DateTime.now();
+    const policy = PassengerVehicleReconciliationPolicy();
+    final etaUpdates = <(TripSession, LatLng)>[];
+    final focusedTripId = _selectedTrip?.id;
+    (String, LatLng)? cameraUpdate;
+    var animationAdded = false;
 
     setState(() {
-      _tripVehicleStates[trip.id] = _TripVehicleMotionState(
-        renderedPosition: currentPoint,
-        targetPosition: nextPoint,
-        renderedHeading: currentHeading ?? nextHeading,
-        targetHeading: nextHeading ?? currentHeading,
-        lastRealtimeUpdateAt: receivedAt,
-        previousAuthoritativeSampleAt: previousState?.lastAuthoritativeSampleAt,
-        lastAuthoritativeSampleAt: sampleAt,
-        expectedSampleGap: sampleGap,
-        lastReliableSpeedMetersPerSecond: speedMetersPerSecond,
-        lastReliableBearingDegrees: nextHeading ?? currentHeading,
-        isProjected: false,
-        projectionHandoffStarted: false,
-      );
-      _tripMarkerAnimations[trip.id] = _TripMarkerAnimation(
-        from: currentPoint,
-        to: nextPoint,
-        fromHeading: currentHeading ?? nextHeading,
-        toHeading: nextHeading ?? currentHeading,
-        startedAt: receivedAt,
-        duration: animationDuration,
-        isProjection: false,
-      );
+      for (final locationEvent in events) {
+        final tripIndex = policy.findTripIndex(_trips, locationEvent);
+        if (tripIndex < 0) continue;
+        final trip = _trips[tripIndex];
+        final previousState = _tripVehicleStates[trip.id];
+        final nextPoint = LatLng(
+          locationEvent.latitude,
+          locationEvent.longitude,
+        );
+        final currentPoint = _tripVehiclePoint(trip);
+        final currentHeading = _tripVehicleHeading(trip);
+        final sampleAt = locationEvent.sampleAt;
+        final sampleGap = _motionSampleGap(
+          sampleAt: sampleAt,
+          previousSampleAt: previousState?.lastAuthoritativeSampleAt,
+          defaultDuration: _tripMarkerAnimationDefaultDuration,
+          minDuration: _tripMarkerAnimationMinDuration,
+          maxDuration: _tripMarkerAnimationMaxDuration,
+        );
+
+        if (currentPoint == null) {
+          _mutateTripMarkerPosition(
+            tripIndex,
+            nextPoint,
+            headingDegrees: currentHeading,
+            lastRealtimeUpdateAt: receivedAt,
+            sampleAt: sampleAt,
+            expectedSampleGap: sampleGap,
+          );
+          if (trip.id == focusedTripId) {
+            cameraUpdate = (trip.id, nextPoint);
+          }
+          etaUpdates.add((trip, nextPoint));
+          continue;
+        }
+
+        final distanceMeters = Geolocator.distanceBetween(
+          currentPoint.latitude,
+          currentPoint.longitude,
+          nextPoint.latitude,
+          nextPoint.longitude,
+        );
+        if (distanceMeters < _tripMarkerJitterMeters) {
+          _mutateTripVehicleRealtimeTimestamp(
+            trip.id,
+            receivedAt,
+            sampleAt: sampleAt,
+            expectedSampleGap: sampleGap,
+          );
+          continue;
+        }
+
+        etaUpdates.add((trip, nextPoint));
+        final calculatedHeading = _resolveTripMarkerHeading(
+          previousPoint: currentPoint,
+          nextPoint: nextPoint,
+          currentHeading: currentHeading,
+        );
+        final suppliedHeading = locationEvent.headingDegrees;
+        final suppliedSpeed = locationEvent.speedMetersPerSecond;
+        final nextHeading = suppliedHeading != null &&
+                suppliedHeading.isFinite &&
+                suppliedSpeed != null &&
+                suppliedSpeed > 0
+            ? _normalizeHeading(suppliedHeading)
+            : calculatedHeading;
+        final calculatedSpeed = _metersPerSecond(distanceMeters, sampleGap);
+        final speedMetersPerSecond = suppliedSpeed != null && suppliedSpeed > 0
+            ? suppliedSpeed
+            : calculatedSpeed;
+
+        if (_shouldSnapTripMarkerPosition(
+          distanceMeters: distanceMeters,
+          sampleGap: sampleGap,
+        )) {
+          _mutateTripMarkerPosition(
+            tripIndex,
+            nextPoint,
+            headingDegrees: nextHeading,
+            lastRealtimeUpdateAt: receivedAt,
+            sampleAt: sampleAt,
+            expectedSampleGap: sampleGap,
+            speedMetersPerSecond: speedMetersPerSecond ?? 0,
+            bearingDegrees: nextHeading,
+          );
+          if (trip.id == focusedTripId) {
+            cameraUpdate = (trip.id, nextPoint);
+          }
+          continue;
+        }
+
+        final animationDuration = _tripMarkerAnimationDuration(
+          distanceMeters: distanceMeters,
+          sampleGap: sampleGap,
+        );
+        _tripVehicleStates[trip.id] = _TripVehicleMotionState(
+          renderedPosition: currentPoint,
+          targetPosition: nextPoint,
+          renderedHeading: currentHeading ?? nextHeading,
+          targetHeading: nextHeading ?? currentHeading,
+          lastRealtimeUpdateAt: receivedAt,
+          previousAuthoritativeSampleAt:
+              previousState?.lastAuthoritativeSampleAt,
+          lastAuthoritativeSampleAt: sampleAt,
+          expectedSampleGap: sampleGap,
+          lastReliableSpeedMetersPerSecond: speedMetersPerSecond,
+          lastReliableBearingDegrees: nextHeading ?? currentHeading,
+          isProjected: false,
+          projectionHandoffStarted: false,
+        );
+        _tripMarkerAnimations[trip.id] = _TripMarkerAnimation(
+          from: currentPoint,
+          to: nextPoint,
+          fromHeading: currentHeading ?? nextHeading,
+          toHeading: nextHeading ?? currentHeading,
+          startedAt: receivedAt,
+          duration: animationDuration,
+          isProjection: false,
+        );
+        if (trip.id == focusedTripId) {
+          cameraUpdate = (trip.id, currentPoint);
+        }
+        animationAdded = true;
+      }
     });
-    _syncPassengerSelectedTripCamera(
-      tripId: trip.id,
-      target: currentPoint,
-    );
-    _ensureTripMarkerAnimationLoop();
-  }
 
-  int _findRealtimeTripIndex({
-    required String tripId,
-    required String jeepneyId,
-    required String routeId,
-  }) {
-    if (tripId.isNotEmpty) {
-      final match = _trips.indexWhere((trip) => trip.id == tripId);
-      if (match >= 0) {
-        return match;
-      }
+    for (final update in etaUpdates) {
+      _maybeRefreshPassengerEtaForMovement(update.$1, update.$2);
     }
-    if (jeepneyId.isNotEmpty) {
-      final match = _trips.indexWhere((trip) => trip.jeepneyId == jeepneyId);
-      if (match >= 0) {
-        return match;
-      }
-    }
-    if (routeId.isNotEmpty) {
-      return _trips.indexWhere(
-        (trip) => _tripIsLive(trip) && trip.routeId == routeId,
+    final nextCameraUpdate = cameraUpdate;
+    if (nextCameraUpdate != null) {
+      _syncPassengerSelectedTripCamera(
+        tripId: nextCameraUpdate.$1,
+        target: nextCameraUpdate.$2,
       );
     }
-    return -1;
+    if (animationAdded) {
+      _ensureTripMarkerAnimationLoop();
+    } else {
+      _stopTripMarkerAnimationLoopIfIdle();
+    }
   }
 
-  void _setTripMarkerPosition(
+  void _mutateTripMarkerPosition(
     int tripIndex,
     LatLng point, {
     double? headingDegrees,
@@ -3703,64 +4013,54 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     double? speedMetersPerSecond,
     double? bearingDegrees,
   }) {
-    if (tripIndex < 0 || tripIndex >= _trips.length || !mounted) {
-      return;
-    }
-
+    if (tripIndex < 0 || tripIndex >= _trips.length) return;
     final trip = _trips[tripIndex];
     _tripMarkerAnimations.remove(trip.id);
-    setState(() {
-      final previousState = _tripVehicleStates[trip.id];
-      final resolvedHeading = headingDegrees ??
-          previousState?.targetHeading ??
-          previousState?.renderedHeading;
-      _tripVehicleStates[trip.id] = _TripVehicleMotionState(
-        renderedPosition: point,
-        targetPosition: point,
-        renderedHeading: resolvedHeading,
-        targetHeading: resolvedHeading,
-        lastRealtimeUpdateAt:
-            lastRealtimeUpdateAt ?? previousState?.lastRealtimeUpdateAt,
-        previousAuthoritativeSampleAt: previousState?.lastAuthoritativeSampleAt,
-        lastAuthoritativeSampleAt:
-            sampleAt ?? previousState?.lastAuthoritativeSampleAt,
-        expectedSampleGap: expectedSampleGap ??
-            previousState?.expectedSampleGap ??
-            _tripMarkerAnimationDefaultDuration,
-        lastReliableSpeedMetersPerSecond: speedMetersPerSecond ??
-            previousState?.lastReliableSpeedMetersPerSecond,
-        lastReliableBearingDegrees: bearingDegrees ??
-            resolvedHeading ??
-            previousState?.lastReliableBearingDegrees,
-        isProjected: false,
-        projectionHandoffStarted: false,
-      );
-    });
-    _stopTripMarkerAnimationLoopIfIdle();
+    final previousState = _tripVehicleStates[trip.id];
+    final resolvedHeading = headingDegrees ??
+        previousState?.targetHeading ??
+        previousState?.renderedHeading;
+    _tripVehicleStates[trip.id] = _TripVehicleMotionState(
+      renderedPosition: point,
+      targetPosition: point,
+      renderedHeading: resolvedHeading,
+      targetHeading: resolvedHeading,
+      lastRealtimeUpdateAt:
+          lastRealtimeUpdateAt ?? previousState?.lastRealtimeUpdateAt,
+      previousAuthoritativeSampleAt: previousState?.lastAuthoritativeSampleAt,
+      lastAuthoritativeSampleAt:
+          sampleAt ?? previousState?.lastAuthoritativeSampleAt,
+      expectedSampleGap: expectedSampleGap ??
+          previousState?.expectedSampleGap ??
+          _tripMarkerAnimationDefaultDuration,
+      lastReliableSpeedMetersPerSecond: speedMetersPerSecond ??
+          previousState?.lastReliableSpeedMetersPerSecond,
+      lastReliableBearingDegrees: bearingDegrees ??
+          resolvedHeading ??
+          previousState?.lastReliableBearingDegrees,
+      isProjected: false,
+      projectionHandoffStarted: false,
+    );
   }
 
-  void _setTripVehicleRealtimeTimestamp(
+  void _mutateTripVehicleRealtimeTimestamp(
     String tripId,
     DateTime timestamp, {
     DateTime? sampleAt,
     Duration? expectedSampleGap,
   }) {
     final currentState = _tripVehicleStates[tripId];
-    if (currentState == null) {
-      return;
-    }
-    setState(() {
-      _tripVehicleStates[tripId] = currentState.copyWith(
-        lastRealtimeUpdateAt: timestamp,
-        previousAuthoritativeSampleAt: currentState.lastAuthoritativeSampleAt,
-        lastAuthoritativeSampleAt:
-            sampleAt ?? currentState.lastAuthoritativeSampleAt,
-        expectedSampleGap: expectedSampleGap ?? currentState.expectedSampleGap,
-        lastReliableSpeedMetersPerSecond: 0,
-        isProjected: false,
-        projectionHandoffStarted: false,
-      );
-    });
+    if (currentState == null) return;
+    _tripVehicleStates[tripId] = currentState.copyWith(
+      lastRealtimeUpdateAt: timestamp,
+      previousAuthoritativeSampleAt: currentState.lastAuthoritativeSampleAt,
+      lastAuthoritativeSampleAt:
+          sampleAt ?? currentState.lastAuthoritativeSampleAt,
+      expectedSampleGap: expectedSampleGap ?? currentState.expectedSampleGap,
+      lastReliableSpeedMetersPerSecond: 0,
+      isProjected: false,
+      projectionHandoffStarted: false,
+    );
   }
 
   void _ensureTripMarkerAnimationLoop() {
@@ -4092,19 +4392,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     return distanceMeters >= snapThreshold;
   }
 
-  DateTime _parseRealtimeSampleTime(dynamic value, DateTime fallback) {
-    if (value is DateTime) {
-      return value.toLocal();
-    }
-    if (value is String) {
-      final parsed = DateTime.tryParse(value);
-      if (parsed != null) {
-        return parsed.toLocal();
-      }
-    }
-    return fallback;
-  }
-
   double? _metersPerSecond(double distanceMeters, Duration sampleGap) {
     final seconds = sampleGap.inMilliseconds / 1000;
     if (!seconds.isFinite || seconds <= 0) {
@@ -4256,14 +4543,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     return _normalizeHeading(from + (_shortestHeadingDelta(from, to) * t));
   }
 
-  double? _parseDouble(dynamic value) {
-    if (value is num) return value.toDouble();
-    if (value is String) return double.tryParse(value);
-    return null;
-  }
-
   Future<void> _refreshFromSocketEvent() async {
-    if (!mounted || _silentRefreshActive) {
+    if (!mounted) {
       return;
     }
     final now = DateTime.now();
@@ -4272,16 +4553,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       return;
     }
     _lastSocketRefreshAt = now;
-    _silentRefreshActive = true;
-    try {
-      if (_hasFreshRealtimeVehicleState()) {
-        await _refreshPassengerMetadata(silent: true);
-      } else {
-        await _load(silent: true, preferFresh: true);
-      }
-    } finally {
-      _silentRefreshActive = false;
-    }
+    await _refreshTripsOnly(useCache: false);
   }
 
   void _expandPassengerSheet() {
@@ -4417,12 +4689,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     if (selectedRouteId != null &&
         selectedRouteId.isNotEmpty &&
         _routes.any((route) => route.id == selectedRouteId)) {
+      final previousRouteId = _selectedRouteId;
       setState(() {
         if (_selectedRouteId != selectedRouteId) {
           _clearPassengerEtaSelection();
         }
         _selectedRouteId = selectedRouteId;
       });
+      _syncRealtimeRouteSubscription(
+        previousRouteId: previousRouteId,
+        nextRouteId: selectedRouteId,
+      );
     }
 
     await _load(silent: true);
@@ -4515,12 +4792,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   void _selectPassengerRoute(String routeId) {
     final nextRoute = _routeById(routeId);
+    final previousRouteId = _selectedRouteId;
     final routeChanged = _selectedRouteId != routeId;
-
-    // Unsubscribe from previous route
-    if (_selectedRouteId != null && _selectedRouteId != routeId) {
-      _realtimeSocketService.unsubscribeFromRoute(_selectedRouteId!);
-    }
 
     setState(() {
       if (routeChanged) {
@@ -4542,8 +4815,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           : 'Map updated for ${nextRoute.label}. Pin your pickup point first.';
     });
 
-    // Subscribe to new route for real-time location updates
-    _realtimeSocketService.subscribeToRoute(routeId);
+    _syncRealtimeRouteSubscription(
+      previousRouteId: previousRouteId,
+      nextRouteId: routeId,
+    );
 
     final onboardTrip = _onboardedTripForCamera();
     final onboardTripPoint =
@@ -8165,4 +8440,14 @@ class _SupportTile extends StatelessWidget {
       ),
     );
   }
+}
+
+class _PassengerBookingSnapshot {
+  const _PassengerBookingSnapshot({
+    required this.requests,
+    required this.rides,
+  });
+
+  final List<PickupRequestModel> requests;
+  final List<RideSessionModel> rides;
 }

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import '../core/config/app_config.dart';
+import 'realtime_subscription_registry.dart';
 
 class RealtimeSocketService {
   static bool _disabledNoticeShown = false;
@@ -23,7 +24,8 @@ class RealtimeSocketService {
   String? _currentToken;
   bool _networkFailureReported = false;
   Timer? _retryTimer;
-  final Set<String> _subscribedTrips = <String>{};
+  final RealtimeSubscriptionRegistry _subscriptions =
+      RealtimeSubscriptionRegistry();
 
   Stream<Map<String, dynamic>> get notificationCreatedStream =>
       _notificationController.stream;
@@ -89,7 +91,6 @@ class RealtimeSocketService {
           .setReconnectionDelay(1000)
           .setReconnectionDelayMax(10000)
           .setTimeout(30000)
-          .setQuery(<String, dynamic>{'token': trimmedToken})
           .setExtraHeaders(<String, dynamic>{
             'Authorization': 'Bearer $trimmedToken',
           })
@@ -193,7 +194,7 @@ class RealtimeSocketService {
 
   void dispose() {
     disconnect();
-    _subscribedTrips.clear();
+    _subscriptions.clear();
     _notificationController.close();
     _operationsController.close();
     _pickupRequestController.close();
@@ -206,13 +207,14 @@ class RealtimeSocketService {
     if (trimmedTripId.isEmpty) {
       return;
     }
-    final isNewSubscription = _subscribedTrips.add(trimmedTripId);
+    final isNewSubscription = _subscriptions.addTrip(trimmedTripId);
     if (!isNewSubscription || _socket == null || !_socket!.connected) {
       return;
     }
 
-    _socket!.emit('subscribe.trip', trimmedTripId);
-    debugPrint('Subscribed to trip updates: $trimmedTripId');
+    _requestSubscription(
+      RealtimeSubscription('subscribe.trip', trimmedTripId),
+    );
   }
 
   void unsubscribeFromTrip(String tripId) {
@@ -220,26 +222,16 @@ class RealtimeSocketService {
     if (trimmedTripId.isEmpty) {
       return;
     }
-    final removed = _subscribedTrips.remove(trimmedTripId);
+    final removed = _subscriptions.removeTrip(trimmedTripId);
     if (!removed || _socket == null || !_socket!.connected) {
       return;
     }
 
-    _socket!.emit('unsubscribe.trip', trimmedTripId);
-    debugPrint('Unsubscribed from trip updates: $trimmedTripId');
+    _requestUnsubscribe('unsubscribe.trip', trimmedTripId);
   }
 
-  Map<String, dynamic> _normalizePayload(dynamic payload) {
-    if (payload is Map<String, dynamic>) {
-      return payload;
-    }
-    if (payload is Map) {
-      return payload.map(
-        (key, value) => MapEntry(key.toString(), value),
-      );
-    }
-    return const <String, dynamic>{};
-  }
+  Map<String, dynamic> _normalizePayload(dynamic payload) =>
+      normalizeRealtimePayload(payload);
 
   void _emitSupportEvent(String eventName, dynamic payload) {
     final normalized = _normalizePayload(payload);
@@ -295,9 +287,61 @@ class RealtimeSocketService {
     if (socket == null || !socket.connected) {
       return;
     }
-    for (final tripId in _subscribedTrips) {
-      socket.emit('subscribe.trip', tripId);
+    for (final subscription in _subscriptions.restorationEvents) {
+      _requestSubscription(subscription);
     }
+    for (final subscription in _subscriptions.pendingAuthorizationEvents) {
+      _requestSubscription(subscription);
+    }
+  }
+
+  void _requestSubscription(RealtimeSubscription subscription) {
+    final socket = _socket;
+    if (socket == null || !socket.connected) return;
+    socket.emitWithAck(
+      subscription.eventName,
+      subscription.identifier,
+      ack: (dynamic response, [dynamic _]) {
+        final result = _normalizePayload(response);
+        if (result['ok'] == true) {
+          _subscriptions.markAuthorized(
+            subscription.eventName,
+            subscription.identifier,
+          );
+          debugPrint(
+            'Realtime subscription authorized: '
+            '${subscription.eventName} ${subscription.identifier}',
+          );
+          return;
+        }
+        _subscriptions.reject(
+          subscription.eventName,
+          subscription.identifier,
+        );
+        debugPrint(
+          'Realtime subscription rejected: '
+          '${result['code'] ?? 'UNKNOWN'}',
+        );
+      },
+    );
+  }
+
+  void _requestUnsubscribe(String eventName, String identifier) {
+    final socket = _socket;
+    if (socket == null || !socket.connected) return;
+    socket.emitWithAck(
+      eventName,
+      identifier,
+      ack: (dynamic response, [dynamic _]) {
+        final result = _normalizePayload(response);
+        if (result['ok'] != true) {
+          debugPrint(
+            'Realtime unsubscribe rejected: '
+            '${result['code'] ?? 'UNKNOWN'}',
+          );
+        }
+      },
+    );
   }
 
   void _stopRetryingOnNetworkError(

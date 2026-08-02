@@ -341,8 +341,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
     _availabilitySyncInFlight = true;
     try {
+      final availabilityChanged = _lastPublishedOnline != targetOnline;
       await DriverService(session.apiClient).setStatus(active: targetOnline);
       _lastPublishedOnline = targetOnline;
+      if (availabilityChanged && targetOnline) {
+        unawaited(_locationTrackingService?.sendLatestNow());
+      }
     } catch (error) {
       if (_looksLikeConnectivityIssue(error)) {
         _applyAutomaticAvailabilityState(session, hasInternet: false);
@@ -399,6 +403,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     );
     await _syncAutomaticAvailability(session, forcePush: forcePush);
     await _syncDriverLocationTracking(session);
+    if (!previousHasInternet && _hasInternet) {
+      await _locationTrackingService?.sendLatestNow();
+    }
   }
 
   void _startAutomaticAvailabilityLoop() {
@@ -709,10 +716,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       final assignedRouteId = _readAssignedRouteId(driverProfile);
       final driverStatus = driverProfile['status']?.toString().toLowerCase();
       final nextFocus = _resolveNextFocusId(trips);
+      final previousTrackingContext =
+          '${_focusedTripId ?? ''}|${_assignedRouteId ?? ''}|'
+          '${_focusedTrip?.status ?? ''}';
       final focusedTrips = nextFocus == null || nextFocus.isEmpty
           ? const <TripSession>[]
           : trips.where((trip) => trip.id == nextFocus).toList(growable: false);
       final focusedTripIds = focusedTrips.map((trip) => trip.id).toSet();
+      final nextFocusedTrip = focusedTrips.isEmpty ? null : focusedTrips.first;
+      final nextTrackingContext = '${nextFocus ?? ''}|${assignedRouteId ?? ''}|'
+          '${nextFocusedTrip?.status ?? ''}';
       final initialRouteIds = <String>{
         if (assignedRouteId != null && assignedRouteId.isNotEmpty)
           assignedRouteId,
@@ -765,6 +778,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         session,
         forceReconnect: !_realtimeSocketService.isConnected,
       );
+      if (previousTrackingContext != nextTrackingContext) {
+        unawaited(_locationTrackingService?.sendLatestNow());
+      }
       _applyAutomaticAvailabilityState(session, hasInternet: true);
       unawaited(_syncAutomaticAvailability(session));
       _handleRealtimeDriverUpdates(
@@ -3565,6 +3581,7 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Expanded(
+                                    flex: 3,
                                     child: Column(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
@@ -3593,49 +3610,58 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                                     ),
                                   ),
                                   const SizedBox(width: 10),
-                                  Column(
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: [
-                                      StatusBadge(
-                                        status: isOnline
-                                            ? hasTrip
-                                                ? trip!.status
-                                                : 'ready'
-                                            : 'offline',
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 8,
+                                  Flexible(
+                                    flex: 2,
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        StatusBadge(
+                                          status: isOnline
+                                              ? hasTrip
+                                                  ? trip!.status
+                                                  : 'ready'
+                                              : 'offline',
                                         ),
-                                        decoration: BoxDecoration(
-                                          color: Colors.white.withValues(
-                                            alpha: 0.10,
+                                        const SizedBox(height: 8),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 12,
+                                            vertical: 8,
                                           ),
-                                          borderRadius:
-                                              BorderRadius.circular(999),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Icon(
-                                              Icons.route,
-                                              size: 16,
-                                              color: Colors.white,
+                                          decoration: BoxDecoration(
+                                            color: Colors.white.withValues(
+                                              alpha: 0.10,
                                             ),
-                                            const SizedBox(width: 6),
-                                            Text(
-                                              routeLabel,
-                                              style: const TextStyle(
+                                            borderRadius:
+                                                BorderRadius.circular(999),
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              const Icon(
+                                                Icons.route,
+                                                size: 16,
                                                 color: Colors.white,
-                                                fontWeight: FontWeight.w700,
                                               ),
-                                            ),
-                                          ],
+                                              const SizedBox(width: 6),
+                                              Flexible(
+                                                child: Text(
+                                                  routeLabel,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ),
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 ],
                               ),

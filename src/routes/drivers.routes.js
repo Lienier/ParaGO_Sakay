@@ -10,6 +10,7 @@ const { ok } = require('../utils/response');
 const ApiError = require('../utils/apiError');
 const { ensureLatLng } = require('../utils/validators');
 const { hasOwn } = require('../utils/object');
+const { asyncLocationProcessingEnabled } = require('../config/env');
 const { requireCurrentDriver } = require('../services/routeContext.service');
 const {
   processDestinationApproachAlerts,
@@ -21,6 +22,29 @@ const {
   processAutomaticOffboardingForTrip,
 } = require('../services/automaticOffboarding.service');
 const { emitJeepneyLocationUpdate } = require('../realtime/socketServer');
+const {
+  validateOrderedLocationPayload,
+  buildPersistentLocationOrderFilter,
+  persistentLocationOrderUpdate,
+  stalePersistentLocationError,
+  rememberPersistedDriverLocationOrder,
+  reserveDriverLocationOrder,
+  hasDriverLocationOrderingState,
+} = require('../services/driverLocationOrdering.service');
+const {
+  resolveDriverActiveContext,
+  invalidateDriverActiveContext,
+} = require('../services/activeDriverContext.service');
+const {
+  cacheLatestJeepLocation,
+  getLatestJeepLocation,
+} = require('../services/transientState.service');
+const { getRedisHealth } = require('../services/redis.service');
+const {
+  enqueueLocationWork,
+  enqueueAutomationWork,
+} = require('../services/asyncJobQueue.service');
+const { apiRateLimiters } = require('../middlewares/rateLimits');
 
 const router = express.Router();
 
@@ -64,6 +88,7 @@ const updateDriverStatus = async (req, res) => {
       status,
     });
   }
+  await invalidateDriverActiveContext(profile._id);
   return ok(res, { status: profile.status }, 'Driver status updated');
 };
 
@@ -122,33 +147,150 @@ router.put(
 
 const updateDriverJeepneyLocation = async (req, res) => {
   const body = req.body || {};
-  ensureLatLng(body.lat, body.lng, 'location');
+  const usesOrderedProtocol =
+    body.streamId != null ||
+    body.sequence != null ||
+    body.capturedAt != null ||
+    body.latitude != null ||
+    body.longitude != null;
+  const serverReceivedAt = new Date();
+  const orderedLocation = usesOrderedProtocol
+    ? validateOrderedLocationPayload(body, serverReceivedAt)
+    : null;
+  const latitude = orderedLocation?.latitude ?? Number(body.lat);
+  const longitude = orderedLocation?.longitude ?? Number(body.lng);
+  ensureLatLng(latitude, longitude, 'location');
 
   const driver = await requireCurrentDriver(req.user);
 
-  let jeepneyId = driver.assignedJeepneyId;
+  const activeContext = await resolveDriverActiveContext(driver);
+  const jeepneyId = activeContext.value?.jeepneyId;
   if (!jeepneyId) {
-    const linkedJeepney = await Jeepney.findOne({ currentDriverId: driver._id })
-      .select('_id')
-      .sort({ updatedAt: -1, createdAt: -1 });
-    if (linkedJeepney) {
-      jeepneyId = linkedJeepney._id;
-    }
+    throw new ApiError(
+      404,
+      'No jeepney found for this driver. Set a jeepney assignment first.'
+    );
   }
-  if (!jeepneyId) {
-    const activeTrip = await TripSession.findOne({
-      driverId: driver._id,
-      status: { $in: ['active', 'scheduled'] },
-    })
-      .select('jeepneyId')
-      .sort({ createdAt: -1 });
-    if (!activeTrip || !activeTrip.jeepneyId) {
-      throw new ApiError(
-        404,
-        'No jeepney found for this driver. Set a jeepney assignment first.'
+
+  const acknowledgement = {
+    accepted: true,
+    streamId: orderedLocation?.streamId || 'legacy',
+    sequence: orderedLocation?.sequence ?? null,
+    serverReceivedAt: serverReceivedAt.toISOString(),
+  };
+
+  const activeTrip =
+    activeContext.value?.tripStatus === 'active' &&
+    activeContext.value?.tripId
+      ? {
+          _id: activeContext.value.tripId,
+          routeId: activeContext.value.routeId,
+        }
+      : await TripSession.findOne({
+          jeepneyId,
+          status: 'active',
+        }).select('_id routeId');
+
+  if (
+    asyncLocationProcessingEnabled &&
+    orderedLocation &&
+    getRedisHealth().status === 'healthy'
+  ) {
+    let persistedState = null;
+    if (!hasDriverLocationOrderingState(jeepneyId)) {
+      persistedState = await Jeepney.findById(jeepneyId).select(
+        'lastKnownLocation latestLocationOrder'
       );
+      const persistedOrder = persistedState?.latestLocationOrder;
+      if (
+        persistedOrder?.streamId &&
+        Number.isSafeInteger(Number(persistedOrder.sequence)) &&
+        persistedOrder.capturedAt &&
+        persistedOrder.serverReceivedAt
+      ) {
+        rememberPersistedDriverLocationOrder({
+          jeepneyId,
+          streamId: persistedOrder.streamId,
+          sequence: Number(persistedOrder.sequence),
+          capturedAt: new Date(persistedOrder.capturedAt),
+          serverReceivedAt: new Date(persistedOrder.serverReceivedAt),
+        });
+      }
     }
-    jeepneyId = activeTrip.jeepneyId;
+    reserveDriverLocationOrder({
+      jeepneyId,
+      streamId: orderedLocation.streamId,
+      sequence: orderedLocation.sequence,
+      capturedAt: orderedLocation.capturedAt,
+      serverReceivedAt,
+    });
+
+    const cachedPrevious = await getLatestJeepLocation(jeepneyId);
+    const persistedCoordinates = Array.isArray(
+      persistedState?.lastKnownLocation?.coordinates
+    )
+      ? persistedState.lastKnownLocation.coordinates
+      : [];
+    const previousLatitude = Number.isFinite(
+      Number(cachedPrevious.value?.latitude)
+    )
+      ? Number(cachedPrevious.value.latitude)
+      : persistedCoordinates.length >= 2
+        ? Number(persistedCoordinates[1])
+        : null;
+    const previousLongitude = Number.isFinite(
+      Number(cachedPrevious.value?.longitude)
+    )
+      ? Number(cachedPrevious.value.longitude)
+      : persistedCoordinates.length >= 2
+        ? Number(persistedCoordinates[0])
+        : null;
+    const idempotencyKey = `${jeepneyId}:${orderedLocation.streamId}:${orderedLocation.sequence}`;
+    const job = {
+      idempotencyKey,
+      jeepneyId: jeepneyId.toString(),
+      tripId: activeTrip?._id?.toString() || null,
+      routeId: activeTrip?.routeId?.toString() || null,
+      driverUserId: req.user._id.toString(),
+      latitude,
+      longitude,
+      previousLatitude,
+      previousLongitude,
+      accuracyMeters: orderedLocation.accuracyMeters,
+      speedMetersPerSecond: orderedLocation.speedMetersPerSecond,
+      headingDegrees: orderedLocation.headingDegrees,
+      streamId: orderedLocation.streamId,
+      sequence: orderedLocation.sequence,
+      capturedAt: orderedLocation.capturedAt.toISOString(),
+      serverReceivedAt: serverReceivedAt.toISOString(),
+      queuedAt: serverReceivedAt.toISOString(),
+    };
+    const cached = await cacheLatestJeepLocation({
+      jeepneyId,
+      latitude,
+      longitude,
+      lastSeenAt: serverReceivedAt,
+      streamId: orderedLocation.streamId,
+      sequence: orderedLocation.sequence,
+    });
+    const locationQueued = cached && (await enqueueLocationWork(job));
+    const automationQueued =
+      !activeTrip || (await enqueueAutomationWork(job));
+    if (locationQueued && automationQueued) {
+      if (activeTrip) {
+        emitJeepneyLocationUpdate({
+          tripId: activeTrip._id.toString(),
+          routeId: activeTrip.routeId?.toString() || '',
+          jeepneyId: jeepneyId.toString(),
+          latitude,
+          longitude,
+          timestamp: serverReceivedAt.toISOString(),
+          speedMetersPerSecond: orderedLocation.speedMetersPerSecond,
+          headingDegrees: orderedLocation.headingDegrees,
+        });
+      }
+      return ok(res, acknowledgement, 'Location accepted');
+    }
   }
 
   const previousJeepneyState = await Jeepney.findById(jeepneyId).select(
@@ -164,34 +306,77 @@ const updateDriverJeepneyLocation = async (req, res) => {
   const previousLatitude =
     previousCoordinates.length >= 2 ? Number(previousCoordinates[1]) : null;
 
-  const jeepney = await Jeepney.findByIdAndUpdate(
-    jeepneyId,
+  const locationFilter = orderedLocation
+    ? buildPersistentLocationOrderFilter({
+        jeepneyId,
+        streamId: orderedLocation.streamId,
+        sequence: orderedLocation.sequence,
+        capturedAt: orderedLocation.capturedAt,
+      })
+    : { _id: jeepneyId };
+  const locationUpdate = {
+    lastKnownLocation: {
+      type: 'Point',
+      coordinates: [longitude, latitude],
+    },
+    lastSeenAt: serverReceivedAt,
+  };
+  if (orderedLocation) {
+    locationUpdate.latestLocationOrder = persistentLocationOrderUpdate({
+      streamId: orderedLocation.streamId,
+      sequence: orderedLocation.sequence,
+      capturedAt: orderedLocation.capturedAt,
+      serverReceivedAt,
+    });
+  }
+
+  const jeepney = await Jeepney.findOneAndUpdate(
+    locationFilter,
     {
-      lastKnownLocation: {
-        type: 'Point',
-        coordinates: [Number(body.lng), Number(body.lat)],
-      },
-      lastSeenAt: new Date(),
+      $set: locationUpdate,
     },
     { new: true }
   );
   if (!jeepney) {
-    throw new ApiError(404, 'Jeepney location target not found');
+    const currentJeepney = await Jeepney.findById(jeepneyId).select(
+      'latestLocationOrder'
+    );
+    if (!currentJeepney) {
+      throw new ApiError(404, 'Jeepney location target not found');
+    }
+    throw stalePersistentLocationError({
+      ...(currentJeepney.latestLocationOrder?.toObject?.() ||
+        currentJeepney.latestLocationOrder ||
+        {}),
+      proposedStreamId: orderedLocation?.streamId,
+    });
   }
+  if (orderedLocation) {
+    rememberPersistedDriverLocationOrder({
+      jeepneyId,
+      streamId: orderedLocation.streamId,
+      sequence: orderedLocation.sequence,
+      capturedAt: orderedLocation.capturedAt,
+      serverReceivedAt,
+    });
+  }
+  await cacheLatestJeepLocation({
+    jeepneyId,
+    latitude,
+    longitude,
+    lastSeenAt: serverReceivedAt,
+    streamId: orderedLocation?.streamId || null,
+    sequence: orderedLocation?.sequence ?? null,
+  });
 
   // Find active trip for this jeepney to broadcast location
-  const activeTrip = await TripSession.findOne({
-    jeepneyId: jeepneyId,
-    status: 'active',
-  }).select('_id routeId');
-
   // Broadcast location update via WebSocket
   if (activeTrip) {
     await processDestinationApproachAlerts({
       tripSessionId: activeTrip._id,
       driverUserId: req.user._id,
-      latitude: Number(body.lat),
-      longitude: Number(body.lng),
+      latitude,
+      longitude,
       previousLatitude,
       previousLongitude,
     });
@@ -199,30 +384,32 @@ const updateDriverJeepneyLocation = async (req, res) => {
       tripSessionId: activeTrip._id,
       jeepneyLocation: {
         type: 'Point',
-        coordinates: [Number(body.lng), Number(body.lat)],
+        coordinates: [longitude, latitude],
       },
-      now: new Date(),
+      now: serverReceivedAt,
     });
     await processAutomaticOffboardingForTrip({
       tripSessionId: activeTrip._id,
       jeepneyLocation: {
         type: 'Point',
-        coordinates: [Number(body.lng), Number(body.lat)],
+        coordinates: [longitude, latitude],
       },
-      now: new Date(),
+      now: serverReceivedAt,
     });
 
     emitJeepneyLocationUpdate({
       tripId: activeTrip._id.toString(),
       routeId: activeTrip.routeId?.toString() || '',
       jeepneyId: jeepneyId.toString(),
-      latitude: Number(body.lat),
-      longitude: Number(body.lng),
-      timestamp: new Date().toISOString(),
+      latitude,
+      longitude,
+      timestamp: serverReceivedAt.toISOString(),
+      speedMetersPerSecond: orderedLocation?.speedMetersPerSecond,
+      headingDegrees: orderedLocation?.headingDegrees,
     });
   }
 
-  return ok(res, jeepney, 'Location updated');
+  return ok(res, acknowledgement, 'Location updated');
 };
 
 const locationMethods = ['patch', 'post', 'put'];
@@ -231,12 +418,14 @@ for (const method of locationMethods) {
     '/me/location',
     authenticate,
     authorize(DRIVER),
+    apiRateLimiters.driverLocation,
     asyncHandler(updateDriverJeepneyLocation)
   );
   router[method](
     '/location',
     authenticate,
     authorize(DRIVER),
+    apiRateLimiters.driverLocation,
     asyncHandler(updateDriverJeepneyLocation)
   );
 }

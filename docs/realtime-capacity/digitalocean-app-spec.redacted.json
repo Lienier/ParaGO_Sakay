@@ -1,0 +1,174 @@
+{
+  "name": "paragosakay-app",
+  "services": [
+    {
+      "name": "parago-sakay",
+      "github": {
+        "repo": "Lienier/ParaGO_Sakay",
+        "branch": "main",
+        "deploy_on_push": true
+      },
+      "build_command": "npm install",
+      "run_command": "npm start",
+      "source_dir": "/",
+      "environment_slug": "node-js",
+      "envs": [
+        {
+          "key": "NODE_ENV",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME"
+        },
+        {
+          "key": "MONGO_URI",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        },
+        {
+          "key": "JWT_SECRET",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        },
+        {
+          "key": "JWT_EXPIRES_IN",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        },
+        {
+          "key": "JWT_REFRESH_SECRET",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        },
+        {
+          "key": "JWT_REFRESH_EXPIRES_IN",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        },
+        {
+          "key": "BOARDING_WINDOW_MINUTES",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME"
+        },
+        {
+          "key": "STOP_ALERT_COOLDOWN_MINUTES",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME"
+        },
+        {
+          "key": "PICKUP_REQUEST_TTL_MINUTES",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME"
+        },
+        {
+          "key": "MAX_REQUESTS_PER_PASSENGER_PER_TRIP",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME"
+        },
+        {
+          "key": "ORS_API_KEY",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        },
+        {
+          "key": "GOOGLE_CLIENT_IDS",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        },
+        {
+          "key": "FACEBOOK_APP_TOKEN",
+          "scope": "RUN_AND_BUILD_TIME",
+          "value": "<redacted>"
+        },
+        {
+          "key": "FIREBASE_PROJECT_ID",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        },
+        {
+          "key": "FIREBASE_CLIENT_EMAIL",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        },
+        {
+          "key": "FIREBASE_PRIVATE_KEY",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        },
+        {
+          "key": "SMSAPIPH_API_KEY",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        },
+        {
+          "key": "SMSAPIPH_BASE_URL",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        },
+        {
+          "key": "LOG_LEVEL",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME"
+        },
+        {
+          "key": "TOMTOM_API_KEY",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        },
+        {
+          "key": "GOOGLE_ROUTES_API_KEY",
+          "value": "<redacted>",
+          "scope": "RUN_AND_BUILD_TIME",
+          "type": "SECRET"
+        }
+      ],
+      "instance_size_slug": "apps-s-1vcpu-1gb-fixed",
+      "instance_count": 1,
+      "http_port": 8080
+    }
+  ],
+  "region": "sgp",
+  "alerts": [
+    {
+      "rule": "DEPLOYMENT_FAILED"
+    },
+    {
+      "rule": "DOMAIN_FAILED"
+    }
+  ],
+  "ingress": {
+    "rules": [
+      {
+        "match": {
+          "path": {
+            "prefix": "/"
+          },
+          "authority": {
+            "exact": ""
+          }
+        },
+        "component": {
+          "name": "parago-sakay"
+        }
+      }
+    ]
+  },
+  "features": [
+    "buildpack-stack=ubuntu-22"
+  ],
+  "maintenance": {},
+  "vpc": {
+    "id": "4c561ad2-f719-4b8d-84a8-82ee96d425e9"
+  }
+}

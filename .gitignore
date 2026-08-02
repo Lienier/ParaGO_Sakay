@@ -2,10 +2,14 @@ node_modules/
 .env
 dist/
 coverage/
+artifacts/
 *.log
 .do/*.local.yaml
+.do/*.local.json
 .do/*.local.sh
 .do/*trial-key*
 
 .vercel
 .env*
+.tools/
+.secure-backups/
