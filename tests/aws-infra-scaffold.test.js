@@ -41,6 +41,7 @@ test('AWS bootstrap state bucket is encrypted, versioned, and public-blocked', (
   assert.match(bootstrap, /token\.actions\.githubusercontent\.com/);
   assert.match(bootstrap, /repo:\$\{var\.github_repository\}:ref:refs\/heads\/main/);
   assert.match(bootstrap, /parago-github-staging-deploy/);
+  assert.match(bootstrap, /ec2:StartInstances/);
 });
 
 test('AWS staging GitHub Actions deploy remains scoped to main and SSM', () => {

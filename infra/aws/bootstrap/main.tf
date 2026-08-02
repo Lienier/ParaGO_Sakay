@@ -166,7 +166,7 @@ data "aws_iam_policy_document" "github_staging_deploy" {
 
   statement {
     sid       = "FindStagingInstance"
-    actions   = ["ec2:DescribeInstances"]
+    actions   = ["ec2:DescribeInstances", "ec2:StartInstances"]
     resources = ["*"]
   }
 
