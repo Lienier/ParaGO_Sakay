@@ -56,6 +56,7 @@ test('AWS staging GitHub Actions deploy remains scoped to main and SSM', () => {
   assert.match(deployScript, /aws s3 presign/);
   assert.match(deployScript, /No AWS staging EC2 instance found\./);
   assert.match(deployScript, /aws ec2 start-instances/);
+  assert.match(deployScript, /Re-apply the AWS bootstrap Terraform/);
   assert.match(deployScript, /terraform apply -var ami_id=ami-0ed6a65b84536f6ce/);
   assert.match(deployScript, /systemctl restart parago-api parago-worker nginx/);
 });

@@ -48,7 +48,13 @@ case "${INSTANCE_STATE}" in
     ;;
   stopped)
     echo "AWS staging EC2 instance ${INSTANCE_ID} is stopped; starting it before deploy." >&2
-    aws ec2 start-instances --region "${AWS_REGION}" --instance-ids "${INSTANCE_ID}" >/dev/null
+    if ! aws ec2 start-instances --region "${AWS_REGION}" --instance-ids "${INSTANCE_ID}" >/dev/null 2>&1; then
+      cat >&2 <<'EOF'
+AWS staging can be found, but this deploy role cannot start it.
+Re-apply the AWS bootstrap Terraform so the GitHub deploy role picks up ec2:StartInstances.
+EOF
+      exit 1
+    fi
     aws ec2 wait instance-running --region "${AWS_REGION}" --instance-ids "${INSTANCE_ID}"
     ;;
   stopping)
