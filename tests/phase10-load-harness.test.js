@@ -131,6 +131,17 @@ test('DigitalOcean staging spec isolates data, jobs, source branch, and namespac
   assert.equal(environment.REDIS_NAMESPACE, 'parago:staging:phase10:v1');
   assert.equal(environment.ASYNC_LOCATION_PROCESSING_ENABLED, 'true');
   assert.equal(environment.GOOGLE_ROUTES_API_KEY, '');
+  assert.deepEqual(
+    spec.services[0].alerts.map((alert) => alert.rule),
+    ['CPU_UTILIZATION', 'MEM_UTILIZATION']
+  );
+  assert.deepEqual(
+    spec.workers[0].alerts.map((alert) => alert.rule),
+    ['CPU_UTILIZATION', 'MEM_UTILIZATION']
+  );
+  assert.deepEqual(spec.alerts.map((alert) => alert.rule), [
+    'DEPLOYMENT_FAILED',
+  ]);
   assert.equal(
     spec.services[0].envs.find((entry) => entry.key === 'RUN_WORKER_JOBS').value,
     'false'

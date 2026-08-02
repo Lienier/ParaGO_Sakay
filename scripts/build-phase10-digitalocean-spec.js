@@ -51,6 +51,20 @@ const buildSpec = ({ staging }) => ({
         success_threshold: 1,
         failure_threshold: 3,
       },
+      alerts: [
+        {
+          rule: 'CPU_UTILIZATION',
+          operator: 'GREATER_THAN',
+          value: 75,
+          window: 'FIVE_MINUTES',
+        },
+        {
+          rule: 'MEM_UTILIZATION',
+          operator: 'GREATER_THAN',
+          value: 80,
+          window: 'FIVE_MINUTES',
+        },
+      ],
       envs: [
         environmentEntry('RUN_API_JOBS', 'false'),
         environmentEntry('RUN_WORKER_JOBS', 'false'),
@@ -65,6 +79,20 @@ const buildSpec = ({ staging }) => ({
       instance_size_slug: 'apps-s-1vcpu-0.5gb',
       instance_count: 1,
       termination: { grace_period_seconds: 60 },
+      alerts: [
+        {
+          rule: 'CPU_UTILIZATION',
+          operator: 'GREATER_THAN',
+          value: 75,
+          window: 'FIVE_MINUTES',
+        },
+        {
+          rule: 'MEM_UTILIZATION',
+          operator: 'GREATER_THAN',
+          value: 80,
+          window: 'FIVE_MINUTES',
+        },
+      ],
       envs: [
         environmentEntry('RUN_API_JOBS', 'false'),
         environmentEntry('RUN_WORKER_JOBS', 'true'),
@@ -127,8 +155,6 @@ const buildSpec = ({ staging }) => ({
   },
   alerts: [
     { rule: 'DEPLOYMENT_FAILED' },
-    { rule: 'CPU_UTILIZATION', operator: 'GREATER_THAN', value: 75, window: 'FIVE_MINUTES' },
-    { rule: 'MEM_UTILIZATION', operator: 'GREATER_THAN', value: 80, window: 'FIVE_MINUTES' },
   ],
 });
 
