@@ -94,7 +94,9 @@ All generated raw summaries are written under ignored `artifacts/phase10`.
    If the initial application cannot become active before Atlas is configured,
    deploy the generated egress-bootstrap spec first. It runs only a minimal
    health server and idle worker, accesses no database, and is replaced by the
-   real spec immediately after the IPs are allowlisted.
+   real spec immediately after the IPs are allowlisted. The health server logs
+   one credential-free public egress check so the observed address can be
+   compared with DigitalOcean's assigned addresses.
 5. Run readiness, HTTPS, WebSocket, CORS, security-header, redaction, and process
    isolation smoke tests.
 6. Prepare synthetic fixtures and install k6 locally.

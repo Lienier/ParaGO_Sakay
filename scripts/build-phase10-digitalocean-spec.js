@@ -29,8 +29,13 @@ const source = () => ({
   build_command: 'npm ci',
 });
 
-const bootstrapApiCommand =
-  "node -e \"require('http').createServer((_q,r)=>r.end('ok')).listen(process.env.PORT||8080,'0.0.0.0')\"";
+const bootstrapApiCommand = [
+  "node -e \"const http=require('http'),https=require('https');",
+  "https.get('https://api.ipify.org',r=>{let d='';",
+  "r.on('data',c=>d+=c);r.on('end',()=>console.log('EGRESS_IP='+d));",
+  "}).on('error',()=>console.error('EGRESS_CHECK_FAILED'));",
+  "http.createServer((_q,r)=>r.end('ok')).listen(process.env.PORT||8080,'0.0.0.0')\"",
+].join('');
 const bootstrapWorkerCommand =
   "node -e \"setInterval(()=>{},60000)\"";
 

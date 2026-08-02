@@ -156,6 +156,8 @@ test('DigitalOcean staging spec isolates data, jobs, source branch, and namespac
 
   const bootstrap = buildSpec({ staging, bootstrapEgress: true });
   assert.equal(bootstrap.services[0].run_command, bootstrapApiCommand);
+  assert.match(bootstrapApiCommand, /api\.ipify\.org/);
+  assert.doesNotMatch(bootstrapApiCommand, /MONGO|REDIS|JWT/);
   assert.equal(bootstrap.workers[0].run_command, bootstrapWorkerCommand);
   assert.deepEqual(bootstrap.egress, { type: 'DEDICATED_IP' });
   assert.equal(bootstrap.vpc, undefined);
