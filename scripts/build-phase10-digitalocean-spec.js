@@ -29,7 +29,12 @@ const source = () => ({
   build_command: 'npm ci',
 });
 
-const buildSpec = ({ staging }) => ({
+const bootstrapApiCommand =
+  "node -e \"require('http').createServer((_q,r)=>r.end('ok')).listen(process.env.PORT||8080,'0.0.0.0')\"";
+const bootstrapWorkerCommand =
+  "node -e \"setInterval(()=>{},60000)\"";
+
+const buildSpec = ({ staging, bootstrapEgress = false }) => ({
   name: appName,
   region: 'sgp',
   egress: { type: 'DEDICATED_IP' },
@@ -37,7 +42,7 @@ const buildSpec = ({ staging }) => ({
     {
       name: 'phase10-api',
       ...source(),
-      run_command: 'npm start',
+      run_command: bootstrapEgress ? bootstrapApiCommand : 'npm start',
       instance_size_slug: 'apps-s-1vcpu-1gb-fixed',
       instance_count: 1,
       http_port: 8080,
@@ -74,7 +79,9 @@ const buildSpec = ({ staging }) => ({
     {
       name: 'phase10-worker',
       ...source(),
-      run_command: 'npm run start:worker',
+      run_command: bootstrapEgress
+        ? bootstrapWorkerCommand
+        : 'npm run start:worker',
       instance_size_slug: 'apps-s-1vcpu-0.5gb',
       instance_count: 1,
       termination: { grace_period_seconds: 60 },
@@ -159,6 +166,7 @@ const buildSpec = ({ staging }) => ({
 
 const main = () => {
   const { staging } = loadStagingBoundary();
+  const bootstrapEgress = process.argv.includes('--egress-bootstrap');
   if (
     !staging.STAGING_JWT_SECRET ||
     !staging.STAGING_JWT_REFRESH_SECRET ||
@@ -170,9 +178,11 @@ const main = () => {
   const output = path.join(
     rootDir,
     '.secure-backups',
-    'phase10-digitalocean-app-spec.json'
+    bootstrapEgress
+      ? 'phase10-digitalocean-egress-bootstrap-spec.json'
+      : 'phase10-digitalocean-app-spec.json'
   );
-  writeSecureJson(output, buildSpec({ staging }));
+  writeSecureJson(output, buildSpec({ staging, bootstrapEgress }));
   console.log(`Secret-bearing staging spec written locally at ${output}.`);
   console.log('The generated file is ignored by Git and must not be shared.');
 };
@@ -188,6 +198,8 @@ if (require.main === module) {
 
 module.exports = {
   appName,
+  bootstrapApiCommand,
+  bootstrapWorkerCommand,
   branch,
   buildSpec,
   repository,

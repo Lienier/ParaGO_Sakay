@@ -21,6 +21,8 @@ const {
   appName,
   branch,
   buildSpec,
+  bootstrapApiCommand,
+  bootstrapWorkerCommand,
   valkeyClusterName,
 } = require('../scripts/build-phase10-digitalocean-spec');
 const { compileResults } = require('../scripts/summarize-phase10-results');
@@ -110,14 +112,13 @@ test('k6 workload has production and live Google safety interlocks', () => {
 });
 
 test('DigitalOcean staging spec isolates data, jobs, source branch, and namespace', () => {
-  const spec = buildSpec({
-    staging: {
-      STAGING_MONGO_URI:
-        'mongodb+srv://synthetic:secret@staging.example/parago_staging',
-      STAGING_JWT_SECRET: 'a'.repeat(64),
-      STAGING_JWT_REFRESH_SECRET: 'b'.repeat(64),
-    },
-  });
+  const staging = {
+    STAGING_MONGO_URI:
+      'mongodb+srv://synthetic:secret@staging.example/parago_staging',
+    STAGING_JWT_SECRET: 'a'.repeat(64),
+    STAGING_JWT_REFRESH_SECRET: 'b'.repeat(64),
+  };
+  const spec = buildSpec({ staging });
   assert.equal(spec.name, appName);
   assert.equal(spec.services[0].github.branch, branch);
   assert.equal(spec.services[0].github.deploy_on_push, false);
@@ -152,6 +153,12 @@ test('DigitalOcean staging spec isolates data, jobs, source branch, and namespac
     spec.workers[0].envs.find((entry) => entry.key === 'RUN_WORKER_JOBS').value,
     'true'
   );
+
+  const bootstrap = buildSpec({ staging, bootstrapEgress: true });
+  assert.equal(bootstrap.services[0].run_command, bootstrapApiCommand);
+  assert.equal(bootstrap.workers[0].run_command, bootstrapWorkerCommand);
+  assert.deepEqual(bootstrap.egress, { type: 'DEDICATED_IP' });
+  assert.equal(bootstrap.vpc, undefined);
 });
 
 test('capacity report does not pass without every measured acceptance check', () => {

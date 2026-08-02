@@ -91,6 +91,10 @@ All generated raw summaries are written under ignored `artifacts/phase10`.
 3. Add the staging app as a trusted Valkey source while retaining the existing
    production app rule.
 4. Allow the two dedicated staging egress addresses in staging Atlas only.
+   If the initial application cannot become active before Atlas is configured,
+   deploy the generated egress-bootstrap spec first. It runs only a minimal
+   health server and idle worker, accesses no database, and is replaced by the
+   real spec immediately after the IPs are allowlisted.
 5. Run readiness, HTTPS, WebSocket, CORS, security-header, redaction, and process
    isolation smoke tests.
 6. Prepare synthetic fixtures and install k6 locally.
