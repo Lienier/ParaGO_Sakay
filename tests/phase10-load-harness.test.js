@@ -26,6 +26,11 @@ const {
   valkeyClusterName,
 } = require('../scripts/build-phase10-digitalocean-spec');
 const { compileResults } = require('../scripts/summarize-phase10-results');
+const {
+  parseArguments: parseProfileArguments,
+  partitionTripIds,
+  syntheticTripNote,
+} = require('../scripts/configure-phase10-profile');
 
 const rootDir = path.resolve(__dirname, '..');
 
@@ -111,6 +116,19 @@ test('k6 workload has production and live Google safety interlocks', () => {
   assert.match(source, /rate<0\.01/);
   assert.match(source, /randomUuidV4\(\)/);
   assert.doesNotMatch(source, /streamId: `phase10-/);
+  assert.match(source, /trips\/active\?routeId=\$\{manifest\.routeId\}/);
+});
+
+test('Phase 10 profile configuration activates only the requested trip prefix', () => {
+  assert.deepEqual(parseProfileArguments(['--drivers=5']), { drivers: '5' });
+  const drivers = Array.from({ length: 8 }, (_, index) => ({
+    tripId: `trip-${index + 1}`,
+  }));
+  assert.deepEqual(partitionTripIds(drivers, 3), {
+    activeTripIds: ['trip-1', 'trip-2', 'trip-3'],
+    inactiveTripIds: ['trip-4', 'trip-5', 'trip-6', 'trip-7', 'trip-8'],
+  });
+  assert.equal(syntheticTripNote, 'Phase 10 synthetic capacity trip.');
 });
 
 test('DigitalOcean staging spec isolates data, jobs, source branch, and namespace', () => {

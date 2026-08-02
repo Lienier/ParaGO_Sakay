@@ -10,6 +10,11 @@ localhost. The known production DigitalOcean hostname is rejected.
 2. Keep `.secure-backups/phase10-load-manifest.json` private. It contains
    short-lived staging-only access tokens.
 3. Create `artifacts/phase10` before running k6.
+4. Before each profile, activate exactly that profile's synthetic drivers:
+
+```powershell
+npm run phase10:profile -- --drivers=5
+```
 
 ## REST Workload
 

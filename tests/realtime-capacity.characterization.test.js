@@ -407,6 +407,25 @@ test('readiness reports MongoDB healthy and optional Redis disabled', async () =
   assert.equal(response.body.dependencies.redis, 'disabled');
 });
 
+test('active trips can be route-scoped without returning full populated routes', async () => {
+  const fixture = await seedCoreFixture();
+  const response = await request(app)
+    .get(`/api/v1/trips/active?routeId=${fixture.route._id}`)
+    .set(auth(fixture.tokens.passenger));
+
+  assert.equal(response.status, 200, response.text);
+  assert.equal(response.body.data.length, 1);
+  assert.equal(response.body.data[0]._id, fixture.trip._id.toString());
+  assert.equal(response.body.data[0].routeId.name, fixture.route.name);
+  assert.equal(response.body.data[0].routeId.path, undefined);
+  assert.equal(response.body.data[0].jeepneyId.plateNumber, fixture.jeepney.plateNumber);
+
+  const invalid = await request(app)
+    .get('/api/v1/trips/active?routeId=not-an-object-id')
+    .set(auth(fixture.tokens.passenger));
+  assert.equal(invalid.status, 400, invalid.text);
+});
+
 test('route batcher coalesces 50 jeep updates into one bounded route event', () => {
   const batches = [];
   let tick = 0;

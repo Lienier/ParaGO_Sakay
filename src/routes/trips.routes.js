@@ -169,10 +169,22 @@ const createTripSession = async ({
 router.get(
   '/active',
   authenticate,
-  asyncHandler(async (_req, res) => {
-    const activeTrips = await TripSession.find({ status: 'active' })
-      .populate('jeepneyId driverId routeId')
-      .sort({ startedAt: -1 });
+  asyncHandler(async (req, res) => {
+    const filter = { status: 'active' };
+    if (req.query.routeId != null && req.query.routeId !== '') {
+      ensureObjectId(req.query.routeId, 'routeId');
+      filter.routeId = req.query.routeId;
+    }
+    const activeTrips = await TripSession.find(filter)
+      .select('-__v')
+      .populate(
+        'jeepneyId',
+        'plateNumber jeepneyName vehicleTag capacity status lastKnownLocation lastSeenAt'
+      )
+      .populate('driverId', 'userId status licenseNumber employeeNumber')
+      .populate('routeId', 'name code direction status')
+      .sort({ startedAt: -1 })
+      .lean();
     return ok(res, activeTrips, 'Active trips');
   })
 );

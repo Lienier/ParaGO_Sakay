@@ -105,7 +105,7 @@ export function passengerTraffic() {
   const account = manifest.passengers[index];
   const headers = headersFor(account.token);
   const responses = http.batch([
-    ['GET', `${baseUrl}/api/v1/trips/active`, null, { headers, tags: { domain: 'trips' } }],
+    ['GET', `${baseUrl}/api/v1/trips/active?routeId=${manifest.routeId}`, null, { headers, tags: { domain: 'trips' } }],
     ['GET', `${baseUrl}/api/v1/routes`, null, { headers, tags: { domain: 'routes' } }],
     ['GET', `${baseUrl}/api/v1/announcements/active`, null, { headers, tags: { domain: 'announcements' } }],
   ]);

@@ -19,6 +19,7 @@
     "test:characterization": "node --test tests/realtime-capacity.characterization.test.js",
     "test:staging-guard": "node --test tests/staging-launcher.test.js",
     "phase10:fixtures": "node scripts/prepare-phase10-load-data.js",
+    "phase10:profile": "node scripts/configure-phase10-profile.js",
     "phase10:spec": "node scripts/build-phase10-digitalocean-spec.js",
     "phase10:spec:egress-bootstrap": "node scripts/build-phase10-digitalocean-spec.js --egress-bootstrap",
     "phase10:socket": "node load-tests/socket-capacity.js",
