@@ -16,20 +16,50 @@ if [[ -z "${AWS_RELEASE_BUCKET}" ]]; then
   AWS_RELEASE_BUCKET="parago-terraform-state-${ACCOUNT_ID}-${AWS_REGION}"
 fi
 
-INSTANCE_ID="$(
+INSTANCE_STATE_INFO="$(
   aws ec2 describe-instances \
     --region "${AWS_REGION}" \
     --filters \
       "Name=tag:Name,Values=${AWS_INSTANCE_TAG_NAME}" \
-      "Name=instance-state-name,Values=running" \
-    --query "Reservations[].Instances[].InstanceId | [0]" \
+      "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+    --query "Reservations[].Instances[0].[InstanceId,State.Name] | [0]" \
     --output text
 )"
 
+INSTANCE_ID="$(awk '{print $1}' <<<"${INSTANCE_STATE_INFO}")"
+INSTANCE_STATE="$(awk '{print $2}' <<<"${INSTANCE_STATE_INFO}")"
+
 if [[ -z "${INSTANCE_ID}" || "${INSTANCE_ID}" == "None" ]]; then
-  echo "No running AWS staging EC2 instance found. Turn staging on with Terraform first." >&2
+  cat >&2 <<'EOF'
+No AWS staging EC2 instance found.
+Recreate staging with Terraform first:
+  cd infra/aws/envs/staging
+  terraform apply -var ami_id=ami-0ed6a65b84536f6ce
+EOF
   exit 1
 fi
+
+case "${INSTANCE_STATE}" in
+  running)
+    ;;
+  pending)
+    echo "AWS staging EC2 instance ${INSTANCE_ID} is pending; waiting for it to become running." >&2
+    aws ec2 wait instance-running --region "${AWS_REGION}" --instance-ids "${INSTANCE_ID}"
+    ;;
+  stopped)
+    echo "AWS staging EC2 instance ${INSTANCE_ID} is stopped; starting it before deploy." >&2
+    aws ec2 start-instances --region "${AWS_REGION}" --instance-ids "${INSTANCE_ID}" >/dev/null
+    aws ec2 wait instance-running --region "${AWS_REGION}" --instance-ids "${INSTANCE_ID}"
+    ;;
+  stopping)
+    echo "AWS staging EC2 instance ${INSTANCE_ID} is stopping; wait for it to finish before deploying." >&2
+    exit 1
+    ;;
+  *)
+    echo "AWS staging EC2 instance ${INSTANCE_ID} is in unexpected state '${INSTANCE_STATE}'." >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p artifacts/aws
 git archive --format=zip --output "artifacts/aws/${ARCHIVE}" "${COMMIT_SHA}"
