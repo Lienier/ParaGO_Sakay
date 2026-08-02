@@ -34,7 +34,8 @@ Current prices were obtained from the authenticated DigitalOcean account on
 | --- | --- | ---: |
 | API | Shared 1 vCPU, 1 GB fixed | USD 10 |
 | Worker | Shared 1 vCPU, 0.5 GB | USD 5 |
-| Phase 10 app total | Two components | USD 15/month, prorated |
+| Dedicated public egress | Two app-specific static IPs | USD 25 |
+| Phase 10 app total | Two components and static egress | USD 40/month, prorated |
 
 The existing managed Valkey costs approximately USD 15/month and is already
 running. Staging Atlas is free. Large tests make no Google Routes calls. A small
@@ -48,7 +49,9 @@ The ignored local app spec defines:
 - One API process and one worker process.
 - Source branch `realtime-capacity-remediation` with deploy-on-push disabled.
 - Staging Atlas URI and staging JWT secrets only.
-- Existing Valkey attached by cluster name through its private bindable URL.
+- Existing Valkey attached by cluster name through its public TLS bindable URL,
+  restricted by the managed database's staging-app trusted-source rule.
+- Dedicated app egress enabled so only two stable staging IPs need Atlas access.
 - Async location processing enabled.
 - API schedulers disabled and worker schedulers enabled only in the worker.
 - Firebase, SMS, TomTom, and Google credentials disabled.
@@ -87,7 +90,7 @@ All generated raw summaries are written under ignored `artifacts/phase10`.
    transfer approval.
 3. Add the staging app as a trusted Valkey source while retaining the existing
    production app rule.
-4. Allow the staging app egress address in staging Atlas only.
+4. Allow the two dedicated staging egress addresses in staging Atlas only.
 5. Run readiness, HTTPS, WebSocket, CORS, security-header, redaction, and process
    isolation smoke tests.
 6. Prepare synthetic fixtures and install k6 locally.

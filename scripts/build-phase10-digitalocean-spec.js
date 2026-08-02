@@ -10,7 +10,6 @@ const appName = 'parago-capacity-staging';
 const branch = 'realtime-capacity-remediation';
 const repository = 'Lienier/ParaGO_Sakay';
 const valkeyClusterName = 'parago-realtime-valkey';
-const vpcId = '4c561ad2-f719-4b8d-84a8-82ee96d425e9';
 
 const environmentEntry = (key, value, type = 'GENERAL') => ({
   key,
@@ -33,7 +32,7 @@ const source = () => ({
 const buildSpec = ({ staging }) => ({
   name: appName,
   region: 'sgp',
-  vpc: { id: vpcId },
+  egress: { type: 'DEDICATED_IP' },
   services: [
     {
       name: 'phase10-api',
@@ -122,7 +121,7 @@ const buildSpec = ({ staging }) => ({
     environmentEntry('JWT_REFRESH_EXPIRES_IN', '1d'),
     environmentEntry(
       'REDIS_URL',
-      '${phase10-valkey.DATABASE_PRIVATE_URL}',
+      '${phase10-valkey.DATABASE_URL}',
       'SECRET'
     ),
     environmentEntry('REDIS_NAMESPACE', 'parago:staging:phase10:v1'),
@@ -193,5 +192,4 @@ module.exports = {
   buildSpec,
   repository,
   valkeyClusterName,
-  vpcId,
 };

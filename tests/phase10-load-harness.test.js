@@ -127,7 +127,7 @@ test('DigitalOcean staging spec isolates data, jobs, source branch, and namespac
     spec.envs.map((entry) => [entry.key, entry.value])
   );
   assert.match(environment.MONGO_URI, /parago_staging/);
-  assert.equal(environment.REDIS_URL, '${phase10-valkey.DATABASE_PRIVATE_URL}');
+  assert.equal(environment.REDIS_URL, '${phase10-valkey.DATABASE_URL}');
   assert.equal(environment.REDIS_NAMESPACE, 'parago:staging:phase10:v1');
   assert.equal(environment.ASYNC_LOCATION_PROCESSING_ENABLED, 'true');
   assert.equal(environment.GOOGLE_ROUTES_API_KEY, '');
@@ -142,6 +142,8 @@ test('DigitalOcean staging spec isolates data, jobs, source branch, and namespac
   assert.deepEqual(spec.alerts.map((alert) => alert.rule), [
     'DEPLOYMENT_FAILED',
   ]);
+  assert.deepEqual(spec.egress, { type: 'DEDICATED_IP' });
+  assert.equal(spec.vpc, undefined);
   assert.equal(
     spec.services[0].envs.find((entry) => entry.key === 'RUN_WORKER_JOBS').value,
     'false'
