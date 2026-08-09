@@ -250,6 +250,8 @@ resource "aws_instance" "api" {
   monitoring                  = true
   user_data                   = file("${path.module}/user-data.sh")
 
+  depends_on = [aws_route_table_association.app]
+
   metadata_options {
     http_endpoint               = "enabled"
     http_tokens                 = "required"

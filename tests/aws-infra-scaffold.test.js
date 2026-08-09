@@ -17,6 +17,7 @@ test('AWS staging Terraform scaffold preserves deployment guardrails', () => {
   assert.match(backend, /ap-southeast-1/);
   assert.match(variables, /default\s+= "ap-southeast-1"/);
   assert.match(main, /associate_public_ip_address\s+= false/);
+  assert.match(main, /depends_on = \[aws_route_table_association\.app\]/);
   assert.doesNotMatch(main, /from_port\s+= 22/);
   assert.match(main, /AmazonSSMManagedInstanceCore/);
   assert.match(main, /parameter\$\{var\.secret_path_prefix\}"/);
@@ -58,6 +59,7 @@ test('AWS staging GitHub Actions deploy remains scoped to main and SSM', () => {
   assert.match(workflow, /bash scripts\/deploy-aws-staging\.sh/);
   assert.match(deployScript, /aws ssm send-command/);
   assert.match(deployScript, /aws s3 presign/);
+  assert.match(deployScript, /bash infra\/aws\/envs\/staging\/user-data\.sh/);
   assert.match(deployScript, /command = "bash -lc "/);
   assert.match(deployScript, /cygpath -m/);
   assert.match(deployScript, /file:\/\/\$\{AWS_PARAMETERS_FILE\}/);

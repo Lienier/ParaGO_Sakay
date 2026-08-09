@@ -118,6 +118,7 @@ chown -R parago:parago "\${release_dir}"
 
 cd "\${release_dir}"
 npm install --omit=dev --no-audit --no-fund
+bash infra/aws/envs/staging/user-data.sh
 
 aws ssm get-parameters-by-path \
   --region "\${AWS_REGION}" \
