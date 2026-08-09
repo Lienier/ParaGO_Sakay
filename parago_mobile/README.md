@@ -51,7 +51,7 @@ Run the app with the AWS backend URL:
 
 ```bash
 flutter run -d <device> \
-  --dart-define=PARAGO_API_BASE_URL=https://<aws-cloudfront-domain>/api/v1 \
+  --dart-define=PARAGO_API_BASE_URL=https://d2f5f4il9xhq8s.cloudfront.net/api/v1 \
   --dart-define=PARAGO_API_BASE_URLS=https://paragosakay-app-qulmw.ondigitalocean.app/api/v1 \
   --dart-define=ORS_API_KEY=<your-openrouteservice-key> \
   --dart-define=PARAGO_ENABLE_REALTIME=false

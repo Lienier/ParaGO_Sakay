@@ -169,9 +169,18 @@ export REMOTE_SCRIPT
 python3 - <<'PY' >"${PARAMETERS_FILE}"
 import json
 import os
+import shlex
 
-print(json.dumps({"commands": [os.environ["REMOTE_SCRIPT"]]}))
+command = "bash -lc " + shlex.quote(os.environ["REMOTE_SCRIPT"])
+print(json.dumps({"commands": [command]}))
 PY
+
+AWS_PARAMETERS_FILE="${PARAMETERS_FILE}"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    AWS_PARAMETERS_FILE="$(cygpath -m "${PARAMETERS_FILE}")"
+    ;;
+esac
 
 COMMAND_ID="$(
   aws ssm send-command \
@@ -179,7 +188,7 @@ COMMAND_ID="$(
     --instance-ids "${INSTANCE_ID}" \
     --document-name AWS-RunShellScript \
     --comment "Deploy ParaGO ${SHORT_SHA} from GitHub Actions" \
-    --parameters "file://${PARAMETERS_FILE}" \
+    --parameters "file://${AWS_PARAMETERS_FILE}" \
     --query "Command.CommandId" \
     --output text
 )"

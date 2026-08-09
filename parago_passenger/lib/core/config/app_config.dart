@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 
 class AppConfig {
   static const String awsApiBaseUrl =
-      'https://d1gznxbzaizbg0.cloudfront.net/api/v1';
+      'https://d2f5f4il9xhq8s.cloudfront.net/api/v1';
   static const String digitalOceanApiBaseUrl =
       'https://paragosakay-app-qulmw.ondigitalocean.app/api/v1';
 

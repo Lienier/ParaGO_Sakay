@@ -19,12 +19,16 @@ test('AWS staging Terraform scaffold preserves deployment guardrails', () => {
   assert.match(main, /associate_public_ip_address\s+= false/);
   assert.doesNotMatch(main, /from_port\s+= 22/);
   assert.match(main, /AmazonSSMManagedInstanceCore/);
+  assert.match(main, /parameter\$\{var\.secret_path_prefix\}"/);
+  assert.match(main, /parameter\$\{var\.secret_path_prefix\}\/\*/);
   assert.match(main, /aws_cloudfront_vpc_origin/);
   assert.match(main, /com\.amazonaws\.global\.cloudfront\.origin-facing/);
   assert.match(main, /prefix_list_ids\s+= \[data\.aws_ec2_managed_prefix_list\.cloudfront_origin_facing\.id\]/);
   assert.match(main, /viewer_protocol_policy\s+= "redirect-to-https"/);
   assert.match(main, /engine\s+= "valkey"/);
   assert.match(main, /transit_encryption_enabled = true/);
+  assert.match(main, /secret_path_prefix}\/REDIS_HOST/);
+  assert.match(main, /primary_endpoint_address/);
   assert.match(outputs, /parago:staging:aws:v1/);
   assert.match(userData, /proxy_set_header Upgrade \$http_upgrade/);
   assert.match(userData, /parago-aws-staging-v1/);
@@ -54,6 +58,9 @@ test('AWS staging GitHub Actions deploy remains scoped to main and SSM', () => {
   assert.match(workflow, /bash scripts\/deploy-aws-staging\.sh/);
   assert.match(deployScript, /aws ssm send-command/);
   assert.match(deployScript, /aws s3 presign/);
+  assert.match(deployScript, /command = "bash -lc "/);
+  assert.match(deployScript, /cygpath -m/);
+  assert.match(deployScript, /file:\/\/\$\{AWS_PARAMETERS_FILE\}/);
   assert.match(deployScript, /No AWS staging EC2 instance found\./);
   assert.match(deployScript, /aws ec2 start-instances/);
   assert.match(deployScript, /Re-apply the AWS bootstrap Terraform/);

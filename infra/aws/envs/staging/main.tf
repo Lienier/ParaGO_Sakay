@@ -214,6 +214,7 @@ data "aws_iam_policy_document" "runtime_secrets" {
       "ssm:GetParametersByPath",
     ]
     resources = [
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.secret_path_prefix}",
       "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.secret_path_prefix}/*",
     ]
   }
@@ -294,6 +295,12 @@ resource "aws_ssm_parameter" "redis_auth_token" {
   type   = "SecureString"
   key_id = aws_kms_key.runtime.arn
   value  = random_password.redis_auth_token.result
+}
+
+resource "aws_ssm_parameter" "redis_host" {
+  name  = "${var.secret_path_prefix}/REDIS_HOST"
+  type  = "String"
+  value = aws_elasticache_replication_group.cache.primary_endpoint_address
 }
 
 resource "aws_cloudfront_vpc_origin" "api" {
