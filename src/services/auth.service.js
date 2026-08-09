@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const axios = require('axios');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const { OAuth2Client } = require('google-auth-library');
 const { googleClientIds, facebookAppToken, nodeEnv } = require('../config/env');
 const { getFirebaseAuth, isFirebaseAdminConfigured } = require('../config/firebaseAdmin');
@@ -141,6 +142,8 @@ const ensureRoleProfile = async (user) => {
 
 const issueSession = async (user, replacedTokenHash = null) => {
   ensureActiveUser(user);
+  // Repair legacy/orphaned accounts created before profile creation became atomic.
+  await ensureRoleProfile(user);
 
   const accessToken = signToken({ sub: user._id.toString(), role: user.role });
   const refreshToken = signToken({ sub: user._id.toString(), role: user.role }, 'refresh');
@@ -215,21 +218,34 @@ const registerEmail = async ({ email, password, fullName, role = 'PASSENGER' }) 
   ensureStrongPassword(password);
 
   const passwordHash = await bcrypt.hash(password, 11);
-  const user = await User.create({
-    email: normalizedEmail,
-    passwordHash,
-    fullName,
-    role: normalizedRole,
-    authProvider: 'local',
-    status: 'active',
-  });
+  const session = await mongoose.startSession();
+  let user;
+  try {
+    await session.withTransaction(async () => {
+      [user] = await User.create(
+        [
+          {
+            email: normalizedEmail,
+            passwordHash,
+            fullName,
+            role: normalizedRole,
+            authProvider: 'local',
+            status: 'active',
+          },
+        ],
+        { session }
+      );
 
-  if (normalizedRole === 'PASSENGER') {
-    await Passenger.create({ userId: user._id });
-  } else if (normalizedRole === 'DRIVER') {
-    await Driver.create({ userId: user._id });
-  } else if (normalizedRole === 'ADMIN') {
-    await Admin.create({ userId: user._id });
+      if (normalizedRole === 'PASSENGER') {
+        await Passenger.create([{ userId: user._id }], { session });
+      } else if (normalizedRole === 'DRIVER') {
+        await Driver.create([{ userId: user._id }], { session });
+      } else if (normalizedRole === 'ADMIN') {
+        await Admin.create([{ userId: user._id }], { session });
+      }
+    });
+  } finally {
+    await session.endSession();
   }
 
   return issueSession(user);

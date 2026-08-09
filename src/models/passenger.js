@@ -1,6 +1,13 @@
 const mongoose = require('mongoose');
 
 const { Schema } = mongoose;
+const geoPointSchema = new Schema(
+  {
+    type: { type: String, enum: ['Point'], required: true },
+    coordinates: { type: [Number], required: true },
+  },
+  { _id: false }
+);
 
 const passengerSchema = new Schema(
   {
@@ -12,14 +19,9 @@ const passengerSchema = new Schema(
       phone: { type: String, trim: true },
     },
     defaultRouteId: { type: Schema.Types.ObjectId, ref: 'Route' },
-    lastKnownLocation: {
-      type: {
-        type: String,
-        enum: ['Point'],
-        default: 'Point',
-      },
-      coordinates: { type: [Number] },
-    },
+    // A passenger may not have shared a location yet. Keep the whole point
+    // absent until both GeoJSON fields are available.
+    lastKnownLocation: { type: geoPointSchema, default: undefined },
     lastSeenAt: { type: Date },
   },
   { timestamps: true }
