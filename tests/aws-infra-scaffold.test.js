@@ -52,6 +52,7 @@ test('AWS bootstrap state bucket is encrypted, versioned, and public-blocked', (
 test('AWS staging GitHub Actions deploy remains scoped to main and SSM', () => {
   const workflow = read('.github/workflows/aws-staging-deploy.yml');
   const deployScript = read('scripts/deploy-aws-staging.sh');
+  const gitAttributes = read('.gitattributes');
 
   assert.match(workflow, /branches:\s*\n\s+- main/);
   assert.match(workflow, /id-token: write/);
@@ -59,6 +60,8 @@ test('AWS staging GitHub Actions deploy remains scoped to main and SSM', () => {
   assert.match(workflow, /bash scripts\/deploy-aws-staging\.sh/);
   assert.match(deployScript, /aws ssm send-command/);
   assert.match(deployScript, /aws s3 presign/);
+  assert.match(gitAttributes, /\*\.sh text eol=lf/);
+  assert.match(deployScript, /sed -i 's\/\\r\$\/\/' infra\/aws\/envs\/staging\/user-data\.sh/);
   assert.match(deployScript, /bash infra\/aws\/envs\/staging\/user-data\.sh/);
   assert.match(deployScript, /command = "bash -lc "/);
   assert.match(deployScript, /cygpath -m/);
