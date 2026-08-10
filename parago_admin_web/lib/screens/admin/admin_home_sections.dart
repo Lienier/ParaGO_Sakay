@@ -90,18 +90,25 @@ class _AdminOverviewPage extends StatelessWidget {
     return RefreshIndicator(
       onRefresh: () => onRefresh(silent: false),
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
+        padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, AppSpacing.xxl),
         children: [
+          const AppPageHeader(
+            title: 'Operations overview',
+            subtitle: 'Monitor active trips, dispatch queues, and passenger movement.',
+          ),
           if (loading) ...[
-            const LinearProgressIndicator(),
+            const Padding(
+              padding: EdgeInsets.only(top: AppSpacing.md),
+              child: LinearProgressIndicator(minHeight: 2),
+            ),
           ],
           if (error != null) ...[
             const SizedBox(height: 16),
-            _AdminInfoBanner(message: error!, isWarning: true),
+            AppInfoBanner(message: error!, warning: true),
           ],
           if (lastSyncedAt != null) ...[
             const SizedBox(height: 16),
-            _AdminInfoBanner(
+            AppInfoBanner(
               message: showingCachedSnapshot
                   ? 'Showing the latest saved dashboard data from ${ParagoFormat.relative(lastSyncedAt!.toIso8601String())}.'
                   : 'Last synced ${ParagoFormat.relative(lastSyncedAt!.toIso8601String())}.',
@@ -118,7 +125,7 @@ class _AdminOverviewPage extends StatelessWidget {
                   label: 'Active trips',
                   value: metrics['activeTrips']?.toString() ?? '0',
                   icon: Icons.route_outlined,
-                  accent: const Color(0xFF0F6A5F),
+                  accent: AppColors.primary,
                   caption: 'Trips currently operating across the system',
                 ),
               ),
@@ -128,7 +135,7 @@ class _AdminOverviewPage extends StatelessWidget {
                   label: 'Pending pickups',
                   value: metrics['pendingRequests']?.toString() ?? '0',
                   icon: Icons.near_me_outlined,
-                  accent: const Color(0xFFE29B2D),
+                  accent: AppColors.warning,
                   caption: 'Pickup requests still waiting for resolution',
                 ),
               ),
@@ -138,7 +145,7 @@ class _AdminOverviewPage extends StatelessWidget {
                   label: 'Onboard rides',
                   value: metrics['onboardRides']?.toString() ?? '0',
                   icon: Icons.groups_2_outlined,
-                  accent: const Color(0xFF2157A5),
+                  accent: AppColors.info,
                   caption: 'Passengers currently onboard active trips',
                 ),
               ),
@@ -148,7 +155,7 @@ class _AdminOverviewPage extends StatelessWidget {
                   label: 'Terminal queue trips',
                   value: metrics['terminalQueueTrips']?.toString() ?? '0',
                   icon: Icons.queue_outlined,
-                  accent: const Color(0xFF8A3B5D),
+                  accent: AppColors.purple,
                   caption: 'Active trips currently operating from the terminal',
                 ),
               ),
@@ -158,7 +165,7 @@ class _AdminOverviewPage extends StatelessWidget {
                   label: 'Route-mode trips',
                   value: metrics['routeModeTrips']?.toString() ?? '0',
                   icon: Icons.alt_route_outlined,
-                  accent: const Color(0xFF4E6B2B),
+                  accent: AppColors.success,
                   caption: 'Active trips already running on the route',
                 ),
               ),
@@ -174,7 +181,7 @@ class _AdminOverviewPage extends StatelessWidget {
                 final stacked = constraints.maxWidth < 1050;
                 final terminalCard = _HybridDispatchColumn(
                   title: 'Terminal queue',
-                  accent: const Color(0xFF8A3B5D),
+                  accent: AppColors.purple,
                   emptyMessage: 'No active terminal queue trips yet.',
                   children: [
                     for (final trip in terminalQueue)
@@ -198,11 +205,15 @@ class _AdminOverviewPage extends StatelessWidget {
                 );
                 final waitingCard = _HybridDispatchColumn(
                   title: 'Waiting terminal passengers',
-                  accent: const Color(0xFFE29B2D),
+                  accent: AppColors.warning,
                   emptyMessage: 'No terminal passengers waiting right now.',
                   children: [
                     if (waitingTerminalPassengers.isEmpty)
-                      const Text('No terminal passengers waiting right now.')
+                      const AppEmptyState(
+                        icon: Icons.people_outline,
+                        title: 'No passengers waiting',
+                        message: 'New terminal passengers will appear here.',
+                      )
                     else
                       for (final request in waitingTerminalPassengers)
                         _HybridDispatchTile(
@@ -217,11 +228,15 @@ class _AdminOverviewPage extends StatelessWidget {
                 );
                 final routeCard = _HybridDispatchColumn(
                   title: 'Route-mode drivers',
-                  accent: const Color(0xFF2157A5),
+                  accent: AppColors.info,
                   emptyMessage: 'No active route-mode trips yet.',
                   children: [
                     if (routeDrivers.isEmpty)
-                      const Text('No active route-mode trips yet.')
+                      const AppEmptyState(
+                        icon: Icons.alt_route_outlined,
+                        title: 'No route-mode drivers',
+                        message: 'Active route-mode trips will appear here.',
+                      )
                     else
                       for (final trip in routeDrivers)
                         _HybridDispatchTile(
@@ -273,12 +288,12 @@ class _AdminOverviewPage extends StatelessWidget {
                     _PassengerFlowStatTile(
                       label: 'Total boarded',
                       value: _readCount(summary['totalBoarded']).toString(),
-                      accent: const Color(0xFF0F6A5F),
+                      accent: AppColors.primary,
                     ),
                     _PassengerFlowStatTile(
                       label: 'Total unloaded',
                       value: _readCount(summary['totalUnloaded']).toString(),
-                      accent: const Color(0xFFE29B2D),
+                      accent: AppColors.warning,
                     ),
                     _PassengerFlowStatTile(
                       label: 'Top boarding location',
@@ -286,7 +301,7 @@ class _AdminOverviewPage extends StatelessWidget {
                       caption: topBoardingLocation == null
                           ? null
                           : '${topBoardingLocation.count} passengers',
-                      accent: const Color(0xFF2157A5),
+                      accent: AppColors.info,
                     ),
                     _PassengerFlowStatTile(
                       label: 'Top unload location',
@@ -294,7 +309,7 @@ class _AdminOverviewPage extends StatelessWidget {
                       caption: topUnloadLocation == null
                           ? null
                           : '${topUnloadLocation.count} passengers',
-                      accent: const Color(0xFF8A3B5D),
+                      accent: AppColors.purple,
                     ),
                   ],
                 ),
@@ -320,13 +335,13 @@ class _AdminOverviewPage extends StatelessWidget {
                       title: 'Most boarded locations',
                       emptyLabel: 'No boarding-location data yet.',
                       stops: topBoardingLocations,
-                      accent: const Color(0xFF0F6A5F),
+                      accent: AppColors.primary,
                     );
                     final unloadCard = _PassengerFlowTopStopsCard(
                       title: 'Most unloaded locations',
                       emptyLabel: 'No unload-location data yet.',
                       stops: topUnloadLocations,
-                      accent: const Color(0xFFE29B2D),
+                      accent: AppColors.warning,
                     );
 
                     if (stacked) {
@@ -828,49 +843,62 @@ class _PassengerFlowChart extends StatelessWidget {
           const SizedBox(height: 18),
           SizedBox(
             height: 240,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                for (final point in series)
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final chartWidth = math.max(constraints.maxWidth, series.length * 72.0);
+                return SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SizedBox(
+                    width: chartWidth,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        for (final point in series)
                           Expanded(
-                            child: Align(
-                              alignment: Alignment.bottomCenter,
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                mainAxisAlignment: MainAxisAlignment.center,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
-                                  _FlowBar(
-                                    value: point.boarded,
-                                    maxValue: maxValue,
-                                    color: const Color(0xFF0F6A5F),
+                                  Expanded(
+                                    child: Align(
+                                      alignment: Alignment.bottomCenter,
+                                      child: Row(
+                                        crossAxisAlignment: CrossAxisAlignment.end,
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          _FlowBar(
+                                            value: point.boarded,
+                                            maxValue: maxValue,
+                                            color: AppColors.primary,
+                                          ),
+                                          const SizedBox(width: 6),
+                                          _FlowBar(
+                                            value: point.unloaded,
+                                            maxValue: maxValue,
+                                            color: AppColors.warning,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
                                   ),
-                                  const SizedBox(width: 6),
-                                  _FlowBar(
-                                    value: point.unloaded,
-                                    maxValue: maxValue,
-                                    color: const Color(0xFFE29B2D),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    point.label,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.center,
+                                    style: Theme.of(context).textTheme.bodySmall,
                                   ),
                                 ],
                               ),
                             ),
                           ),
-                          const SizedBox(height: 10),
-                          Text(
-                            point.label,
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
-                      ),
+                      ],
                     ),
                   ),
-              ],
+                );
+              },
             ),
           ),
         ],
@@ -1160,20 +1188,16 @@ class _SectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
+    return AppCard(
+      padding: AppSpacing.xl,
+      child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 6),
-            Text(subtitle, style: Theme.of(context).textTheme.bodyMedium),
-            const SizedBox(height: 16),
+            AppSectionHeader(title: title, subtitle: subtitle),
+            const SizedBox(height: AppSpacing.xl),
             child,
           ],
         ),
-      ),
     );
   }
 }

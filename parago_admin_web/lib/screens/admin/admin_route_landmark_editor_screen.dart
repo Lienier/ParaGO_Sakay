@@ -572,11 +572,19 @@ class _AdminRouteLandmarkEditorScreenState
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
         children: [
           const SizedBox(height: 16),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final stacked = constraints.maxWidth < 920;
+              return Flex(
+                direction: stacked ? Axis.vertical : Axis.horizontal,
+                mainAxisSize: stacked ? MainAxisSize.min : MainAxisSize.max,
+                verticalDirection:
+                    stacked ? VerticalDirection.up : VerticalDirection.down,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+              Flexible(
                 flex: 5,
+                fit: FlexFit.loose,
                 child: Column(
                   children: [
                     Card(
@@ -899,9 +907,13 @@ class _AdminRouteLandmarkEditorScreenState
                   ],
                 ),
               ),
-              const SizedBox(width: 16),
-              Expanded(
+              SizedBox(
+                width: stacked ? 0 : 16,
+                height: stacked ? 16 : 0,
+              ),
+              Flexible(
                 flex: 7,
+                fit: FlexFit.loose,
                 child: Card(
                   child: Padding(
                     padding: const EdgeInsets.all(20),
@@ -951,8 +963,9 @@ class _AdminRouteLandmarkEditorScreenState
                                         index += 1)
                                       Marker(
                                         point: _landmarks[index].position,
-                                        width: 188,
-                                        height: 96,
+                                        width: _landmarks[index].id == _selectedLandmarkId ? 214 : 48,
+                                        height: _landmarks[index].id == _selectedLandmarkId ? 118 : 58,
+                                        alignment: Alignment.bottomCenter,
                                         child: GestureDetector(
                                           onTap: () {
                                             setState(() {
@@ -994,7 +1007,9 @@ class _AdminRouteLandmarkEditorScreenState
                   ),
                 ),
               ),
-            ],
+                ],
+              );
+            },
           ),
           if (_message != null) ...[
             const SizedBox(height: 16),
@@ -1066,15 +1081,49 @@ class _LandmarkMarker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = selected ? const Color(0xFF8A3B5D) : const Color(0xFF0F6A5F);
+    final accent = selected ? const Color(0xFF7C3AED) : const Color(0xFF0F766E);
+    if (!selected) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: accent,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 3),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x40000000),
+                  blurRadius: 6,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Text(
+              '$order',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          Icon(Icons.arrow_drop_down, color: accent, size: 18),
+        ],
+      );
+    }
+
     return Align(
       alignment: Alignment.topCenter,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 180),
+        constraints: const BoxConstraints(maxWidth: 214),
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(color: accent, width: selected ? 2 : 1),
             boxShadow: [
               BoxShadow(
@@ -1085,10 +1134,33 @@ class _LandmarkMarker extends StatelessWidget {
             ],
           ),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                SizedBox(
+                  width: 186,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.place, size: 16, color: accent),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          'Selected landmark',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: accent,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 4),
                 Text(
                   '$order. $name',
                   maxLines: 2,
@@ -1098,6 +1170,7 @@ class _LandmarkMarker extends StatelessWidget {
                   style: TextStyle(
                     color: accent,
                     fontWeight: FontWeight.w800,
+                    fontSize: 13,
                   ),
                 ),
                 const SizedBox(height: 2),

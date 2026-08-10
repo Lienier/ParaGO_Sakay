@@ -7,6 +7,11 @@ import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/config/app_config.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_breakpoints.dart';
+import '../../core/theme/app_radius.dart';
+import '../../core/theme/app_spacing.dart';
+import '../../widgets/app_card.dart';
 import '../../core/utils/parago_format.dart';
 import '../../services/admin_service.dart';
 import '../../services/realtime_socket_service.dart';
@@ -75,6 +80,49 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     if (shouldLogout == true) {
       await session.logout();
     }
+  }
+
+  Future<void> _showMoreNavigation() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            AppSpacing.sm,
+            AppSpacing.lg,
+            AppSpacing.lg,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('More workspace tools', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: AppSpacing.sm),
+              for (final section in const [
+                _AdminWorkspaceSection.routeBuilder,
+                _AdminWorkspaceSection.fareSettings,
+                _AdminWorkspaceSection.announcements,
+                _AdminWorkspaceSection.support,
+              ])
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(_sectionIcon(section)),
+                  title: Text(_sectionLabel(section)),
+                  selected: _selectedSection == section,
+                  selectedTileColor: AppColors.primaryContainer,
+                  shape: const RoundedRectangleBorder(borderRadius: AppRadius.medium),
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    setState(() => _selectedSection = section);
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _load({bool silent = false}) async {
@@ -386,13 +434,19 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     final session = context.read<SessionController>();
     final userName = session.user?.fullName ?? 'Administrator';
     final compactHeader = MediaQuery.sizeOf(context).width < 900;
+    final mobile = MediaQuery.sizeOf(context).width < AppBreakpoints.compact;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F1E8),
+      backgroundColor: AppColors.pageBackground,
       appBar: AppBar(
-        toolbarHeight: 76,
+        toolbarHeight: 68,
         titleSpacing: 18,
-        title: _AdminHeaderBrand(userName: userName),
+        backgroundColor: AppColors.surface,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        shape: const Border(bottom: BorderSide(color: AppColors.border)),
+        title: _AdminHeaderBrand(userName: userName, compact: mobile),
         actions: [
           if (!compactHeader) ...[
             TextButton.icon(
@@ -454,6 +508,18 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
               return Row(
                 children: [
                   NavigationRail(
+                    backgroundColor: AppColors.surface,
+                    minWidth: 224,
+                    groupAlignment: -0.85,
+                    useIndicator: true,
+                    indicatorColor: AppColors.primaryContainer,
+                    selectedIconTheme: const IconThemeData(color: AppColors.primaryDark),
+                    selectedLabelTextStyle: const TextStyle(
+                      color: AppColors.primaryDark,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    unselectedIconTheme: const IconThemeData(color: AppColors.textSecondary),
+                    unselectedLabelTextStyle: const TextStyle(color: AppColors.textSecondary),
                     selectedIndex: _AdminWorkspaceSection.values.indexOf(
                       _selectedSection,
                     ),
@@ -472,17 +538,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                         ),
                     ],
                   ),
-                  const VerticalDivider(width: 1),
+                  const VerticalDivider(width: 1, color: AppColors.border),
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(28),
-                        child: ColoredBox(
-                          color: Colors.white.withValues(alpha: 0.72),
-                          child: content,
-                        ),
-                      ),
+                      padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, 0),
+                      child: content,
                     ),
                   ),
                 ],
@@ -490,54 +550,95 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
             }
 
             return Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  _AdminCompactNav(
-                    selectedSection: _selectedSection,
-                    onSelect: (section) {
-                      setState(() => _selectedSection = section);
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(24),
-                      child: ColoredBox(
-                        color: Colors.white.withValues(alpha: 0.72),
-                        child: content,
-                      ),
-                    ),
-                  ),
-                ],
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                AppSpacing.md,
+                AppSpacing.lg,
+                AppSpacing.lg,
               ),
+              child: mobile
+                  ? content
+                  : Column(
+                      children: [
+                        _AdminCompactNav(
+                          selectedSection: _selectedSection,
+                          onSelect: (section) => setState(() => _selectedSection = section),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        Expanded(child: content),
+                      ],
+                    ),
             );
           },
         ),
       ),
+      bottomNavigationBar: mobile
+          ? SafeArea(
+              top: false,
+              child: NavigationBar(
+                selectedIndex: _mobileNavigationIndex,
+                onDestinationSelected: (index) {
+                  if (index == 3) {
+                    _showMoreNavigation();
+                    return;
+                  }
+                  setState(() {
+                    _selectedSection = const [
+                      _AdminWorkspaceSection.overview,
+                      _AdminWorkspaceSection.drivers,
+                      _AdminWorkspaceSection.routes,
+                    ][index];
+                  });
+                },
+                destinations: const [
+                  NavigationDestination(icon: Icon(Icons.space_dashboard_outlined), selectedIcon: Icon(Icons.space_dashboard), label: 'Overview'),
+                  NavigationDestination(icon: Icon(Icons.manage_accounts_outlined), selectedIcon: Icon(Icons.manage_accounts), label: 'Drivers'),
+                  NavigationDestination(icon: Icon(Icons.place_outlined), selectedIcon: Icon(Icons.place), label: 'Routes'),
+                  NavigationDestination(icon: Icon(Icons.more_horiz), label: 'More'),
+                ],
+              ),
+            )
+          : null,
     );
+  }
+
+  int get _mobileNavigationIndex {
+    switch (_selectedSection) {
+      case _AdminWorkspaceSection.overview:
+        return 0;
+      case _AdminWorkspaceSection.drivers:
+        return 1;
+      case _AdminWorkspaceSection.routes:
+        return 2;
+      default:
+        return 3;
+    }
   }
 }
 
 class _AdminHeaderBrand extends StatelessWidget {
-  const _AdminHeaderBrand({required this.userName});
+  const _AdminHeaderBrand({required this.userName, this.compact = false});
 
   final String userName;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: const Color(0xFFE6F2EF),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: const Icon(
-            Icons.admin_panel_settings_outlined,
-            color: Color(0xFF0F6A5F),
+        ClipRRect(
+          borderRadius: AppRadius.medium,
+          child: Image.asset(
+            'assets/images/SakayLogo.png',
+            width: compact ? 34 : 40,
+            height: compact ? 34 : 40,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => Container(
+              width: compact ? 34 : 40,
+              height: compact ? 34 : 40,
+              color: AppColors.primaryContainer,
+              child: const Icon(Icons.admin_panel_settings_outlined, color: AppColors.primary),
+            ),
           ),
         ),
         const SizedBox(width: 12),
@@ -547,20 +648,22 @@ class _AdminHeaderBrand extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
-                'SAKAY! Admin',
+                compact ? 'SAKAY!' : 'SAKAY! Admin',
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.w800,
                     ),
               ),
-              const SizedBox(height: 2),
-              Text(
-                'Signed in as $userName',
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
-              ),
+              if (!compact) ...[
+                const SizedBox(height: 2),
+                Text(
+                  'Signed in as $userName',
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                ),
+              ],
             ],
           ),
         ),

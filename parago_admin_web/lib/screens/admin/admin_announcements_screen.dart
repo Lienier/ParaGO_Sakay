@@ -335,34 +335,32 @@ class _AdminAnnouncementsScreenState extends State<AdminAnnouncementsScreen> {
   }
 
   Widget _buildHeader() {
-    return Row(
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Service announcements',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: 3),
-              Text(
-                'Schedule and publish updates without interrupting operations.',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 12),
-        SizedBox(
-          width: 178,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 560;
+        final title = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Service announcements', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 3),
+            Text(
+              'Schedule and publish updates without interrupting operations.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        );
+        final action = SizedBox(
+          width: compact ? double.infinity : 178,
           child: FilledButton.icon(
             onPressed: () => _openEditor(),
             icon: const Icon(Icons.add),
             label: const Text('New announcement'),
           ),
-        ),
-      ],
+        );
+        return compact
+            ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [title, const SizedBox(height: 12), action])
+            : Row(children: [Expanded(child: title), const SizedBox(width: 12), action]);
+      },
     );
   }
 

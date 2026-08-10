@@ -1,83 +1,60 @@
 import 'package:flutter/material.dart';
 
-class AppTheme {
-  static const Color _forest = Color(0xFF0F6A5F);
-  static const Color _sun = Color(0xFFE29B2D);
-  static const Color _ink = Color(0xFF173033);
-  static const Color _paper = Color(0xFFF6F1E8);
-  static const Color _card = Color(0xFFFFFBF5);
+import '../core/theme/app_colors.dart';
+import '../core/theme/app_radius.dart';
 
+class AppTheme {
   static ThemeData light() {
     final scheme = ColorScheme.fromSeed(
-      seedColor: _forest,
-      primary: _forest,
-      secondary: _sun,
-      surface: _card,
+      seedColor: AppColors.primary,
+      primary: AppColors.primary,
+      secondary: AppColors.info,
+      surface: AppColors.surface,
       onPrimary: Colors.white,
-      onSecondary: _ink,
+      onSecondary: Colors.white,
       brightness: Brightness.light,
     );
 
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
-      scaffoldBackgroundColor: _paper,
+      scaffoldBackgroundColor: AppColors.pageBackground,
       textTheme: const TextTheme(
         headlineMedium: TextStyle(
-          fontSize: 30,
-          fontWeight: FontWeight.w800,
-          letterSpacing: -0.8,
-          color: _ink,
+          fontSize: 28, fontWeight: FontWeight.w700, letterSpacing: -0.4,
+          color: AppColors.textPrimary,
         ),
         headlineSmall: TextStyle(
-          fontSize: 23,
-          fontWeight: FontWeight.w800,
-          letterSpacing: -0.4,
-          color: _ink,
+          fontSize: 24, fontWeight: FontWeight.w700, letterSpacing: -0.2,
+          color: AppColors.textPrimary,
         ),
         titleLarge: TextStyle(
-          fontSize: 20,
-          fontWeight: FontWeight.w800,
-          letterSpacing: -0.2,
-          color: _ink,
+          fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
         ),
-        titleMedium: TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.w700,
-          color: _ink,
-        ),
+        titleMedium: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
         bodyLarge: TextStyle(
-          fontSize: 15,
-          height: 1.45,
-          color: _ink,
+          fontSize: 15, height: 1.45, color: AppColors.textPrimary,
         ),
-        bodyMedium: TextStyle(
-          fontSize: 14,
-          height: 1.4,
-          color: _ink,
-        ),
-        labelLarge: TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.2,
-        ),
+        bodyMedium: TextStyle(fontSize: 14, height: 1.4, color: AppColors.textPrimary),
+        bodySmall: TextStyle(fontSize: 13, height: 1.35, color: AppColors.textSecondary),
+        labelLarge: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, letterSpacing: .1),
       ),
       cardTheme: CardThemeData(
-        color: _card,
+        color: AppColors.surface,
         elevation: 0,
         margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-          side: BorderSide(color: Colors.black.withValues(alpha: 0.06)),
+          borderRadius: AppRadius.large,
+          side: const BorderSide(color: AppColors.border),
         ),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: _forest,
+          backgroundColor: AppColors.primary,
           foregroundColor: Colors.white,
           minimumSize: const Size.fromHeight(52),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: AppRadius.medium,
           ),
           textStyle: const TextStyle(
             fontWeight: FontWeight.w700,
@@ -87,47 +64,44 @@ class AppTheme {
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: _ink,
+          foregroundColor: AppColors.textPrimary,
           minimumSize: const Size.fromHeight(52),
           side: BorderSide(color: Colors.black.withValues(alpha: 0.08)),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-          ),
+          shape: const RoundedRectangleBorder(borderRadius: AppRadius.medium),
           textStyle: const TextStyle(fontWeight: FontWeight.w700),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.9),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+        fillColor: AppColors.surfaceSubtle,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
-          borderSide: BorderSide(color: Colors.black.withValues(alpha: 0.08)),
+          borderRadius: AppRadius.medium,
+          borderSide: const BorderSide(color: AppColors.border),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
-          borderSide: BorderSide(color: Colors.black.withValues(alpha: 0.08)),
+          borderRadius: AppRadius.medium,
+          borderSide: const BorderSide(color: AppColors.border),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
-          borderSide: const BorderSide(color: _forest, width: 1.5),
+          borderRadius: AppRadius.medium,
+          borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
         ),
       ),
       chipTheme: ChipThemeData(
         backgroundColor: Colors.white,
-        side: BorderSide(color: Colors.black.withValues(alpha: 0.06)),
-        labelStyle: const TextStyle(color: _ink, fontWeight: FontWeight.w600),
+        side: const BorderSide(color: AppColors.border),
+        labelStyle: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w600),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
       ),
-      dividerColor: Colors.black.withValues(alpha: 0.08),
+      dividerColor: AppColors.border,
     );
   }
 
   static LinearGradient heroGradient(Color accent) {
     return LinearGradient(
       colors: [
-        _forest,
+        AppColors.primary,
         accent,
       ],
       begin: Alignment.topLeft,

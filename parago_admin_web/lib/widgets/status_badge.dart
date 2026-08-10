@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/utils/parago_format.dart';
+import '../core/theme/app_colors.dart';
 
 class StatusBadge extends StatelessWidget {
   const StatusBadge({
@@ -40,24 +41,24 @@ class StatusBadge extends StatelessWidget {
       case 'ready':
       case 'sent':
       case 'on_road':
-        return const _StatusColors(Color(0xFFD8F3E6), Color(0xFF13623E));
+        return const _StatusColors(Color(0xFFDCFCE7), AppColors.success);
       case 'pending':
       case 'waiting':
       case 'scheduled':
       case 'seen':
-        return const _StatusColors(Color(0xFFFFE7B5), Color(0xFF8C5A00));
+        return const _StatusColors(Color(0xFFFFF1CC), AppColors.warning);
       case 'completed':
       case 'acknowledged_done':
-        return const _StatusColors(Color(0xFFDCEBFF), Color(0xFF2157A5));
+        return const _StatusColors(Color(0xFFDBEAFE), AppColors.info);
       case 'cancelled':
       case 'expired':
       case 'dismissed':
       case 'inactive':
       case 'suspended':
       case 'deactivated':
-        return const _StatusColors(Color(0xFFF2D8D8), Color(0xFF8A2E2E));
+        return const _StatusColors(Color(0xFFFEE4E2), AppColors.error);
       default:
-        return const _StatusColors(Color(0xFFE6E4E0), Color(0xFF5B5650));
+        return const _StatusColors(Color(0xFFF1F5F9), AppColors.textSecondary);
     }
   }
 }
