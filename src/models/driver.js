@@ -2,12 +2,29 @@ const mongoose = require('mongoose');
 
 const { Schema } = mongoose;
 
+const licenseDocumentSchema = new Schema(
+  {
+    objectKey: { type: String, required: true, trim: true },
+    mimeType: { type: String, required: true, trim: true },
+    sizeBytes: { type: Number, required: true, min: 1 },
+    uploadedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const driverSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
     licenseNumber: { type: String, trim: true },
     employeeNumber: { type: String, trim: true },
     phone: { type: String, trim: true },
+    licenseDocuments: {
+      type: {
+        front: licenseDocumentSchema,
+        back: licenseDocumentSchema,
+      },
+      select: false,
+    },
     assignedJeepneyId: { type: Schema.Types.ObjectId, ref: 'Jeepney' },
     assignedRouteId: { type: Schema.Types.ObjectId, ref: 'Route' },
     status: {

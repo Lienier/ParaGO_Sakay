@@ -32,6 +32,7 @@ import '../../services/trip_service.dart';
 import '../../widgets/status_badge.dart';
 import '../../widgets/announcement_card.dart';
 import '../support/driver_support_screen.dart';
+import 'driver_profile_screen.dart';
 
 part 'driver_home_screen_sections.dart';
 
@@ -466,6 +467,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           realtimeSocketService: _realtimeSocketService,
         ),
       ),
+    );
+  }
+
+  Future<void> _openDriverProfile() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const DriverProfileScreen()),
     );
   }
 
@@ -2602,8 +2609,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return;
     }
 
-    final appOnboardCount =
-        rides.where((ride) => ride.status == 'onboard').length;
+    // The trip snapshot is the authoritative total. Derive the app-tracked
+    // component from it instead of trusting a possibly stale ride hydration.
+    // This prevents the final available seat from being blocked locally.
+    final appOnboardCount = trip.occupancyCount == null
+        ? rides.where((ride) => ride.status == 'onboard').length
+        : math.max(0, trip.occupancyCount! - currentManualCount);
     final nextCount = appOnboardCount + nextManualCount;
     final seatCapacity = trip.jeepneyCapacity;
     if (delta > 0 &&
@@ -2718,6 +2729,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       appBar: AppBar(
         title: Text(_tabTitle()),
         actions: [
+          IconButton(
+            tooltip: 'Driver profile',
+            onPressed: _openDriverProfile,
+            icon: const Icon(Icons.badge_outlined),
+          ),
           IconButton(
             tooltip: 'Support',
             onPressed: _loading ? null : _openSupportCenter,

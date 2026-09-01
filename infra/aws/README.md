@@ -3,7 +3,8 @@
 This directory is the AWS-first staging foundation for ParaGO. It is intentionally
 split into two Terraform roots:
 
-- `bootstrap/` creates the encrypted S3/KMS remote-state foundation.
+- `bootstrap/` creates the encrypted S3/KMS remote-state foundation and the
+  persistent private driver-document bucket.
 - `envs/staging/` creates the isolated AWS staging backend environment.
 
 Do not run `terraform apply` until AWS identity, MFA, billing alerts, and the
@@ -27,7 +28,7 @@ Expected region for all ParaGO AWS staging resources is `ap-southeast-1`.
 ## Bootstrap State
 
 The bootstrap root uses local state only long enough to create the encrypted S3
-state bucket and KMS key.
+state bucket, KMS key, and private driver-document bucket.
 
 ```powershell
 cd infra/aws/bootstrap
@@ -65,7 +66,22 @@ terraform destroy -var ami_id=ami-0ed6a65b84536f6ce
 ```
 
 Do not destroy the bootstrap state bucket unless the AWS migration work is fully
-abandoned and you have exported any evidence you need.
+abandoned and you have exported any evidence you need. The driver-document
+bucket has Terraform destroy protection because license images must survive
+normal staging destruction.
+
+## Driver License Documents
+
+Apply the bootstrap root once after pulling the driver-document feature. It
+creates a private bucket named from the AWS account and Singapore region. The
+bucket blocks public access, uses S3-managed encryption, and permits browser
+reads only from the ParaGO admin domain through short-lived signed URLs.
+
+The disposable staging root grants its EC2 role access only to `drivers/*` and
+writes the bucket name to the staging SSM path as
+`DRIVER_DOCUMENTS_BUCKET`. The deployment script loads that value into the API
+environment automatically. Destroying `envs/staging` removes the IAM policy and
+runtime parameter but preserves all document objects in bootstrap.
 
 ## Secrets
 
@@ -115,5 +131,6 @@ client builds.
 - Ingress: CloudFront generated HTTPS hostname to a private VPC origin
 - Cache: private ElastiCache/Valkey-compatible Redis with TLS and auth token
 - MongoDB: Atlas remains the durable database
+- Driver documents: persistent private S3 bucket with signed five-minute reads
 - Redis namespace: `parago:staging:aws:v1`
 - API and worker run as separate `systemd` services from the same release

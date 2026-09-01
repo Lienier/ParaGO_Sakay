@@ -258,9 +258,11 @@ const createUserByAdmin = async ({
   role = 'PASSENGER',
   status = 'active',
   phone,
+  session = null,
 }) => {
+  const createOptions = session ? { session } : {};
   const normalizedEmail = normalizeEmail(email);
-  const existing = await User.findOne({ email: normalizedEmail });
+  const existing = await User.findOne({ email: normalizedEmail }).session(session);
   if (existing) throw new ApiError(409, 'Email already registered');
 
   const normalizedRole = String(role || 'PASSENGER').toUpperCase();
@@ -270,7 +272,7 @@ const createUserByAdmin = async ({
   ensureStrongPassword(password);
 
   const passwordHash = await bcrypt.hash(password, 11);
-  const user = await User.create({
+  const [user] = await User.create([{
     email: normalizedEmail,
     passwordHash,
     fullName,
@@ -279,14 +281,14 @@ const createUserByAdmin = async ({
     authProvider: 'local',
     status,
     isVerified: true,
-  });
+  }], createOptions);
 
   if (normalizedRole === 'PASSENGER') {
-    await Passenger.create({ userId: user._id });
+    await Passenger.create([{ userId: user._id }], createOptions);
   } else if (normalizedRole === 'DRIVER') {
-    await Driver.create({ userId: user._id });
+    await Driver.create([{ userId: user._id }], createOptions);
   } else if (normalizedRole === 'ADMIN') {
-    await Admin.create({ userId: user._id });
+    await Admin.create([{ userId: user._id }], createOptions);
   }
 
   return user;

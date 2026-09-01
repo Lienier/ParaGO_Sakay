@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/utils/action_feedback.dart';
@@ -33,6 +35,7 @@ class _AdminDriverManagementScreenState
   final _createFormKey = GlobalKey<FormState>();
   final _editFormKey = GlobalKey<FormState>();
   final _searchCtrl = TextEditingController();
+  final _licenseImagePicker = ImagePicker();
 
   final _createLicenseCtrl = TextEditingController();
   final _createEmployeeCtrl = TextEditingController();
@@ -69,6 +72,8 @@ class _AdminDriverManagementScreenState
   String? _createJeepneyPlateNumber;
   String? _createJeepneyCapacity;
   String _createStatus = 'active';
+  _SelectedLicenseImage? _createLicenseFront;
+  _SelectedLicenseImage? _createLicenseBack;
 
   @override
   void initState() {
@@ -299,11 +304,45 @@ class _AdminDriverManagementScreenState
     _createJeepneyPlateNumber = null;
     _createJeepneyCapacity = null;
     _createStatus = 'active';
+    _createLicenseFront = null;
+    _createLicenseBack = null;
     _createLicenseCtrl.clear();
     _createEmployeeCtrl.clear();
     _createPhoneCtrl.clear();
     _createJeepneyPlateCtrl.clear();
     _createJeepneyCapacityCtrl.clear();
+  }
+
+  Future<_SelectedLicenseImage?> _pickLicenseImage() async {
+    final file =
+        await _licenseImagePicker.pickImage(source: ImageSource.gallery);
+    if (file == null) return null;
+    final bytes = await file.readAsBytes();
+    if (bytes.length > 5 * 1024 * 1024) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Each license image must be 5 MB or smaller.')),
+        );
+      }
+      return null;
+    }
+    final lowerName = file.name.toLowerCase();
+    final mimeType = file.mimeType ??
+        (lowerName.endsWith('.png') ? 'image/png' : 'image/jpeg');
+    if (mimeType != 'image/jpeg' && mimeType != 'image/png') {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Choose a JPEG or PNG image.')),
+        );
+      }
+      return null;
+    }
+    return _SelectedLicenseImage(
+      bytes: bytes,
+      filename: file.name,
+      mimeType: mimeType,
+    );
   }
 
   Future<void> _createDriver(BuildContext sheetContext) async {
@@ -329,6 +368,8 @@ class _AdminDriverManagementScreenState
           routeId: _createRouteId,
           jeepneyPlateNumber: _createJeepneyPlateNumber!.trim(),
           jeepneyCapacity: int.parse(_createJeepneyCapacity!.trim()),
+          licenseFront: _createLicenseFront!.toUpload(),
+          licenseBack: _createLicenseBack!.toUpload(),
           status: _createStatus,
         ),
         onSuccess: (_) async {
@@ -729,6 +770,24 @@ class _AdminDriverManagementScreenState
       body: body,
     );
   }
+}
+
+class _SelectedLicenseImage {
+  const _SelectedLicenseImage({
+    required this.bytes,
+    required this.filename,
+    required this.mimeType,
+  });
+
+  final Uint8List bytes;
+  final String filename;
+  final String mimeType;
+
+  LicenseImageUpload toUpload() => LicenseImageUpload(
+        bytes: bytes,
+        filename: filename,
+        mimeType: mimeType,
+      );
 }
 
 class _DriverMetricChip extends StatelessWidget {

@@ -13,7 +13,7 @@
     "start:worker": "node src/worker.js",
     "dev": "nodemon src/server.js",
     "route:build": "node scripts/generate_route_payload.js",
-    "test": "node test.js && node --test tests/staging-launcher.test.js tests/announcements.integration.test.js tests/realtime-capacity.characterization.test.js tests/phase5-database-migration.test.js tests/redis-foundation.test.js tests/async-worker.test.js tests/worker-process-controls.test.js tests/deployment-hardening.test.js tests/phase10-load-harness.test.js tests/aws-infra-scaffold.test.js",
+    "test": "node test.js && node --test tests/staging-launcher.test.js tests/announcements.integration.test.js tests/realtime-capacity.characterization.test.js tests/phase5-database-migration.test.js tests/redis-foundation.test.js tests/async-worker.test.js tests/worker-process-controls.test.js tests/deployment-hardening.test.js tests/phase10-load-harness.test.js tests/aws-infra-scaffold.test.js tests/driver-license-documents.test.js",
     "test:unit": "node test.js",
     "test:announcements": "node --test tests/announcements.integration.test.js",
     "test:characterization": "node --test tests/realtime-capacity.characterization.test.js",
@@ -42,6 +42,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1123.0",
+    "@aws-sdk/s3-request-presigner": "^3.1123.0",
     "axios": "^1.18.1",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
@@ -54,7 +56,9 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.24.2",
     "morgan": "^1.11.0",
+    "multer": "^2.3.0",
     "redis": "^6.1.0",
+    "sharp": "^0.35.4",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {

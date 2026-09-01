@@ -1,7 +1,29 @@
-import '../core/network/api_client.dart';
-import '../core/exceptions/api_exception.dart';
+import 'dart:convert';
+
+import 'package:dio/dio.dart';
 import 'package:latlong2/latlong.dart';
+
+import '../core/exceptions/api_exception.dart';
+import '../core/network/api_client.dart';
 import '../models/transport/route_summary.dart';
+
+class LicenseImageUpload {
+  const LicenseImageUpload({
+    required this.bytes,
+    required this.filename,
+    required this.mimeType,
+  });
+
+  final List<int> bytes;
+  final String filename;
+  final String mimeType;
+
+  MultipartFile toMultipartFile() => MultipartFile.fromBytes(
+        bytes,
+        filename: filename,
+        contentType: DioMediaType.parse(mimeType),
+      );
+}
 
 class AdminService {
   AdminService(this._client);
@@ -118,6 +140,8 @@ class AdminService {
     String? routeId,
     required String jeepneyPlateNumber,
     required int jeepneyCapacity,
+    required LicenseImageUpload licenseFront,
+    required LicenseImageUpload licenseBack,
     String status = 'active',
   }) async {
     final trimmedLicense = licenseNumber?.trim();
@@ -125,29 +149,60 @@ class AdminService {
     final trimmedPhone = phone?.trim();
     final trimmedRouteId = routeId?.trim();
     final trimmedJeepneyPlateNumber = jeepneyPlateNumber.trim().toUpperCase();
+    final payload = <String, dynamic>{
+      'email': email.trim(),
+      'password': password.trim(),
+      'fullName': fullName.trim(),
+      if (trimmedLicense != null && trimmedLicense.isNotEmpty)
+        'licenseNumber': trimmedLicense,
+      if (trimmedEmployee != null && trimmedEmployee.isNotEmpty)
+        'employeeNumber': trimmedEmployee,
+      if (trimmedPhone != null && trimmedPhone.isNotEmpty)
+        'phone': trimmedPhone,
+      if (trimmedRouteId != null && trimmedRouteId.isNotEmpty)
+        'assignedRouteId': trimmedRouteId,
+      'jeepney': {
+        'plateNumber': trimmedJeepneyPlateNumber,
+        'capacity': jeepneyCapacity,
+      },
+      'status': status,
+    };
     final response = await _client.request(
       method: 'POST',
       path: '/admin/drivers',
-      body: {
-        'email': email.trim(),
-        'password': password.trim(),
-        'fullName': fullName.trim(),
-        if (trimmedLicense != null && trimmedLicense.isNotEmpty)
-          'licenseNumber': trimmedLicense,
-        if (trimmedEmployee != null && trimmedEmployee.isNotEmpty)
-          'employeeNumber': trimmedEmployee,
-        if (trimmedPhone != null && trimmedPhone.isNotEmpty)
-          'phone': trimmedPhone,
-        if (trimmedRouteId != null && trimmedRouteId.isNotEmpty)
-          'assignedRouteId': trimmedRouteId,
-        'jeepney': {
-          'plateNumber': trimmedJeepneyPlateNumber,
-          'capacity': jeepneyCapacity,
-        },
-        'status': status,
-      },
+      body: FormData.fromMap({
+        'payload': jsonEncode(payload),
+        'licenseFront': licenseFront.toMultipartFile(),
+        'licenseBack': licenseBack.toMultipartFile(),
+      }),
     );
     return response['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getDriverLicenseDocuments(
+    String driverId,
+  ) async {
+    final response = await _client.request(
+      method: 'GET',
+      path: '/admin/drivers/$driverId/license-documents',
+      useCache: false,
+    );
+    return response['data'] as Map<String, dynamic>? ?? <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> replaceDriverLicenseDocument({
+    required String driverId,
+    required String side,
+    required LicenseImageUpload image,
+  }) async {
+    final response = await _client.request(
+      method: 'PUT',
+      path: '/admin/drivers/$driverId/license-documents/$side',
+      body: FormData.fromMap({
+        'licenseDocument': image.toMultipartFile(),
+      }),
+    );
+    return response['data'] as Map<String, dynamic>? ?? <String, dynamic>{};
   }
 
   Future<Map<String, dynamic>> updateDriver({

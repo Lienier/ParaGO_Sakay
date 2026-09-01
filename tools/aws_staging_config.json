@@ -1,0 +1,14 @@
+{
+  "aws_region": "ap-southeast-1",
+  "aws_profile": "default",
+  "aws_executable": "C:\\Users\\reineil\\AppData\\Local\\Programs\\Amazon\\AWSCLIV2\\aws.exe",
+  "terraform_executable": "C:\\terraform\\terraform.exe",
+  "terraform_directory": "infra/aws/envs/staging",
+  "ami_id": "ami-0ed6a65b84536f6ce",
+  "api_domain_name": "api.sakaygaray.com",
+  "api_certificate_validation_record_fqdns": [
+    "_a915aceb6be7592ae1333d030be777f9.api.sakaygaray.com"
+  ],
+  "api_health_url": "https://api.sakaygaray.com/api/v1/health",
+  "admin_url": "https://admin.sakaygaray.com"
+}

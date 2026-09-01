@@ -25,7 +25,7 @@ server {
     listen [::]:80 default_server;
     server_name _;
 
-    client_max_body_size 1m;
+    client_max_body_size 12m;
     client_body_timeout 15s;
     keepalive_timeout 65s;
     send_timeout 30s;

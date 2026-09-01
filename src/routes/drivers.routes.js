@@ -45,6 +45,9 @@ const {
   enqueueAutomationWork,
 } = require('../services/asyncJobQueue.service');
 const { apiRateLimiters } = require('../middlewares/rateLimits');
+const {
+  presentLicenseDocuments,
+} = require('../services/driverLicenseDocuments.service');
 
 const router = express.Router();
 
@@ -56,7 +59,7 @@ router.get(
     const profile = await requireCurrentDriver(req.user, {
       populate: {
         path: 'userId',
-        select: 'status',
+        select: 'status email fullName phone',
       },
     });
     const raw =
@@ -68,6 +71,23 @@ router.get(
         accountStatus: profile.userId?.status?.toString() ?? req.user.status ?? 'unknown',
       },
       'Driver profile'
+    );
+  })
+);
+
+router.get(
+  '/me/license-documents',
+  authenticate,
+  authorize(DRIVER),
+  asyncHandler(async (req, res) => {
+    const profile = await Driver.findOne({ userId: req.user._id }).select(
+      '+licenseDocuments'
+    );
+    if (!profile) throw new ApiError(404, 'Driver record missing');
+    return ok(
+      res,
+      await presentLicenseDocuments(profile.licenseDocuments),
+      'Driver license documents'
     );
   })
 );

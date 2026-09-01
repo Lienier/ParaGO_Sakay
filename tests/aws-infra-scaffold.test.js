@@ -30,7 +30,13 @@ test('AWS staging Terraform scaffold preserves deployment guardrails', () => {
   assert.match(main, /transit_encryption_enabled = true/);
   assert.match(main, /secret_path_prefix}\/REDIS_HOST/);
   assert.match(main, /primary_endpoint_address/);
+  assert.match(main, /DRIVER_DOCUMENTS_BUCKET/);
+  assert.match(main, /s3:GetObject/);
+  assert.match(main, /s3:PutObject/);
+  assert.match(main, /s3:DeleteObject/);
   assert.match(outputs, /parago:staging:aws:v1/);
+  assert.match(outputs, /driver_documents_bucket_name/);
+  assert.match(userData, /client_max_body_size 12m/);
   assert.match(userData, /proxy_set_header Upgrade \$http_upgrade/);
   assert.match(userData, /parago-aws-staging-v1/);
 });
@@ -47,6 +53,10 @@ test('AWS bootstrap state bucket is encrypted, versioned, and public-blocked', (
   assert.match(bootstrap, /repo:\$\{var\.github_repository\}:ref:refs\/heads\/main/);
   assert.match(bootstrap, /parago-github-staging-deploy/);
   assert.match(bootstrap, /ec2:StartInstances/);
+  assert.match(bootstrap, /resource "aws_s3_bucket" "driver_documents"/);
+  assert.match(bootstrap, /prevent_destroy = true/);
+  assert.match(bootstrap, /parago-driver-documents-/);
+  assert.match(bootstrap, /https:\/\/admin\.sakaygaray\.com/);
 });
 
 test('AWS staging GitHub Actions deploy remains scoped to main and SSM', () => {

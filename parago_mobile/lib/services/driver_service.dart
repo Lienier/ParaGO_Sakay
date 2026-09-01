@@ -29,6 +29,16 @@ class DriverService {
     return <String, dynamic>{};
   }
 
+  Future<Map<String, dynamic>> getLicenseDocuments() async {
+    final response = await _client.request(
+      method: 'GET',
+      path: '/drivers/me/license-documents',
+      useCache: false,
+    );
+    final data = response['data'];
+    return data is Map<String, dynamic> ? data : <String, dynamic>{};
+  }
+
   Future<void> setStatus({required bool active}) async {
     final body = {'status': active ? 'active' : 'inactive'};
     ApiException? lastError;

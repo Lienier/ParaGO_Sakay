@@ -81,14 +81,11 @@ module.exports = {
   autoOffboardingConsecutiveOutsideChecks: Number(
     process.env.AUTO_OFFBOARDING_CONSECUTIVE_OUTSIDE_CHECKS || 3
   ),
-  autoOffboardingSustainedSeparationSeconds: Number(
-    process.env.AUTO_OFFBOARDING_SUSTAINED_SEPARATION_SECONDS || 60
-  ),
   autoOffboardingPassengerLocationMaxAgeSeconds: Number(
-    process.env.AUTO_OFFBOARDING_PASSENGER_LOCATION_MAX_AGE_SECONDS || 45
+    process.env.AUTO_OFFBOARDING_PASSENGER_LOCATION_MAX_AGE_SECONDS || 15
   ),
   autoOffboardingDriverLocationMaxAgeSeconds: Number(
-    process.env.AUTO_OFFBOARDING_DRIVER_LOCATION_MAX_AGE_SECONDS || 20
+    process.env.AUTO_OFFBOARDING_DRIVER_LOCATION_MAX_AGE_SECONDS || 15
   ),
   fareBaseAmount: Number(process.env.FARE_BASE_AMOUNT || 17),
   fareBaseDistanceKm: Number(process.env.FARE_BASE_DISTANCE_KM || 4),
@@ -151,6 +148,8 @@ module.exports = {
   smsApiPhBaseUrl: process.env.SMSAPIPH_BASE_URL || 'https://smsapiph.onrender.com/api/v1',
   tomtomApiKey: process.env.TOMTOM_API_KEY || '',
   googleRoutesApiKey: process.env.GOOGLE_ROUTES_API_KEY || '',
+  awsRegion: process.env.AWS_REGION || 'ap-southeast-1',
+  driverDocumentsBucket: process.env.DRIVER_DOCUMENTS_BUCKET || '',
   redisUrl: process.env.REDIS_URL || '',
   redisNamespace:
     process.env.REDIS_NAMESPACE ||

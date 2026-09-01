@@ -9,7 +9,10 @@ data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
 }
 
 locals {
-  name_prefix = "${var.project}-${var.environment}-aws"
+  name_prefix                  = "${var.project}-${var.environment}-aws"
+  api_certificate_enabled      = var.api_domain_name != "" && length(var.api_certificate_validation_record_fqdns) > 0
+  custom_api_domain_enabled    = local.api_certificate_enabled && var.enable_api_alias
+  driver_documents_bucket_name = "parago-driver-documents-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
   tags = {
     Project     = "ParaGO"
     Environment = var.environment
@@ -235,6 +238,27 @@ resource "aws_iam_role_policy_attachment" "runtime_secrets" {
   policy_arn = aws_iam_policy.runtime_secrets.arn
 }
 
+data "aws_iam_policy_document" "driver_documents" {
+  statement {
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+    ]
+    resources = ["arn:aws:s3:::${local.driver_documents_bucket_name}/drivers/*"]
+  }
+}
+
+resource "aws_iam_policy" "driver_documents" {
+  name   = "${local.name_prefix}-driver-documents"
+  policy = data.aws_iam_policy_document.driver_documents.json
+}
+
+resource "aws_iam_role_policy_attachment" "driver_documents" {
+  role       = aws_iam_role.ec2.name
+  policy_arn = aws_iam_policy.driver_documents.arn
+}
+
 resource "aws_iam_instance_profile" "ec2" {
   name = "${local.name_prefix}-ec2-profile"
   role = aws_iam_role.ec2.name
@@ -299,10 +323,34 @@ resource "aws_ssm_parameter" "redis_auth_token" {
   value  = random_password.redis_auth_token.result
 }
 
+resource "aws_acm_certificate" "api" {
+  count             = var.api_domain_name == "" ? 0 : 1
+  provider          = aws.us_east_1
+  domain_name       = var.api_domain_name
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_acm_certificate_validation" "api" {
+  count                   = local.api_certificate_enabled ? 1 : 0
+  provider                = aws.us_east_1
+  certificate_arn         = aws_acm_certificate.api[0].arn
+  validation_record_fqdns = var.api_certificate_validation_record_fqdns
+}
+
 resource "aws_ssm_parameter" "redis_host" {
   name  = "${var.secret_path_prefix}/REDIS_HOST"
   type  = "String"
   value = aws_elasticache_replication_group.cache.primary_endpoint_address
+}
+
+resource "aws_ssm_parameter" "driver_documents_bucket" {
+  name  = "${var.secret_path_prefix}/DRIVER_DOCUMENTS_BUCKET"
+  type  = "String"
+  value = local.driver_documents_bucket_name
 }
 
 resource "aws_cloudfront_vpc_origin" "api" {
@@ -375,6 +423,8 @@ resource "aws_cloudfront_distribution" "api" {
   is_ipv6_enabled = true
   comment         = "ParaGO AWS staging API and Socket.IO"
   price_class     = var.cloudfront_price_class
+  aliases         = local.custom_api_domain_enabled ? [var.api_domain_name] : []
+  depends_on      = [aws_acm_certificate_validation.api]
 
   origin {
     domain_name = aws_instance.api.private_dns
@@ -409,7 +459,10 @@ resource "aws_cloudfront_distribution" "api" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    cloudfront_default_certificate = !local.api_certificate_enabled
+    acm_certificate_arn            = local.api_certificate_enabled ? aws_acm_certificate_validation.api[0].certificate_arn : null
+    ssl_support_method             = local.api_certificate_enabled ? "sni-only" : null
+    minimum_protocol_version       = local.api_certificate_enabled ? "TLSv1.2_2021" : null
   }
 }
 

@@ -1,6 +1,6 @@
 # ParaGO Complete System Process And Capabilities
 
-Last updated: 2026-07-29
+Last updated: 2026-08-11
 
 ## 1. Purpose Of This Document
 
@@ -26,6 +26,19 @@ The repository contains one backend and three Flutter clients:
 - `parago_passenger/`: Flutter mobile app for passengers.
 
 The backend is the source of truth. The apps display and update backend state through REST API calls and optional realtime events.
+
+### 2.1 Current Deployment Topology
+
+The current thesis deployment is AWS-first:
+
+- Backend API: AWS EC2 in `ap-southeast-1`, reached through CloudFront.
+- Current staging API base URL: `https://d3fvarohzwiubo.cloudfront.net/api/v1`.
+- Database: MongoDB Atlas using the configured `MONGO_URI`.
+- Realtime cache and queue support: AWS ElastiCache/Valkey using the configured TLS `REDIS_URL`.
+- Admin web app: Vercel deployment, configured to call the AWS API.
+- DigitalOcean: archived fallback only; its app and managed Valkey must be checked separately for ongoing charges.
+
+CloudFront distributions receive a new hostname when the AWS staging stack is destroyed and recreated. Update both mobile clients and rebuild their APKs whenever that hostname changes.
 
 ## 3. Main System Goal
 
@@ -679,8 +692,11 @@ The dashboard may use realtime events when available. If not, it relies on refre
 Admin driver management includes:
 
 - Viewing drivers.
-- Creating drivers.
+- Creating drivers through a centered responsive form.
+- Requiring email, password, full name, license number, phone, jeepney plate,
+  jeepney capacity, and front/back driver-license images.
 - Updating driver profile fields.
+- Privately viewing and replacing driver-license images.
 - Assigning jeepneys.
 - Reviewing driver route/vehicle assignments.
 - Checking driver operational status.
@@ -691,12 +707,22 @@ What must exist:
 - Backend admin API.
 - Driver user/profile data.
 - Jeepney data for assignment.
+- Persistent private S3 driver-document storage.
 
 Backend result:
 
 - Driver profile is created or updated.
 - Related user identity remains role-protected.
 - Assignment fields are stored for driver operations.
+- License object keys and metadata are stored with the driver profile, while
+  image bytes remain in private S3 storage.
+- Admins and the owning driver receive short-lived signed viewing links. These
+  links are not returned by normal driver-list or profile responses.
+
+Driver-license images accept JPEG or PNG input up to 5 MB per side. The backend
+normalizes each image to JPEG, removes source metadata, constrains oversized
+dimensions, and applies S3 encryption. OCR and automatic form extraction are
+not part of the current implementation.
 
 ### 8.5 Jeepney Management
 
@@ -1843,8 +1869,8 @@ Meaning:
 
 - Passenger must be within 25 meters by default.
 - Passenger must stay within range for 10 seconds by default.
-- Passenger location older than 45 seconds is stale.
-- Driver location older than 20 seconds is stale.
+- Passenger location older than 15 seconds is stale.
+- Driver location older than 15 seconds is stale.
 
 ### 16.5 Location Inputs
 
@@ -2060,30 +2086,29 @@ Automatic offboarding requires:
 - Passenger location is recent.
 - Driver/jeepney location is recent.
 - Passenger is outside the configured separation distance.
-- Separation is confirmed repeatedly or sustained long enough.
+- Separation is confirmed by three consecutive fresh outside checks.
 
 ### 18.4 Default Configuration
 
 ```env
 AUTO_OFFBOARDING_DISTANCE_METERS=120
 AUTO_OFFBOARDING_CONSECUTIVE_OUTSIDE_CHECKS=3
-AUTO_OFFBOARDING_SUSTAINED_SEPARATION_SECONDS=60
-AUTO_OFFBOARDING_PASSENGER_LOCATION_MAX_AGE_SECONDS=45
-AUTO_OFFBOARDING_DRIVER_LOCATION_MAX_AGE_SECONDS=20
+AUTO_OFFBOARDING_PASSENGER_LOCATION_MAX_AGE_SECONDS=15
+AUTO_OFFBOARDING_DRIVER_LOCATION_MAX_AGE_SECONDS=15
 ```
 
 Meaning:
 
 - Passenger must be more than 120 meters away by default.
-- Separation must be confirmed for 3 outside checks or 60 sustained seconds.
-- Passenger location older than 45 seconds is stale.
-- Driver location older than 20 seconds is stale.
+- Separation must be confirmed for 3 consecutive outside checks.
+- Passenger location older than 15 seconds is stale.
+- Driver location older than 15 seconds is stale.
 
 ### 18.5 Why It Uses Repeated Checks
 
 The system should not complete a ride because of one bad GPS point.
 
-Repeated checks and sustained separation protect against:
+Repeated fresh checks protect against:
 
 - GPS jumps.
 - Slow network updates.
@@ -2100,7 +2125,7 @@ Repeated checks and sustained separation protect against:
 5. Backend calculates passenger-to-driver distance.
 6. If distance is inside range, separation state resets.
 7. If distance is outside range, backend records outside check state.
-8. If outside checks reach the required count or sustained separation time is reached, backend completes the ride.
+8. If outside checks reach the required count, backend completes the ride.
 9. Backend marks ride completed.
 10. Backend decreases trip occupancy.
 11. Backend dismisses active stop alerts for the ride.
@@ -2162,7 +2187,7 @@ Admin should see:
 2. Confirm driver passenger count increased.
 3. Move passenger and driver apart beyond configured separation distance.
 4. Keep both apps sending location updates.
-5. Wait until repeated/sustained separation rule completes.
+5. Wait until three fresh outside checks complete the rule.
 6. Confirm ride becomes completed.
 7. Confirm driver passenger count decreases.
 8. Test returning near the driver before completion.
@@ -2231,7 +2256,7 @@ Manual unload:
 
 Automatic offboarding:
 
-- Uses repeated/sustained separation.
+- Uses three consecutive fresh outside checks.
 - Sets `offboardingMethod = auto_separation`.
 - Decreases occupancy count.
 - Dismisses active stop alerts.
@@ -2964,12 +2989,11 @@ These values control how close and how long passenger/driver must be before auto
 ```env
 AUTO_OFFBOARDING_DISTANCE_METERS=120
 AUTO_OFFBOARDING_CONSECUTIVE_OUTSIDE_CHECKS=3
-AUTO_OFFBOARDING_SUSTAINED_SEPARATION_SECONDS=60
-AUTO_OFFBOARDING_PASSENGER_LOCATION_MAX_AGE_SECONDS=45
-AUTO_OFFBOARDING_DRIVER_LOCATION_MAX_AGE_SECONDS=20
+AUTO_OFFBOARDING_PASSENGER_LOCATION_MAX_AGE_SECONDS=15
+AUTO_OFFBOARDING_DRIVER_LOCATION_MAX_AGE_SECONDS=15
 ```
 
-These values control how far and how long passenger/driver must separate before automatic offboarding.
+These values control how far and how many fresh outside checks are required before automatic offboarding. Both location samples must be no more than 15 seconds old.
 
 ### 24.8 Fare Configuration
 
@@ -3024,6 +3048,14 @@ Do not select every Google Maps Platform API. ParaGO's current Google traffic ro
 
 The Flutter clients need a reachable API base URL.
 
+The current checked-in default is:
+
+```text
+https://d3fvarohzwiubo.cloudfront.net/api/v1
+```
+
+DigitalOcean remains an archived fallback URL in the client configuration. It is not the primary deployment and may be unavailable.
+
 Important client defines/configuration include:
 
 - API base URL.
@@ -3038,7 +3070,7 @@ If the API URL is wrong:
 - Location automation cannot report.
 - Realtime/polling cannot update.
 
-If a newly added API such as `/announcements/admin` returns `404` from DigitalOcean while it exists locally, the deployed backend is older than the local source. Commit/push the backend changes and redeploy DigitalOcean before rebuilding clients around that endpoint.
+If a newly added API such as `/announcements/admin` returns `404` from AWS while it exists locally, the deployed backend is older than the local source. Commit and push the backend changes, allow the AWS deployment workflow to finish, and then rebuild clients around that endpoint.
 
 ### 24.12 Maps, Branding, And Release Artifacts
 
@@ -3053,11 +3085,13 @@ The Android apps use:
 Current release artifact names are:
 
 ```text
-dist/sakay-driver.apk
-dist/sakay-passenger.apk
+artifacts/mobile/parago-driver-aws-release.apk
+artifacts/mobile/parago-passenger-aws-release.apk
 ```
 
 These files are build artifacts, not live-updating packages. Rebuild and replace both APKs after mobile source changes before distributing them.
+
+The source projects are `parago_mobile/` for drivers and `parago_passenger/` for passengers. The normal release command in each project is `flutter build apk --release`.
 
 The checked-in native Android splash background is currently `#F8F4EA`. If the approved branding requires dark green, update both apps' `sakay_splash_background`, rebuild both release APKs, and visually verify the native startup frame before distribution.
 
@@ -3141,7 +3175,7 @@ Automatic onboarding tests verify:
 Automatic offboarding tests verify:
 
 - Separation before required checks/time does not complete ride yet.
-- Repeated/sustained separation completes ride.
+- Three fresh outside checks complete the ride.
 - Returning near the driver resets offboarding state.
 
 ### 25.7 Manual Real-Device Checklist
@@ -3163,7 +3197,7 @@ Use at least one passenger device and one driver device.
 13. Confirm automatic onboarding.
 14. Confirm driver passenger count increases.
 15. Move passenger and driver apart beyond separation distance.
-16. Confirm automatic offboarding after repeated/sustained separation.
+16. Confirm automatic offboarding after three fresh outside checks.
 17. Confirm driver passenger count decreases.
 18. Disable GPS or internet and confirm manual boarding/unload fallback remains usable.
 19. Tap a visible jeep and confirm plate, seats, freshness, distance, and traffic ETA.
@@ -3226,6 +3260,9 @@ Check:
 - User status is active.
 - Role matches the app.
 - JWT secrets are configured.
+- The current AWS CloudFront API hostname resolves and `/api/v1/health` returns 200.
+- For passenger signup, the backend can create a profile without a partial GeoJSON location. An error mentioning `Point must be an array or object` indicates an outdated backend deployment; deploy the current registration fix.
+- Google login requires Firebase Google Authentication, the correct Android package/SHA-1 configuration, and a reachable backend for the Firebase token exchange.
 
 ### 26.2 Session Restore Fails
 
@@ -3294,7 +3331,7 @@ Check:
 - Driver app is sending location.
 - Locations are recent.
 - Distance exceeds configured offboarding distance.
-- Outside checks or sustained time have completed.
+- Three fresh outside checks have completed.
 - Passenger did not return near the jeepney.
 - Manual unload still works.
 
@@ -3358,12 +3395,35 @@ Ordinary notification unread counts do not include announcements.
 If the browser requests an endpoint that exists locally but production returns `404`, check:
 
 - Latest backend changes were committed and pushed.
-- DigitalOcean deployed the expected branch/commit.
+- AWS deployed the expected branch/commit.
 - Build and start commands point to this repository's `src/server.js`.
 - `/api/v1` prefix and compatibility route registration are active.
 - The service was restarted after environment/configuration changes.
 
 This is normally deployment version drift, not a Flutter rendering problem.
+
+### 26.13 AWS Staging Is Unreachable Or Costs Need To Stop
+
+Check the EC2 state and API health first:
+
+```powershell
+$env:AWS_PAGER = ""
+aws ec2 describe-instances --region ap-southeast-1 --filters "Name=tag:Name,Values=parago-staging-aws-api" --query "Reservations[].Instances[].{Id:InstanceId,State:State.Name}" --output table
+curl.exe https://d3fvarohzwiubo.cloudfront.net/api/v1/health
+```
+
+Stopping EC2 reduces compute charges but does not remove EBS, NAT Gateway, Valkey, CloudFront, or other resource charges. To remove the AWS staging stack completely, run:
+
+```powershell
+& "C:\terraform\terraform.exe" -chdir="infra/aws/envs/staging" destroy -auto-approve -input=false -var "ami_id=ami-0ed6a65b84536f6ce"
+```
+
+If Terraform reports a state lock, confirm no other Terraform operation is running before using `terraform force-unlock` with the lock ID shown in the error. Do not use `-lock=false` for destroy.
+
+MongoDB Atlas, the Terraform state bucket, and the private driver-document S3
+bucket are outside the disposable staging stack. Driver-license documents
+therefore remain available after staging is recreated. Valkey and EC2-local
+data remain temporary. DigitalOcean resources must be checked separately.
 
 ## 27. Related Documents
 

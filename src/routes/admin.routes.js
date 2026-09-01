@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const { ADMIN } = require('../constants/roles');
 const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
@@ -37,8 +38,28 @@ const { deriveDriverPresence } = require('../services/driverPresence.service');
 const {
   invalidateDriverActiveContext,
 } = require('../services/activeDriverContext.service');
+const {
+  licensePairUpload,
+  singleLicenseUpload,
+} = require('../middlewares/driverLicenseUpload');
+const {
+  deleteLicenseDocument,
+  presentLicenseDocuments,
+  uploadLicenseDocument,
+} = require('../services/driverLicenseDocuments.service');
 
 const router = express.Router();
+
+const parseDriverCreatePayload = (req) => {
+  if (!req.body?.payload) return req.body || {};
+  try {
+    const parsed = JSON.parse(req.body.payload);
+    if (!isPlainObject(parsed)) throw new Error('payload is not an object');
+    return parsed;
+  } catch (_error) {
+    throw new ApiError(400, 'Driver payload must be valid JSON');
+  }
+};
 
 const buildRoutePathSnapshot = (route) => {
   const coordinates = Array.isArray(route?.path?.coordinates)
@@ -449,10 +470,18 @@ router.post(
 
 router.post(
   '/drivers',
+  licensePairUpload,
   asyncHandler(async (req, res) => {
-    const body = req.body || {};
-    if (!body.email || !body.password || !body.fullName) {
-      throw new ApiError(400, 'email, password, and fullName are required');
+    const body = parseDriverCreatePayload(req);
+    const frontFile = req.files?.licenseFront?.[0];
+    const backFile = req.files?.licenseBack?.[0];
+    const requiredText = ['email', 'password', 'fullName', 'licenseNumber', 'phone'];
+    const missingText = requiredText.filter((field) => !String(body[field] || '').trim());
+    if (missingText.length) {
+      throw new ApiError(400, `${missingText.join(', ')} ${missingText.length === 1 ? 'is' : 'are'} required`);
+    }
+    if (!frontFile || !backFile) {
+      throw new ApiError(400, 'Driver license front and back images are required');
     }
     const jeepneyPayload = buildJeepneyCreatePayload(body.jeepney);
 
@@ -493,52 +522,66 @@ router.post(
       throw new ApiError(409, 'Jeepney plate number already exists');
     }
 
-    const user = await createUserByAdmin({
-      email: body.email,
-      password: body.password,
-      fullName: body.fullName,
-      role: 'DRIVER',
-      status: accountStatus,
-    });
+    const uploadedDocuments = [];
+    const session = await mongoose.startSession();
+    let user;
+    let driver;
+    try {
+      session.startTransaction();
+      user = await createUserByAdmin({
+        email: body.email,
+        password: body.password,
+        fullName: body.fullName,
+        phone: body.phone,
+        role: 'DRIVER',
+        status: accountStatus,
+        session,
+      });
 
-    const update = {};
-    if (hasOwn(body, 'licenseNumber')) {
-      update.licenseNumber = String(body.licenseNumber || '').trim();
-    }
-    if (hasOwn(body, 'employeeNumber')) {
-      update.employeeNumber = String(body.employeeNumber || '').trim();
-    }
-    if (hasOwn(body, 'phone')) {
-      update.phone = String(body.phone || '').trim();
-    }
-    if (normalizedRouteId) {
-      update.assignedRouteId = normalizedRouteId;
+      driver = await Driver.findOne({ userId: user._id })
+        .select('+licenseDocuments')
+        .session(session);
+      if (!driver) throw new ApiError(500, 'Driver profile could not be created');
+
+      const front = await uploadLicenseDocument({
+        driverId: driver._id,
+        side: 'front',
+        file: frontFile,
+      });
+      uploadedDocuments.push(front);
+      const back = await uploadLicenseDocument({
+        driverId: driver._id,
+        side: 'back',
+        file: backFile,
+      });
+      uploadedDocuments.push(back);
+
+      driver.licenseNumber = String(body.licenseNumber).trim();
+      driver.employeeNumber = String(body.employeeNumber || '').trim();
+      driver.phone = String(body.phone).trim();
+      driver.assignedRouteId = normalizedRouteId || undefined;
+      driver.operatingMode = operatingMode;
+      driver.terminalQueueStatus = normalizeTerminalQueueStatus(undefined, {
+        operatingMode,
+      });
+      driver.licenseDocuments = { front, back };
+
+      const [jeepney] = await Jeepney.create(
+        [{ ...jeepneyPayload, currentDriverId: driver._id }],
+        { session }
+      );
+      driver.assignedJeepneyId = jeepney._id;
+      await driver.save({ session });
+      await session.commitTransaction();
+    } catch (error) {
+      if (session.inTransaction()) await session.abortTransaction();
+      await Promise.allSettled(uploadedDocuments.map(deleteLicenseDocument));
+      throw error;
+    } finally {
+      await session.endSession();
     }
 
-    const driver = await Driver.findOneAndUpdate(
-      { userId: user._id },
-      {
-        $set: {
-          ...update,
-          operatingMode,
-          terminalQueueStatus: normalizeTerminalQueueStatus(undefined, {
-            operatingMode,
-          }),
-        },
-      },
-      { new: true }
-    );
-    if (!driver) {
-      throw new ApiError(500, 'Driver profile could not be created');
-    }
-
-    const jeepney = await Jeepney.create({
-      ...jeepneyPayload,
-      currentDriverId: driver._id,
-    });
-    driver.assignedJeepneyId = jeepney._id;
-    await driver.save();
-
+    driver = await Driver.findById(driver._id);
     const profile = await buildDriverProfile(driver);
     return ok(
       res,
@@ -551,6 +594,54 @@ router.post(
       },
       'Driver created',
       201
+    );
+  })
+);
+
+router.get(
+  '/drivers/:id/license-documents',
+  asyncHandler(async (req, res) => {
+    ensureObjectId(req.params.id, 'driver id');
+    const driver = await Driver.findById(req.params.id).select('+licenseDocuments');
+    if (!driver) throw new ApiError(404, 'Driver not found');
+    return ok(
+      res,
+      await presentLicenseDocuments(driver.licenseDocuments),
+      'Driver license documents'
+    );
+  })
+);
+
+router.put(
+  '/drivers/:id/license-documents/:side',
+  singleLicenseUpload,
+  asyncHandler(async (req, res) => {
+    ensureObjectId(req.params.id, 'driver id');
+    const side = String(req.params.side || '').toLowerCase();
+    if (!['front', 'back'].includes(side)) {
+      throw new ApiError(400, 'Document side must be front or back');
+    }
+    if (!req.file) throw new ApiError(400, 'Driver license image is required');
+
+    const driver = await Driver.findById(req.params.id).select('+licenseDocuments');
+    if (!driver) throw new ApiError(404, 'Driver not found');
+    const previous = driver.licenseDocuments?.[side];
+    const uploaded = await uploadLicenseDocument({ driverId: driver._id, side, file: req.file });
+    try {
+      driver.licenseDocuments = {
+        ...(driver.licenseDocuments?.toObject?.() || driver.licenseDocuments || {}),
+        [side]: uploaded,
+      };
+      await driver.save();
+    } catch (error) {
+      await deleteLicenseDocument(uploaded).catch(() => {});
+      throw error;
+    }
+    await deleteLicenseDocument(previous).catch(() => {});
+    return ok(
+      res,
+      await presentLicenseDocuments(driver.licenseDocuments),
+      `Driver license ${side} image replaced`
     );
   })
 );
