@@ -25,6 +25,8 @@ class RealtimeSocketLifecycleEvent {
 class RealtimeSocketService {
   final StreamController<Map<String, dynamic>> _notificationController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _operationsController =
+      StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<Map<String, dynamic>> _locationController =
       StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<Map<String, dynamic>> _routeVehicleBatchController =
@@ -46,6 +48,8 @@ class RealtimeSocketService {
 
   Stream<Map<String, dynamic>> get notificationCreatedStream =>
       _notificationController.stream;
+  Stream<Map<String, dynamic>> get operationsChangedStream =>
+      _operationsController.stream;
   Stream<Map<String, dynamic>> get jeepneyLocationStream =>
       _locationController.stream;
   Stream<Map<String, dynamic>> get routeVehicleBatchStream =>
@@ -160,6 +164,12 @@ class RealtimeSocketService {
         _notificationController.add(normalized);
       }
     });
+    socket.on('ops.changed', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) {
+        _operationsController.add(normalized);
+      }
+    });
     socket.on('jeepney.location.updated', (payload) {
       final normalized = _normalizePayload(payload);
       if (normalized.isNotEmpty) {
@@ -215,6 +225,7 @@ class RealtimeSocketService {
   void dispose() {
     disconnect();
     _notificationController.close();
+    _operationsController.close();
     _locationController.close();
     _routeVehicleBatchController.close();
     _supportController.close();

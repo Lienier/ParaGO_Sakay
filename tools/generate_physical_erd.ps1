@@ -117,15 +117,56 @@ function New-EntityValue {
         [string[]]$Indexes = @()
     )
 
-    $html = "<b>$(Escape-Html $Collection)</b><br><font color=`"#64748b`">MongoDB collection</font>"
+    $html = '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;font-family:Arial;font-size:11px;color:#3f2a1d;">'
+    $html += "<tr><td colspan=`"4`" align=`"center`" style=`"background-color:#f2a65a;padding:7px 5px;border-bottom:1px solid #a85d24;font-size:13px;`"><b>$(Escape-Html $Collection)</b></td></tr>"
+    $html += '<tr style="background-color:#f8c98f;">'
+    $html += '<td width="14%" style="padding:4px;border-right:1px solid #c98445;border-bottom:1px solid #c98445;"><b>Key</b></td>'
+    $html += '<td width="38%" style="padding:4px;border-right:1px solid #c98445;border-bottom:1px solid #c98445;"><b>Field</b></td>'
+    $html += '<td width="32%" style="padding:4px;border-right:1px solid #c98445;border-bottom:1px solid #c98445;"><b>Data type</b></td>'
+    $html += '<td width="16%" align="center" style="padding:4px;border-bottom:1px solid #c98445;"><b>Req.</b></td></tr>'
+
     foreach ($field in $Fields) {
-        $html += "<br>$(Escape-Html $field)"
+        $name = ''
+        $type = ''
+        $constraints = ''
+
+        if ($field -match '^(.+?):\s*(.+?)(?:\s+\[(.+)\])?$') {
+            $name = $Matches[1].Trim()
+            $type = $Matches[2].Trim()
+            $constraints = if ($Matches.Count -gt 3) { $Matches[3].Trim() } else { '' }
+        }
+        else {
+            $parts = @($field -split '\s+')
+            if ($parts.Count -ge 2) {
+                $name = $parts[0]
+                $type = $parts[1]
+                if ($parts.Count -gt 2) { $constraints = ($parts[2..($parts.Count - 1)] -join ' ') }
+            }
+            else {
+                $name = $field
+            }
+        }
+
+        $keyParts = @()
+        if ($constraints -match '\bPK\b') { $keyParts += 'PK' }
+        if ($constraints -match '\bFK\b') { $keyParts += 'FK' }
+        if ($constraints -match '\b(UK|unique)\b') { $keyParts += 'UK' }
+        if ($constraints -match '\bTTL\b') { $keyParts += 'TTL' }
+        $keyText = $keyParts -join '/'
+        $required = if ($constraints -match 'required' -or $keyParts -contains 'PK') { 'Yes' } else { 'No' }
+        $keyColor = if ($keyParts -contains 'PK') { '#8a4b08' } elseif ($keyParts -contains 'FK') { '#146b3a' } else { '#475569' }
+
+        $html += '<tr style="background-color:#fde6c8;">'
+        $html += "<td style=`"padding:4px;border-right:1px solid #d49a62;border-bottom:1px solid #e2b98f;color:$keyColor;`"><b>$(Escape-Html $keyText)</b></td>"
+        $html += "<td style=`"padding:4px;border-right:1px solid #d49a62;border-bottom:1px solid #e2b98f;`">$(Escape-Html $name)</td>"
+        $html += "<td style=`"padding:4px;border-right:1px solid #d49a62;border-bottom:1px solid #e2b98f;`">$(Escape-Html $type)</td>"
+        $html += "<td align=`"center`" style=`"padding:4px;border-bottom:1px solid #e2b98f;`">$required</td></tr>"
     }
     $indexList = @($Indexes)
     if ($null -ne $Indexes -and $indexList.Count -gt 0) {
-        $html += "<br><font color=`"#64748b`">Indexes: $(Escape-Html ($indexList -join '; '))</font>"
+        $html += "<tr><td colspan=`"4`" style=`"background-color:#fff4e6;padding:5px;color:#6b4a32;font-size:10px;`"><b>Indexes:</b> $(Escape-Html ($indexList -join '; '))</td></tr>"
     }
-    return $html
+    return "$html</table>"
 }
 
 function Add-Entity {
@@ -143,8 +184,8 @@ function Add-Entity {
 
     $fieldCount = @($Fields).Count
     $indexCount = if ($null -eq $Indexes) { 0 } else { @($Indexes).Count }
-    $height = [Math]::Max(120, 54 + (($fieldCount + [Math]::Min($indexCount, 2)) * 19))
-    $style = 'shape=swimlane;rounded=0;html=1;whiteSpace=wrap;fillColor=#dbeafe;swimlaneFillColor=#ffffff;strokeColor=#1e3a5f;fontColor=#0f172a;fontSize=12;startSize=28;horizontal=1;verticalAlign=top;spacingTop=6;spacingLeft=9;spacingRight=9;fontFamily=Arial;'
+    $height = [Math]::Max(118, 56 + ($fieldCount * 25) + $(if ($indexCount -gt 0) { 29 } else { 0 }))
+    $style = 'rounded=1;arcSize=6;html=1;whiteSpace=wrap;overflow=hidden;fillColor=#fde6c8;strokeColor=#a85d24;strokeWidth=1.5;fontColor=#3f2a1d;fontSize=11;verticalAlign=top;align=left;spacing=0;fontFamily=Arial;shadow=0;'
     return Add-Cell $Document $Root $Id (New-EntityValue $Collection $Fields $Indexes) $style $X $Y $Width $height
 }
 
@@ -579,10 +620,10 @@ Add-OvEdge tripsessions supportthreads
 Add-OvEdge pickuprequests supportthreads
 Add-OvEdge ridesessions supportthreads
 
-$auth = New-Diagram $doc $mxfile 'authentication-physical-erd' 'Authentication Physical ERD' 1500 1030
+$auth = New-Diagram $doc $mxfile 'authentication-physical-erd' 'Authentication Physical ERD' 1620 1160
 $authPos = @{
-    users=@(60,90); passengers=@(430,70); drivers=@(430,330); admins=@(430,595)
-    refreshtokens=@(850,70); passwordresettokens=@(850,325); adminloginchallenges=@(850,590); notifications=@(1160,325)
+    users=@(50,80); passengers=@(430,80); drivers=@(430,430); admins=@(430,905)
+    refreshtokens=@(820,80); passwordresettokens=@(820,380); adminloginchallenges=@(820,655); notifications=@(1210,80)
 }
 $authIds = @{}
 foreach ($name in $authPos.Keys) {
@@ -603,10 +644,10 @@ Add-AuthEdge users passwordresettokens
 Add-AuthEdge users adminloginchallenges
 Add-AuthEdge users notifications
 
-$transport = New-Diagram $doc $mxfile 'transportation-physical-erd' 'Transportation Operations Physical ERD' 1760 1230
+$transport = New-Diagram $doc $mxfile 'transportation-physical-erd' 'Transportation Operations Physical ERD' 1700 1510
 $transportPos = @{
-    passengers=@(55,80); drivers=@(55,430); jeepneys=@(445,80); routes=@(445,430)
-    tripsessions=@(850,245); pickuprequests=@(1245,80); ridesessions=@(1245,470); stopalerts=@(1245,850)
+    passengers=@(50,80); drivers=@(50,430); jeepneys=@(440,80); routes=@(440,530)
+    tripsessions=@(840,260); pickuprequests=@(1235,80); ridesessions=@(1235,580); stopalerts=@(1235,1080)
 }
 $transportIds = @{}
 foreach ($name in $transportPos.Keys) {
@@ -620,7 +661,7 @@ foreach ($name in $transportPos.Keys) {
     'routes.terminal: enabled, stopRef, location, radiusMeters',
     'routes.navigation: source, traffic, origin, destination, bounds, distance, duration',
     'fareSnapshot is embedded in pickuprequests and ridesessions.'
-) 55 900 745 170)
+) 50 1000 745 170)
 $edgeId = 1
 function Add-TransEdge($from, $to, $end='ERmany', $start='ERone') {
     $script:edgeId++
@@ -646,11 +687,11 @@ Add-TransEdge tripsessions stopalerts
 Add-TransEdge routes stopalerts
 Add-TransEdge drivers stopalerts
 
-$comm = New-Diagram $doc $mxfile 'communication-monitoring-physical-erd' 'Communication and Monitoring Physical ERD' 1780 1200
+$comm = New-Diagram $doc $mxfile 'communication-monitoring-physical-erd' 'Communication and Monitoring Physical ERD' 2150 1360
 $commPos = @{
-    users=@(55,110); announcements=@(435,60); announcementdismissals=@(435,420)
-    notifications=@(435,735); supportthreads=@(855,120); supportmessages=@(855,650)
-    activitylogs=@(1265,100); reportmetadata=@(1265,430); tripsessions=@(1265,730); routes=@(1265,980)
+    users=@(50,80); announcements=@(440,80); announcementdismissals=@(440,530)
+    notifications=@(440,805); supportthreads=@(840,80); supportmessages=@(840,560)
+    activitylogs=@(1235,80); reportmetadata=@(1235,455); tripsessions=@(1235,805); routes=@(1630,80)
 }
 $commIds = @{}
 foreach ($name in $commPos.Keys) {
