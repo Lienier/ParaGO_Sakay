@@ -16,6 +16,30 @@ if [[ -z "${AWS_RELEASE_BUCKET}" ]]; then
   AWS_RELEASE_BUCKET="parago-terraform-state-${ACCOUNT_ID}-${AWS_REGION}"
 fi
 
+API_DISTRIBUTION_ID="$(
+  aws cloudfront list-distributions \
+    --query "DistributionList.Items[?Comment=='ParaGO AWS staging API and Socket.IO'].Id | [0]" \
+    --output text
+)"
+
+if [[ -n "${API_DISTRIBUTION_ID}" && "${API_DISTRIBUTION_ID}" != "None" ]]; then
+  ORIGIN_HEADER_VALUE="$(
+    aws cloudfront get-distribution-config \
+      --id "${API_DISTRIBUTION_ID}" \
+      --query "DistributionConfig.Origins.Items[0].CustomHeaders.Items[?HeaderName=='X-ParaGO-Origin'].HeaderValue | [0]" \
+      --output text
+  )"
+
+  if [[ -n "${ORIGIN_HEADER_VALUE}" && "${ORIGIN_HEADER_VALUE}" != "None" ]]; then
+    MSYS_NO_PATHCONV=1 aws ssm put-parameter \
+      --region "${AWS_REGION}" \
+      --name "${SECRET_PATH_PREFIX}/ORIGIN_HEADER_VALUE" \
+      --type SecureString \
+      --overwrite \
+      --value "${ORIGIN_HEADER_VALUE}" >/dev/null
+  fi
+fi
+
 INSTANCE_STATE_INFO="$(
   aws ec2 describe-instances \
     --region "${AWS_REGION}" \
@@ -87,7 +111,7 @@ export RELEASE_SHORT_SHA='${SHORT_SHA}'
 export RELEASE_STAMP='${STAMP}'
 
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl unzip jq python3
+DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl unzip jq python3 nginx
 
 if ! command -v node >/dev/null 2>&1 || ! node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 22 ? 0 : 1)"; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
@@ -118,8 +142,18 @@ chown -R parago:parago "\${release_dir}"
 
 cd "\${release_dir}"
 npm install --omit=dev --no-audit --no-fund
-sed -i 's/\r$//' infra/aws/envs/staging/user-data.sh
-bash infra/aws/envs/staging/user-data.sh
+
+if ! test -f /etc/nginx/sites-available/parago || grep -q '__ORIGIN_SECRET__' /etc/nginx/sites-available/parago; then
+  metadata_token="\$(curl -fsS -X PUT \
+    -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' \
+    http://169.254.169.254/latest/api/token)"
+  curl -fsS \
+    -H "X-aws-ec2-metadata-token: \${metadata_token}" \
+    http://169.254.169.254/latest/user-data \
+    -o /tmp/parago-user-data.sh
+  sed -i 's/\r$//' /tmp/parago-user-data.sh
+  bash /tmp/parago-user-data.sh
+fi
 
 aws ssm get-parameters-by-path \
   --region "\${AWS_REGION}" \
@@ -136,7 +170,7 @@ from urllib.parse import quote
 
 params = json.loads(Path('/tmp/parago-params.json').read_text())['Parameters']
 values = {item['Name'].rstrip('/').split('/')[-1]: item.get('Value', '') for item in params}
-skip = {'redis_auth_token', 'RUN_API_JOBS', 'RUN_WORKER_JOBS'}
+skip = {'redis_auth_token', 'RUN_API_JOBS', 'RUN_WORKER_JOBS', 'ORIGIN_HEADER_VALUE'}
 lines = []
 for key in sorted(values):
     if key in skip:
@@ -152,6 +186,29 @@ Path('/etc/parago/parago.env').write_text('\n'.join(lines) + '\n')
 PY
 
 chmod 0600 /etc/parago/parago.env
+
+python3 - <<'PY'
+import json
+import re
+from pathlib import Path
+
+params = json.loads(Path('/tmp/parago-params.json').read_text())['Parameters']
+values = {item['Name'].rstrip('/').split('/')[-1]: item.get('Value', '') for item in params}
+origin_header = values.get('ORIGIN_HEADER_VALUE', '').strip()
+nginx_path = Path('/etc/nginx/sites-available/parago')
+
+if origin_header and nginx_path.exists():
+    text = nginx_path.read_text()
+    updated = re.sub(
+        r'(\$http_x_parago_origin\s*!=\s*")[^"]+(")',
+        r'\1' + origin_header + r'\2',
+        text,
+    )
+    if updated != text:
+        nginx_path.write_text(updated)
+PY
+
+nginx -t
 ln -sfn "\${release_dir}" /opt/parago/current
 
 install -m 0644 deploy/systemd/parago-api.service /etc/systemd/system/parago-api.service
