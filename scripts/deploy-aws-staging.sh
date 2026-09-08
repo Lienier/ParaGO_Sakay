@@ -141,7 +141,10 @@ unzip -q /tmp/parago-release.zip -d "\${release_dir}"
 chown -R parago:parago "\${release_dir}"
 
 cd "\${release_dir}"
-npm install --omit=dev --no-audit --no-fund
+if [[ "\$(npm --version)" != 11.* ]]; then
+  npm install --global npm@11 --no-audit --no-fund
+fi
+npm ci --omit=dev --no-audit --no-fund
 
 if ! test -f /etc/nginx/sites-available/parago || grep -q '__ORIGIN_SECRET__' /etc/nginx/sites-available/parago; then
   metadata_token="\$(curl -fsS -X PUT \
@@ -209,6 +212,11 @@ if origin_header and nginx_path.exists():
 PY
 
 nginx -t
+# Validate the candidate configuration before changing the active release.
+set -a
+source /etc/parago/parago.env
+set +a
+RUN_API_JOBS=false RUN_WORKER_JOBS=false node -e "require('./src/config/env')"
 ln -sfn "\${release_dir}" /opt/parago/current
 
 install -m 0644 deploy/systemd/parago-api.service /etc/systemd/system/parago-api.service
@@ -217,10 +225,18 @@ systemctl daemon-reload
 systemctl enable parago-api parago-worker
 systemctl restart parago-api parago-worker nginx
 
-sleep 5
-systemctl is-active parago-api parago-worker nginx
-curl -fsS http://127.0.0.1:5000/health
-curl -fsS http://127.0.0.1:5000/ready
+for attempt in {1..30}; do
+  if systemctl is-active --quiet parago-api parago-worker nginx && \
+     curl -fsS --max-time 3 http://127.0.0.1:5000/health >/dev/null && \
+     curl -fsS --max-time 3 http://127.0.0.1:5000/ready >/dev/null; then
+    echo "Staging API and worker are active; health and readiness passed."
+    exit 0
+  fi
+  sleep 2
+done
+echo "Staging services did not become ready within the startup window." >&2
+systemctl show parago-api parago-worker -p ActiveState -p SubState -p ExecMainStatus
+exit 1
 REMOTE
 
 PARAMETERS_FILE="$(mktemp)"

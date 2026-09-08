@@ -88,3 +88,15 @@ test('AWS staging GitHub Actions deploy remains scoped to main and SSM', () => {
   assert.match(deployScript, /terraform apply -var ami_id=ami-0ed6a65b84536f6ce/);
   assert.match(deployScript, /systemctl restart parago-api parago-worker nginx/);
 });
+
+test('AWS deployment validates configuration before activation and waits for readiness', () => {
+  const script = read('scripts/deploy-aws-staging.sh');
+  const validation = script.indexOf("node -e \"require('./src/config/env')\"");
+  assert.ok(validation > 0);
+  assert.ok(validation < script.indexOf('ln -sfn'));
+  assert.ok(script.includes('source /etc/parago/parago.env'));
+  assert.ok(script.includes('npm ci --omit=dev'));
+  assert.ok(script.includes('for attempt in {1..30}'));
+  assert.ok(script.includes('curl -fsS --max-time 3 http://127.0.0.1:5000/ready'));
+  assert.ok(script.includes('ExecMainStatus'));
+});
