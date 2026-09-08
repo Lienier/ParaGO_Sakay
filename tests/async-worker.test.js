@@ -325,6 +325,7 @@ test('distributed scheduler lock allows only one worker run', async () => {
   let reassignmentRuns = 0;
   let announcementRuns = 0;
   const dependencies = {
+    pauseInactiveTrips: async () => 0,
     checkAndReassignPassedRequests: async () => {
       reassignmentRuns += 1;
       await new Promise((resolve) => setTimeout(resolve, 25));

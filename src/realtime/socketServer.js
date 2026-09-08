@@ -1,3 +1,6 @@
+const { requireSession, revocationChannel } = require('../services/sessionSecurity.service');
+const { subscribeRedisChannel } = require('../services/redis.service');
+let stopSecuritySubscriber;
 const { Server } = require('socket.io');
 const mongoose = require('mongoose');
 
@@ -289,7 +292,8 @@ const attachSocketServer = (httpServer, { corsOrigins = [] } = {}) => {
 
     try {
       const payload = verifyAccessToken(token);
-      const user = await User.findById(payload.sub).select('-passwordHash');
+      const { user } = await requireSession(payload);
+      socket.data.claims = payload;
       if (!user || user.status !== 'active') {
         next(new Error('Invalid user session'));
         return;
@@ -306,7 +310,21 @@ const attachSocketServer = (httpServer, { corsOrigins = [] } = {}) => {
     }
   });
 
+  void subscribeRedisChannel(revocationChannel, ({ userId, sessionId }) => {
+    for (const socket of io.sockets.sockets.values()) {
+      if (socket.data.claims?.sub === userId && (!sessionId || socket.data.claims?.sid === sessionId)) socket.disconnect(true);
+    }
+  }).then((stop) => { stopSecuritySubscriber = stop; });
   io.on('connection', (socket) => {
+    const expiryTimer = setTimeout(() => socket.disconnect(true),
+      Math.max(1, socket.data.claims.exp * 1000 - Date.now()));
+    const validationTimer = setInterval(() => {
+      const deadline = setTimeout(() => socket.disconnect(true), 5000);
+      void requireSession(socket.data.claims).catch(() => socket.disconnect(true)).finally(() => clearTimeout(deadline));
+    }, 20000);
+    expiryTimer.unref?.();
+    validationTimer.unref?.();
+    socket.on('disconnect', () => { clearTimeout(expiryTimer); clearInterval(validationTimer); });
     const userId = socket.data.user?.id;
     const role = socket.data.user?.role;
     if (userId) {
@@ -437,6 +455,9 @@ const emitOperationsChanged = (payload = {}) => {
   if (payload?.userId) {
     emitToUser(payload.userId, 'ops.changed', payload);
   }
+  if (payload?.role) {
+    emitToRole(payload.role, 'ops.changed', payload);
+  }
   emitToRole('admin', 'ops.changed', payload);
 };
 
@@ -516,6 +537,8 @@ const emitJeepneyLocationUpdate = ({
 };
 
 const closeSocketServer = async () => {
+  if (stopSecuritySubscriber) await stopSecuritySubscriber();
+  stopSecuritySubscriber = null;
   routeLocationBatcher?.flushAll();
   routeLocationBatcher?.stop();
   routeLocationBatcher?.clear();

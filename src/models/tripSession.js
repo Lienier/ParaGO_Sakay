@@ -25,6 +25,9 @@ const tripSessionSchema = new Schema(
     startedAt: { type: Date },
     endedAt: { type: Date },
     acceptRequests: { type: Boolean, default: true },
+    inactivityPausedAt: { type: Date },
+    resumedAt: { type: Date },
+    lifecycleRevision: { type: Number, default: 0 },
     manualOccupancyCount: { type: Number, default: 0, min: 0 },
     occupancyCount: { type: Number, default: 0, min: 0 },
     active: { type: Boolean, default: false },
@@ -55,6 +58,14 @@ const tripSessionSchema = new Schema(
 );
 
 tripSessionSchema.index({ status: 1, startedAt: -1 });
+for (const field of ['driverId', 'jeepneyId']) {
+  tripSessionSchema.index({ [field]: 1 }, { unique: true,
+    name: `unique_terminal_${field}`, partialFilterExpression: {
+      operatingMode: 'terminal_queue', status: 'active', [field]: { $type: 'objectId' },
+    } });
+}
+tripSessionSchema.index({ routeId: 1 }, { unique: true, name: 'unique_terminal_loading',
+  partialFilterExpression: { operatingMode: 'terminal_queue', status: 'active', terminalQueueStatus: 'loading' } });
 tripSessionSchema.index({ jeepneyId: 1, driverId: 1, status: 1 });
 tripSessionSchema.index({ routeId: 1, operatingMode: 1, terminalQueueStatus: 1 });
 tripSessionSchema.index(

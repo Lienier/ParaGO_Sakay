@@ -63,6 +63,24 @@ variable "cloudfront_price_class" {
   default     = "PriceClass_100"
 }
 
+variable "api_domain_name" {
+  description = "Optional custom HTTPS hostname for the CloudFront API, such as api.sakaygaray.com."
+  type        = string
+  default     = ""
+}
+
+variable "api_certificate_validation_record_fqdns" {
+  description = "DNS validation record FQDNs copied from the ACM certificate after adding them at the registrar."
+  type        = list(string)
+  default     = []
+}
+
+variable "enable_api_alias" {
+  description = "Attach api_domain_name as a CloudFront alias after the certificate and any domain conflict are ready."
+  type        = bool
+  default     = true
+}
+
 variable "origin_header_value" {
   description = "Non-secret marker sent by CloudFront to Nginx for staging origin checks."
   type        = string

@@ -38,7 +38,9 @@ test('AWS staging Terraform scaffold preserves deployment guardrails', () => {
   assert.match(outputs, /driver_documents_bucket_name/);
   assert.match(userData, /client_max_body_size 12m/);
   assert.match(userData, /proxy_set_header Upgrade \$http_upgrade/);
-  assert.match(userData, /parago-aws-staging-v1/);
+  assert.match(userData, /__ORIGIN_SECRET__/);
+  assert.match(main, /random_password\.origin_header\.result/);
+  assert.match(userData, /real_ip_recursive off/);
 });
 
 test('AWS bootstrap state bucket is encrypted, versioned, and public-blocked', () => {

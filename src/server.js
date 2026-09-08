@@ -1,4 +1,5 @@
 const http = require('http');
+const { pauseInactiveTrips } = require('./services/tripLifecycle.service');
 
 const app = require('./app');
 const connectDb = require('./config/db');
@@ -52,6 +53,11 @@ const start = async () => {
     }, 30000);
     announcementInterval.unref?.();
     intervals.push(announcementInterval);
+    const inactivityInterval = setInterval(() => {
+      pauseInactiveTrips().catch(() => console.error('[Trip lifecycle] Inactivity check failed'));
+    }, 30000);
+    inactivityInterval.unref?.();
+    intervals.push(inactivityInterval);
     await reconcileAnnouncementStatuses();
   }
 

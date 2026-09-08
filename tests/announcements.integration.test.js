@@ -45,7 +45,12 @@ const announcementPayload = (overrides = {}) => ({
   ...overrides,
 });
 
-const tokenFor = (user) => signToken({ sub: user._id.toString() });
+const tokenFor = async (user) => {
+  const sid = require('crypto').randomUUID();
+  await require('../src/models/authSession').create({ _id: sid, userId: user._id,
+    authVersion: user.authVersion || 0, expiresAt: new Date(Date.now() + 3600000) });
+  return signToken({ sub: user._id.toString(), sid });
+};
 
 const createAnnouncement = async (overrides = {}) => {
   const response = await request(app)
@@ -102,9 +107,9 @@ beforeEach(async () => {
       status: 'active',
     },
   ]);
-  adminToken = tokenFor(admin);
-  passengerToken = tokenFor(passenger);
-  driverToken = tokenFor(driver);
+  adminToken = await tokenFor(admin);
+  passengerToken = await tokenFor(passenger);
+  driverToken = await tokenFor(driver);
 });
 
 test('authorization and audience targeting are enforced', async () => {
@@ -196,7 +201,7 @@ test('dismissals are revision-specific and persist for the user', async () => {
     .send({ revision: 1 });
   assert.equal(dismissed.status, 200);
 
-  const refreshedToken = tokenFor(passenger);
+  const refreshedToken = await tokenFor(passenger);
   const hidden = await request(app)
     .get('/api/v1/announcements/active')
     .set('Authorization', `Bearer ${refreshedToken}`);

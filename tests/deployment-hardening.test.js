@@ -120,8 +120,8 @@ test('authenticated users behind one carrier IP receive independent limits',
   const rateApp = express();
   rateApp.set('trust proxy', 1);
   rateApp.get('/resource', limiter, (_req, res) => res.json({ ok: true }));
-  const firstToken = signToken({ sub: 'phase9-user-a' });
-  const secondToken = signToken({ sub: 'phase9-user-b' });
+  const firstToken = signToken({ sub: 'phase9-user-a', sid: 'test-session-a' });
+  const secondToken = signToken({ sub: 'phase9-user-b', sid: 'test-session-b' });
 
   const call = (token) => request(rateApp)
     .get('/resource')

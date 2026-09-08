@@ -177,8 +177,37 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _startAutomaticAvailabilityLoop();
   }
 
+  SessionController? _securitySession;
+  String? _securitySocketToken;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final session = context.read<SessionController>();
+    if (!identical(session, _securitySession)) {
+      _securitySession?.removeListener(_handleSecuritySession);
+      _securitySession = session;
+      _securitySocketToken = session.token;
+      session.addListener(_handleSecuritySession);
+    }
+  }
+
+  void _handleSecuritySession() {
+    final session = _securitySession;
+    if (!mounted || session == null || session.token == _securitySocketToken) {
+      return;
+    }
+    _securitySocketToken = session.token;
+    if (session.token == null) {
+      _realtimeSocketService.disconnect();
+      return;
+    }
+    _syncRealtimeSocket(session, forceReconnect: true);
+  }
+
   @override
   void dispose() {
+    _securitySession?.removeListener(_handleSecuritySession);
     WidgetsBinding.instance.removeObserver(this);
     _vehicleMotionTimer?.cancel();
     _locationTrackingService?.dispose();
@@ -1439,7 +1468,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     await _runDriverAction(
       loadingMessage: 'Creating trip...',
       successMessage: tripLaunch.operatingMode == 'terminal_queue'
-          ? 'Terminal queue trip started. You are now available for terminal boarding requests.'
+          ? 'Joined the terminal queue. The first eligible jeep loads automatically.'
           : 'Route trip started. The driver map is now ready for live pickup handling.',
       action: () => tripService.createTrip(
         jeepneyId: jeepneyId,
@@ -1626,6 +1655,23 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   Future<void> _endTrip(String tripId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('End this trip?'),
+        content: const Text(
+            'This closes all remaining passenger rides, cancels waiting pickups, and dismisses stop alerts. End only when the journey is finished.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Keep trip active')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('End trip')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
     final session = context.read<SessionController>();
     final tripService = TripService(session.apiClient);
     await _runDriverAction(
@@ -1636,6 +1682,37 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   Future<void> _toggleAccept(TripSession trip, bool accept) async {
+    if (trip.operatingMode == 'terminal_queue') {
+      final action = trip.terminalQueueStatus == 'loading'
+          ? 'depart'
+          : trip.terminalQueueStatus == 'skipped'
+              ? 'restore'
+              : 'skip';
+      if (action == 'depart') {
+        final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+                    title: const Text('Depart terminal?'),
+                    content: Text(
+                        '${trip.terminalSummary?["onboardSeats"] ?? trip.occupancyCount ?? 0} onboard passengers stay on this trip. ${trip.terminalSummary?["reservedSeats"] ?? 0} unboarded bookings will receive transfer offers.'),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('Stay')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: const Text('Depart terminal'))
+                    ]));
+        if (confirmed != true || !mounted) return;
+      }
+      final session = context.read<SessionController>();
+      await _runDriverAction(
+          loadingMessage: 'Updating terminal queue...',
+          successMessage: 'Terminal queue updated.',
+          action: () =>
+              TripService(session.apiClient).terminalAction(trip.id, action));
+      return;
+    }
     if (accept &&
         !_ensureDriverReady(
           failurePrefix: 'Cannot reopen pickup requests yet.',
@@ -2437,6 +2514,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   String? _driverOperationsBannerMessage(TripSession? trip) {
+    if (trip?.operatingMode == 'terminal_queue') {
+      final summary = trip!.terminalSummary;
+      return 'Terminal: ${trip.terminalQueueStatus} ? Queue ${summary?["queuePosition"] ?? "?"} ? ${summary?["reservedSeats"] ?? 0} reserved ? ${summary?["onboardSeats"] ?? 0} onboard. ${summary?["gpsWarning"] == true ? "GPS unavailable or old; your queue position is retained." : ""}';
+    }
+    if (trip?.status == 'active' && trip?.inactivityPausedAt != null) {
+      return 'No driver location was received for five minutes. Pickups are paused. Reopen pickup requests to resume, or end this trip.';
+    }
     if (trip?.status == 'active') {
       return _driverPickupRequirementMessage(trip: trip);
     }
@@ -3365,9 +3449,15 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                                     : Icons.pause_circle_outline,
                               ),
                               label: Text(
-                                trip?.acceptRequests == false
-                                    ? 'Resume pickup'
-                                    : 'Pause pickup',
+                                trip?.operatingMode == 'terminal_queue'
+                                    ? (trip?.terminalQueueStatus == 'loading'
+                                        ? 'Depart terminal'
+                                        : trip?.terminalQueueStatus == 'skipped'
+                                            ? 'Rejoin at back'
+                                            : 'Skip my turn')
+                                    : trip?.acceptRequests == false
+                                        ? 'Resume pickup'
+                                        : 'Pause pickup',
                               ),
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: Colors.white,

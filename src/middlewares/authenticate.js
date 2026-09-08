@@ -14,14 +14,7 @@ const authenticate = async (req, res, next) => {
   const token = authHeader.replace('Bearer ', '');
   try {
     const payload = verifyAccessToken(token);
-    const cachedUser = await getOrLoadAuthenticatedUser({
-      userId: payload.sub,
-      loader: () => User.findById(payload.sub).select('-passwordHash').lean(),
-    });
-    const user = cachedUser.value;
-    if (!user || user.status !== 'active') {
-      return next(new ApiError(401, 'Invalid user session'));
-    }
+    const { user } = await require('../services/sessionSecurity.service').requireSession(payload);
     req.user = user;
     next();
   } catch (_error) {

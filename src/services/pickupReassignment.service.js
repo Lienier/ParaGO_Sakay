@@ -55,6 +55,7 @@ const checkAndReassignPassedRequests = async () => {
   try {
     // Find all pending or acknowledged requests
     const pendingRequests = await PickupRequest.find({
+      pickupType: { $ne: 'terminal' },
       status: { $in: ['pending', 'acknowledged'] },
       expiresAt: { $gt: new Date() },
     }).populate('tripSessionId');

@@ -1,3 +1,4 @@
+const { createTripRecord } = require('../services/tripLifecycle.service');
 const express = require('express');
 const axios = require('axios');
 const PickupRequest = require('../models/pickupRequest');
@@ -112,49 +113,7 @@ const ensureDriverCanHandlePickup = ({ driver, trip, accountStatus }) => {
   }
 };
 
-const syncTerminalQueueStatus = async (trip) => {
-  if (!trip || String(trip.operatingMode || 'route') !== 'terminal_queue') {
-    return;
-  }
-  if (
-    normalizeTerminalQueueStatus(trip.terminalQueueStatus, {
-      operatingMode: trip.operatingMode,
-    }) === 'skipped'
-  ) {
-    return;
-  }
-
-  const terminalRequests = await PickupRequest.find({
-    tripSessionId: trip._id,
-    pickupType: 'terminal',
-    status: { $in: ['pending', 'acknowledged'] },
-  }).select('status');
-
-  const hasAcknowledged = terminalRequests.some(
-    (request) => request.status === 'acknowledged'
-  );
-  const nextStatus = normalizeTerminalQueueStatus(
-    hasAcknowledged ? 'loading' : 'waiting',
-    { operatingMode: trip.operatingMode }
-  );
-  if (trip.terminalQueueStatus === nextStatus) {
-    return;
-  }
-
-  trip.terminalQueueStatus = nextStatus;
-  await trip.save();
-  if (trip.driverId) {
-    await Driver.findByIdAndUpdate(trip.driverId, {
-      $set: {
-        operatingMode: trip.operatingMode,
-        terminalQueueStatus: trip.terminalQueueStatus,
-        terminalCheckedInAt: trip.terminalCheckedInAt || trip.startedAt || new Date(),
-        terminalQueueNumber: trip.terminalQueueNumber,
-        terminalStopRef: trip.terminalStopRef,
-      },
-    });
-  }
-};
+const syncTerminalQueueStatus = async () => {};
 
 const reverseGeocodeLabel = async ({ latitude, longitude }) => {
   if (!tomtomApiKey) {
@@ -242,7 +201,7 @@ const resolveEligibleTripForRoute = async ({
       normalizedPickupType === 'terminal' &&
       normalizeTerminalQueueStatus(trip.terminalQueueStatus, {
         operatingMode: tripOperatingMode,
-      }) === 'skipped'
+      }) !== 'loading'
     ) {
       continue;
     }
@@ -257,6 +216,7 @@ const resolveEligibleTripForRoute = async ({
     const pendingRequestCount = await PickupRequest.countDocuments({
       tripSessionId: trip._id,
       status: { $in: ['pending', 'acknowledged'] },
+      expiresAt: { $gt: new Date() },
     });
     const occupiedSeats = Number.isFinite(Number(trip.occupancyCount))
       ? Number(trip.occupancyCount)
@@ -440,7 +400,7 @@ router.post(
       throw new ApiError(409, 'Too many pending requests for this trip');
     }
 
-    const request = await PickupRequest.create({
+    const request = await createTripRecord(PickupRequest, {
       fareSnapshot: resolveRouteFareSnapshot({
         route,
         pickupLocation,
@@ -466,7 +426,7 @@ router.post(
       },
       sourceNote: payload.sourceNote,
       expiresAt: new Date(Date.now() + pickupRequestTtlMinutes * 60 * 1000),
-    });
+    }, { accepting: true });
 
     const tripDriverUserId = await resolveTripDriverUserId(trip);
     await publishNotification({
@@ -600,7 +560,13 @@ router.patch(
       driver ??= await requireCurrentDriver(req.user);
       request.acknowledgedBy = driver?._id || null;
     }
-    await request.save();
+    const acknowledged = await PickupRequest.findOneAndUpdate(
+      { _id: request._id, status: 'pending' },
+      { $set: { status: 'acknowledged', acknowledgedAt: request.acknowledgedAt,
+        ...(request.acknowledgedBy ? { acknowledgedBy: request.acknowledgedBy } : {}) } },
+      { new: true }
+    );
+    if (!acknowledged) throw new ApiError(409, 'Pickup request is no longer pending');
     if (request.pickupType === 'terminal') {
       await syncTerminalQueueStatus(trip);
     }
@@ -639,8 +605,11 @@ router.patch(
       throw new ApiError(409, 'Only pending or acknowledged requests can be cancelled');
     }
 
-    request.status = 'cancelled';
-    await request.save();
+    const cancelled = await PickupRequest.findOneAndUpdate({
+      _id: request._id, status: { $in: ['pending', 'acknowledged'] },
+    }, { $set: { status: 'cancelled' } }, { new: true });
+    if (!cancelled) throw new ApiError(409, 'Pickup request is no longer available for cancellation');
+    request.status = cancelled.status;
     const trip = await TripSession.findById(request.tripSessionId)
       .populate('driverId', 'userId');
     if (request.pickupType === 'terminal') {
@@ -718,5 +687,14 @@ router.patch(
     return ok(res, request, 'Pickup request marked completed');
   })
 );
+
+router.post('/:id/transfer/:decision', authenticate, authorize(PASSENGER), asyncHandler(async (req, res) => {
+  ensureObjectId(req.params.id, 'request id');
+  if (!['accept', 'decline'].includes(req.params.decision)) throw new ApiError(400, 'Invalid transfer decision');
+  const passenger = await requireCurrentPassenger(req.user);
+  const result = await require('../services/terminalQueue.service').transfer({ requestId: req.params.id,
+    passengerId: passenger._id, offerId: req.body.offerId, accept: req.params.decision === 'accept' });
+  return ok(res, result, 'Transfer updated');
+}));
 
 module.exports = router;

@@ -1,3 +1,4 @@
+import '../../widgets/legal_pages.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -153,6 +154,8 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
                   _document('front'),
                   const SizedBox(height: 12),
                   _document('back'),
+                  const SizedBox(height: 16),
+                  const LegalLinks(),
                 ],
               ),
             ),

@@ -20,6 +20,7 @@ class PickupRequestModel {
     this.expiresAt,
     this.createdAt,
     this.acknowledgedAt,
+    this.transferOfferId,
   });
 
   final String id;
@@ -42,6 +43,7 @@ class PickupRequestModel {
   final String? expiresAt;
   final String? createdAt;
   final String? acknowledgedAt;
+  final String? transferOfferId;
 
   double? get estimatedFare => fareSnapshot?.amount;
   String? get fareBoardingStopRef => fareSnapshot?.boardingStopRef;
@@ -69,6 +71,7 @@ class PickupRequestModel {
       expiresAt: json['expiresAt']?.toString(),
       createdAt: json['createdAt']?.toString(),
       acknowledgedAt: json['acknowledgedAt']?.toString(),
+      transferOfferId: json['transferOfferId']?.toString(),
     );
   }
 }

@@ -92,6 +92,9 @@ const parseDates = (req) => {
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
     throw new ApiError(400, 'Invalid date range');
   }
+  if (from > to || to.getTime() - from.getTime() > 366 * 86400000) {
+    throw new ApiError(400, 'Report range must be ordered and no longer than 366 days');
+  }
   const routeId = req.query.routeId ? String(req.query.routeId) : null;
   if (routeId && !mongoose.Types.ObjectId.isValid(routeId)) {
     throw new ApiError(400, 'Invalid routeId');

@@ -1,6 +1,6 @@
 param(
     [string]$BuildName = '1.0.1',
-    [int]$BuildNumber = 3
+    [int]$BuildNumber = 4
 )
 
 Set-StrictMode -Version Latest

@@ -13,6 +13,8 @@ artifacts/
 .env*
 .tools/
 .secure-backups/
+.tmp/
+**/test/failures/
 
 infra/aws/**/.terraform/
 infra/aws/**/*.tfstate

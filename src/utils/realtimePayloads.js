@@ -45,6 +45,7 @@ const serializePickupRequest = (request) => {
     tripSessionId: request.tripSessionId?.toString() || '',
     routeId: request.routeId?.toString() || '',
     status: request.status?.toString() || '',
+    transferOfferId: request.transferOfferId || null,
     pickupType: request.pickupType?.toString() || 'roadside',
     stopRef: request.stopRef?.toString() || null,
     terminalStopRef: request.terminalStopRef?.toString() || null,

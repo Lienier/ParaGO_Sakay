@@ -10,7 +10,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 The script produces universal APKs in the ignored `dist` directory. AWS is the
 primary API endpoint. At application startup, DigitalOcean is selected when
-the AWS custom domain or health endpoint is unavailable.
+the AWS custom domain or health endpoint is unavailable. The fallback health
+probe allows for a cold service and retries before endpoint selection. When no
+health probe succeeds, the app prefers the configured fallback instead of
+returning to the already-failed AWS hostname.
 
 The fallback assumes both deployments run compatible backend versions, use
 the same intended MongoDB Atlas database, and share compatible authentication

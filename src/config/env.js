@@ -37,8 +37,8 @@ module.exports = {
   port: Number(process.env.PORT || 5000),
   mongoUri: required(process.env.MONGO_URI, 'MONGO_URI'),
   jwtSecret: required(process.env.JWT_SECRET, 'JWT_SECRET'),
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '15m',
+  jwtRefreshSecret: required(process.env.JWT_REFRESH_SECRET, 'JWT_REFRESH_SECRET'),
   jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
 
   boardingWindowMinutes: Number(process.env.BOARDING_WINDOW_MINUTES || 10),
@@ -207,4 +207,11 @@ if (
   !module.exports.redisUrl
 ) {
   throw new Error('ASYNC_LOCATION_PROCESSING_ENABLED requires REDIS_URL');
+}
+
+if (module.exports.jwtSecret === module.exports.jwtRefreshSecret) {
+  throw new Error('Access and refresh signing secrets must differ');
+}
+if (['staging', 'production'].includes(module.exports.deploymentEnvironment) && module.exports.nodeEnv !== 'production') {
+  throw new Error('Deployed staging/production requires NODE_ENV=production');
 }

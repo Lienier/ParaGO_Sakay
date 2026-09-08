@@ -5,7 +5,6 @@ const evaluateAutoOffboardingSeparation = ({
   now = new Date(),
   separationMeters = 120,
   consecutiveOutsideChecks = 3,
-  sustainedSeparationSeconds = 60,
 }) => {
   const distance = Number(distanceMeters);
   const currentTime = now instanceof Date ? now : new Date(now);
@@ -35,14 +34,9 @@ const evaluateAutoOffboardingSeparation = ({
     0,
     currentTime.getTime() - startedAt.getTime()
   );
-  const requiredSeparationMilliseconds =
-    Math.max(0, Number(sustainedSeparationSeconds) || 0) * 1000;
-
   return {
     outside: true,
-    shouldOffboard:
-      nextOutsideCount >= Number(consecutiveOutsideChecks || 0) ||
-      separationMilliseconds >= requiredSeparationMilliseconds,
+    shouldOffboard: nextOutsideCount >= Number(consecutiveOutsideChecks || 0),
     separationStartedAt: startedAt,
     outsideCount: nextOutsideCount,
     separationMilliseconds,

@@ -1,3 +1,4 @@
+const { createTripRecord } = require('./tripLifecycle.service');
 const ApiError = require('../utils/apiError');
 const Route = require('../models/route');
 const StopAlert = require('../models/stopAlert');
@@ -73,7 +74,7 @@ const createStopAlert = async ({
     );
   }
 
-  return StopAlert.create({
+  return createTripRecord(StopAlert, {
     passengerId,
     tripSessionId,
     rideSessionId: session._id,

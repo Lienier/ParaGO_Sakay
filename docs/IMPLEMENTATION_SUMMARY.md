@@ -181,16 +181,15 @@ Rule:
 - Passenger location must be recent.
 - Driver/jeepney location must be recent.
 - Passenger-to-jeepney distance must be outside the configured separation distance.
-- Separation must be confirmed by repeated checks or sustained time.
+- Separation must be confirmed by 3 consecutive fresh outside checks.
 
 Defaults:
 
 ```env
 AUTO_OFFBOARDING_DISTANCE_METERS=120
 AUTO_OFFBOARDING_CONSECUTIVE_OUTSIDE_CHECKS=3
-AUTO_OFFBOARDING_SUSTAINED_SEPARATION_SECONDS=60
-AUTO_OFFBOARDING_PASSENGER_LOCATION_MAX_AGE_SECONDS=45
-AUTO_OFFBOARDING_DRIVER_LOCATION_MAX_AGE_SECONDS=20
+AUTO_OFFBOARDING_PASSENGER_LOCATION_MAX_AGE_SECONDS=15
+AUTO_OFFBOARDING_DRIVER_LOCATION_MAX_AGE_SECONDS=15
 ```
 
 Result:
@@ -295,7 +294,7 @@ Use one passenger device/app and one driver device/app.
 11. Confirm ride becomes onboard automatically.
 12. Confirm trip passenger count increases.
 13. Move passenger and driver apart beyond the configured separation range.
-14. Confirm ride completes automatically after repeated/sustained separation.
+14. Confirm ride completes automatically after three fresh outside checks.
 15. Confirm trip passenger count decreases.
 16. Disable GPS or internet on one side and confirm manual `I boarded` / `I unloaded` remains usable.
 

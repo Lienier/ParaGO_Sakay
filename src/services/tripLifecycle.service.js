@@ -1,0 +1,120 @@
+const mongoose = require('mongoose');
+const Trip = require('../models/tripSession');
+const Ride = require('../models/rideSession');
+const Pickup = require('../models/pickupRequest');
+const Alert = require('../models/stopAlert');
+const Jeepney = require('../models/jeepney');
+const Passenger = require('../models/passenger');
+const Driver = require('../models/driver');
+const ApiError = require('../utils/apiError');
+const { invalidateDriverActiveContext } = require('./activeDriverContext.service');
+const { publishNotification } = require('./notificationPublisher');
+const { serializeRideSession } = require('../utils/realtimePayloads');
+const INACTIVITY_MS = 5 * 60 * 1000;
+
+async function createTripRecord(Model, document, { accepting = false } = {}) {
+  const terminal = document.pickupType === 'terminal' && accepting;
+  const queue = require('./terminalQueue.service');
+  if (terminal) await queue.prepare(document.routeId);
+  const session = await mongoose.startSession();
+  let record;
+  try {
+    await session.withTransaction(async () => {
+      if (terminal) await queue.lock(document.routeId, session);
+      const trip = await Trip.findOneAndUpdate({ _id: document.tripSessionId, status: 'active',
+        ...(accepting ? { acceptRequests: true } : {}) },
+      { $inc: { lifecycleRevision: 1 } }, { new: true, session });
+      if (!trip) throw new ApiError(409, 'Trip is closed or no longer accepting pickups');
+      if (terminal) await queue.reserve(trip, session);
+      [record] = await Model.create([document], { session });
+    });
+  } finally { await session.endSession(); }
+  return record;
+}
+
+// Trip writes serialize this transaction with boarding's occupancy write.
+async function endTrip(tripId, { actor, requestId, reason } = {}) {
+  const original = await Trip.findById(tripId);
+  const terminal = original?.operatingMode === 'terminal_queue';
+  const queue = require('./terminalQueue.service');
+  if (terminal) { queue.validateActor(actor, requestId, reason); await queue.prepare(original.routeId); }
+  const session = await mongoose.startSession();
+  let trip;
+  let rides;
+  try {
+    await session.withTransaction(async () => {
+      if (terminal) await queue.lock(original.routeId, session);
+      const now = new Date();
+      trip = await Trip.findOneAndUpdate({ _id: tripId, status: { $in: ['active', 'scheduled'] } },
+        { $set: { status: 'completed', endedAt: now, active: false, acceptRequests: false,
+          occupancyCount: 0, manualOccupancyCount: 0, terminalQueueStatus: 'departed' },
+        $unset: { inactivityPausedAt: 1 } }, { new: true, session });
+      if (!trip) throw new ApiError(409, 'Trip already closed');
+      rides = await Ride.find({ tripSessionId: tripId, status: { $in: ['onboard', 'waiting'] } }).session(session);
+      await Ride.updateMany({ tripSessionId: tripId, status: { $in: ['onboard', 'waiting'] } },
+        { $set: { status: 'completed', endedAt: now, canSendStopAlert: false, offboardingMethod: 'trip_ended' } }, { session });
+      await Pickup.updateMany({ tripSessionId: tripId, status: { $in: ['pending', 'acknowledged'] } },
+        { $set: { status: 'cancelled' } }, { session });
+      await Alert.updateMany({ tripSessionId: tripId, status: { $in: ['sent', 'seen', 'acknowledged'] } },
+        { $set: { status: 'dismissed', acknowledgedAt: now } }, { session });
+      if (terminal) {
+        await queue.promote(original.routeId, session);
+        await queue.audit(trip, actor, 'end_trip', requestId, reason, session);
+      }
+    });
+  } finally { await session.endSession(); }
+  await invalidateDriverActiveContext(trip.driverId);
+  if (terminal) await queue.publish(original.routeId);
+  // Notifications follow commit; delivery failure must not undo a closed trip.
+  for (const ride of rides) {
+    try {
+      const passenger = await Passenger.findById(ride.passengerId).select('userId');
+      const completed = await Ride.findById(ride._id);
+      await publishNotification({ userId: passenger?.userId, type: 'ride_completed',
+        title: 'Trip ended', body: 'The driver or administrator ended this trip. Your ride is now closed.',
+        payload: { rideSessionId: String(ride._id), tripSessionId: String(tripId),
+          completionMethod: 'trip_ended', rideSession: serializeRideSession(completed) }, category: 'ride' });
+    } catch (_) { console.error('[Trip lifecycle] Completion notification failed'); }
+  }
+  return trip;
+}
+
+async function pauseInactiveTrips(now = new Date()) {
+  await require('./terminalQueue.service').reconcile();
+  const cutoff = new Date(now.getTime() - INACTIVITY_MS);
+  let paused = 0;
+  const candidates = Trip.find({ status: 'active', operatingMode: { $ne: 'terminal_queue' }, inactivityPausedAt: null,
+    createdAt: { $lte: cutoff }, $and: [
+      { $or: [{ startedAt: null }, { startedAt: { $lte: cutoff } }] },
+      { $or: [{ resumedAt: null }, { resumedAt: { $lte: cutoff } }] },
+    ] }).cursor();
+  for await (const trip of candidates) {
+    const vehicle = await Jeepney.findById(trip.jeepneyId).select('lastSeenAt');
+    if (vehicle?.lastSeenAt && vehicle.lastSeenAt > cutoff) continue;
+    const updated = await Trip.findOneAndUpdate({ _id: trip._id, status: 'active',
+      inactivityPausedAt: null, updatedAt: trip.updatedAt },
+    { $set: { acceptRequests: false, inactivityPausedAt: now } }, { new: true });
+    if (updated) {
+      paused++;
+      await invalidateDriverActiveContext(updated.driverId);
+      try {
+        const driver = await Driver.findById(updated.driverId).select('userId');
+        await publishNotification({ userId: driver?.userId, type: 'trip_inactivity_paused',
+          title: 'Pickups paused', body: 'No driver location was received for five minutes. Reopen pickup requests to resume, or end the trip.',
+          payload: { tripSessionId: String(updated._id) }, category: 'trip' });
+      } catch (_) { console.error('[Trip lifecycle] Inactivity notification failed'); }
+    }
+  }
+  return paused;
+}
+
+async function setAvailability(tripId, acceptRequests) {
+  const trip = await Trip.findOneAndUpdate({ _id: tripId, status: 'active', operatingMode: { $ne: 'terminal_queue' } },
+    acceptRequests ? { $set: { acceptRequests: true, resumedAt: new Date() }, $unset: { inactivityPausedAt: 1 } }
+      : { $set: { acceptRequests: false } }, { new: true });
+  if (!trip) throw new ApiError(409, 'Only active trips can change availability');
+  await invalidateDriverActiveContext(trip.driverId);
+  return trip;
+}
+
+module.exports = { endTrip, pauseInactiveTrips, setAvailability, createTripRecord, INACTIVITY_MS };

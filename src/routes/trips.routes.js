@@ -1,4 +1,6 @@
+const terminalQueue = require('../services/terminalQueue.service');
 const express = require('express');
+const mongoose = require('mongoose');
 const Driver = require('../models/driver');
 const RideSession = require('../models/rideSession');
 const TripSession = require('../models/tripSession');
@@ -31,7 +33,9 @@ const {
 } = require('../services/activeDriverContext.service');
 const { redisKey } = require('../services/redis.service');
 const { getOrLoadCachedRead } = require('../services/readCache.service');
+const { emitOperationsChanged } = require('../realtime/socketServer');
 
+const tripLifecycle = require('../services/tripLifecycle.service');
 const router = express.Router();
 const terminalQueueCreateRetryLimit = 4;
 const normalizeStatus = (value) => String(value || '').trim().toLowerCase();
@@ -197,7 +201,7 @@ router.get(
           .sort({ startedAt: -1 })
           .lean(),
     });
-    return ok(res, activeTrips.value, 'Active trips');
+    return ok(res, await Promise.all(activeTrips.value.map(terminalQueue.describe)), 'Active trips');
   })
 );
 
@@ -213,7 +217,7 @@ router.get(
     })
       .populate('jeepneyId driverId routeId')
       .sort({ createdAt: -1 });
-    return ok(res, trips, 'Driver trips');
+    return ok(res, await Promise.all(trips.map(terminalQueue.describe)), 'Driver trips');
   })
 );
 
@@ -293,6 +297,13 @@ router.post(
         throw new ApiError(400, 'driverId is required when creating a non-scheduled trip');
       }
     }
+    if (operatingMode === 'terminal_queue') {
+      const terminal = resolveRouteTerminalStop(route);
+      const document = { jeepneyId: jeepney._id, driverId: payload.driverId, routeId: route._id,
+        routePathSnapshot: buildRoutePathSnapshot(route), terminalStopRef: terminal.stopRef, terminalLocation: terminal.location };
+      const queued = await terminalQueue.checkIn({ document, actor: req.user, requestId: payload.requestId, reason: payload.reason });
+      return ok(res, queued, 'Terminal check-in complete', 201);
+    }
     const trip = await createTripSession({
       payload,
       route,
@@ -340,6 +351,15 @@ router.patch(
       } else if (String(trip.driverId) !== String(driver._id)) {
         throw new ApiError(403, 'You are not assigned to this trip');
       }
+    }
+    if (trip.operatingMode === 'terminal_queue') {
+      const terminalRoute = await Route.findById(trip.routeId);
+      const terminal = resolveRouteTerminalStop(terminalRoute);
+      if (!terminal) throw new ApiError(409, 'Terminal is unavailable');
+      const queued = await terminalQueue.checkIn({ existingId: trip._id, actor: req.user,
+        requestId: req.body.requestId, reason: req.body.reason, document: { driverId: trip.driverId, jeepneyId: trip.jeepneyId, routeId: trip.routeId,
+          terminalStopRef: terminal.stopRef, terminalLocation: terminal.location, routePathSnapshot: buildRoutePathSnapshot(terminalRoute) } });
+      return ok(res, queued, 'Terminal check-in complete');
     }
     trip.status = 'active';
     if (
@@ -393,6 +413,13 @@ router.patch(
   })
 );
 
+router.patch('/:id/terminal/:action', authenticate, authorize(DRIVER, ADMIN), asyncHandler(async (req, res) => {
+  ensureObjectId(req.params.id, 'trip id');
+  const trip = await terminalQueue.change({ tripId: req.params.id, actor: req.user, action: req.params.action,
+    requestId: req.body.requestId, reason: req.body.reason });
+  return ok(res, trip, 'Terminal queue updated');
+}));
+
 router.patch(
   '/:id/end',
   authenticate,
@@ -406,14 +433,7 @@ router.patch(
     if (req.user.role === DRIVER) {
       await ensureDriverAssignedToTrip(req.user, trip);
     }
-    trip.status = 'completed';
-    trip.endedAt = new Date();
-    trip.active = false;
-    trip.acceptRequests = false;
-    if (trip.operatingMode === 'terminal_queue') {
-      trip.terminalQueueStatus = 'departed';
-    }
-    await trip.save();
+    const closedTrip = await tripLifecycle.endTrip(trip._id, { actor: req.user, requestId: req.body.requestId, reason: req.body.reason });
     if (trip.driverId) {
       await syncDriverActiveTripState({
         driverId: trip.driverId,
@@ -421,7 +441,7 @@ router.patch(
       });
     }
     await invalidateDriverActiveContext(trip.driverId);
-    return ok(res, trip, 'Trip ended');
+    return ok(res, closedTrip, 'Trip ended');
   })
 );
 
@@ -433,9 +453,9 @@ router.patch(
     ensureObjectId(req.params.id, 'trip id');
     const trip = await requireTrip(req.params.id);
     await ensureDriverAssignedToTrip(req.user, trip);
-    trip.acceptRequests = Boolean(req.body.acceptRequests);
-    await trip.save();
-    return ok(res, trip, 'Trip availability updated');
+    if (typeof req.body.acceptRequests !== 'boolean') throw new ApiError(400, 'acceptRequests must be a boolean');
+    const updated = await tripLifecycle.setAvailability(trip._id, req.body.acceptRequests);
+    return ok(res, updated, 'Trip availability updated');
   })
 );
 
@@ -460,43 +480,81 @@ router.patch(
       );
     }
 
-    const jeepney = await Jeepney.findById(trip.jeepneyId).select(
-      'capacity status plateNumber jeepneyName vehicleTag'
-    );
-    if (!jeepney) {
-      throw new ApiError(404, 'Jeepney not found');
-    }
+    let capacity = null;
+    let nextOccupancyCount = 0;
+    const occupancySession = await mongoose.startSession();
+    try {
+      await occupancySession.withTransaction(async () => {
+        const freshTrip = await TripSession.findOne({
+          _id: trip._id,
+          status: 'active',
+        }).session(occupancySession);
+        if (!freshTrip) {
+          throw new ApiError(409, 'Only active trips can update occupancy');
+        }
 
-    const capacity = Number(jeepney.capacity);
-    const onboardRideCount = await RideSession.countDocuments({
-      tripSessionId: trip._id,
-      status: 'onboard',
-    });
-    const nextOccupancyCount = onboardRideCount + requestedManualOccupancy;
-    if (
-      Number.isFinite(capacity) &&
-      capacity > 0 &&
-      nextOccupancyCount > capacity
-    ) {
-      throw new ApiError(
-        409,
-        `Occupancy cannot exceed jeepney capacity of ${capacity}`
-      );
-    }
+        const jeepney = await Jeepney.findById(freshTrip.jeepneyId)
+          .select('capacity status plateNumber jeepneyName vehicleTag')
+          .session(occupancySession);
+        if (!jeepney) {
+          throw new ApiError(404, 'Jeepney not found');
+        }
 
-    trip.manualOccupancyCount = requestedManualOccupancy;
-    trip.occupancyCount = nextOccupancyCount;
-    if (
-      Number.isFinite(capacity) &&
-      capacity > 0 &&
-      nextOccupancyCount >= capacity
-    ) {
-      trip.acceptRequests = false;
+        capacity = Number(jeepney.capacity);
+        const onboardRideCount = await RideSession.countDocuments({
+          tripSessionId: freshTrip._id,
+          status: 'onboard',
+        }).session(occupancySession);
+        nextOccupancyCount = onboardRideCount + requestedManualOccupancy;
+        const reserved = freshTrip.operatingMode === 'terminal_queue' ? await require('../models/pickupRequest').countDocuments({ tripSessionId: freshTrip._id, status: { $in: ['pending', 'acknowledged'] }, expiresAt: { $gt: new Date() } }).session(occupancySession) : 0;
+        if (nextOccupancyCount + reserved > capacity) throw new ApiError(409, 'Occupancy would consume reserved seats');
+        if (
+          Number.isFinite(capacity) &&
+          capacity > 0 &&
+          nextOccupancyCount > capacity
+        ) {
+          throw new ApiError(
+            409,
+            `Occupancy cannot exceed jeepney capacity of ${capacity}`
+          );
+        }
+
+        freshTrip.manualOccupancyCount = requestedManualOccupancy;
+        freshTrip.occupancyCount = nextOccupancyCount;
+        if (
+          Number.isFinite(capacity) &&
+          capacity > 0 &&
+          nextOccupancyCount >= capacity && freshTrip.operatingMode !== 'terminal_queue'
+        ) {
+          freshTrip.acceptRequests = false;
+        }
+        await freshTrip.save({ session: occupancySession });
+      });
+    } finally {
+      await occupancySession.endSession();
     }
-    await trip.save();
 
     const populatedTrip = await TripSession.findById(trip._id)
       .populate('jeepneyId driverId routeId');
+
+    const occupancyEvent = {
+      type: 'trip.occupancy.updated',
+      tripId: trip._id.toString(),
+      routeId: trip.routeId?.toString?.() || populatedTrip?.routeId?._id?.toString?.() || '',
+      manualOccupancyCount: populatedTrip?.manualOccupancyCount ?? requestedManualOccupancy,
+      occupancyCount: populatedTrip?.occupancyCount ?? nextOccupancyCount,
+      capacity: Number.isFinite(capacity) ? capacity : null,
+      acceptRequests: Boolean(populatedTrip?.acceptRequests),
+      occurredAt: new Date().toISOString(),
+    };
+
+    const recipients = new Set();
+    const driverUserId = populatedTrip?.driverId?.userId;
+    if (driverUserId) recipients.add(driverUserId.toString());
+    for (const userId of recipients) {
+      emitOperationsChanged({ ...occupancyEvent, userId });
+    }
+    emitOperationsChanged({ ...occupancyEvent, role: 'passenger' });
 
     return ok(res, populatedTrip || trip, 'Trip occupancy updated');
   })

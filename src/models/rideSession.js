@@ -57,7 +57,7 @@ const rideSessionSchema = new Schema(
     },
     offboardingMethod: {
       type: String,
-      enum: ['manual', 'auto_separation'],
+      enum: ['manual', 'auto_separation', 'trip_ended'],
     },
     autoOffboarding: {
       separationStartedAt: { type: Date },

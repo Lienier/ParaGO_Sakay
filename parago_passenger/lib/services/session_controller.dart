@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+import '../core/exceptions/api_exception.dart';
 import 'package:flutter/material.dart';
 
 import '../core/network/api_client.dart';
@@ -12,10 +15,39 @@ class SessionController extends ChangeNotifier {
     required ApiClient apiClient,
     required TokenStorage tokenStorage,
   })  : _apiClient = apiClient,
-        _storage = tokenStorage;
+        _storage = tokenStorage {
+    _apiClient.beforeAuthenticatedRequest = ensureFreshSession;
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      unawaited(ensureFreshSession().catchError((Object _) {}));
+    });
+  }
 
   final ApiClient _apiClient;
   final TokenStorage _storage;
+  Timer? _refreshTimer;
+  Future<bool>? _refreshInFlight;
+  int _sessionEpoch = 0;
+
+  Future<void> ensureFreshSession() async {
+    if (_accessToken == null || _refreshToken == null) return;
+    try {
+      final claims = jsonDecode(utf8.decode(base64Url
+          .decode(base64Url.normalize(_accessToken!.split('.')[1])))) as Map;
+      final expires = (claims['exp'] as num).toInt() * 1000;
+      if (DateTime.now().millisecondsSinceEpoch < expires - 60000) return;
+      if (await _tryRefreshSession(_refreshToken)) notifyListeners();
+    } on ApiException catch (error) {
+      if (error.statusCode == 401 || error.statusCode == 403) await clear();
+      rethrow;
+    }
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    _apiClient.beforeAuthenticatedRequest = null;
+    super.dispose();
+  }
 
   UserProfile? _user;
   String? _accessToken;
@@ -32,6 +64,19 @@ class SessionController extends ChangeNotifier {
   bool _isPassengerUser(UserProfile? user) => user?.role == UserRole.passenger;
 
   Future<bool> _tryRefreshSession(String? refreshToken) async {
+    final pending = _refreshInFlight;
+    if (pending != null) return pending;
+    final request = _performRefreshSession(_refreshToken ?? refreshToken);
+    _refreshInFlight = request;
+    try {
+      return await request;
+    } finally {
+      _refreshInFlight = null;
+    }
+  }
+
+  Future<bool> _performRefreshSession(String? refreshToken) async {
+    final epoch = _sessionEpoch;
     final token = refreshToken?.trim() ?? '';
     if (token.isEmpty) {
       return false;
@@ -40,6 +85,7 @@ class SessionController extends ChangeNotifier {
     final session = await AuthService(_apiClient).refreshSession(
       refreshToken: token,
     );
+    if (epoch != _sessionEpoch) return false;
     if (!_isPassengerUser(session.user)) {
       await clear(notify: false);
       return false;
@@ -108,6 +154,7 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> saveAuth(AuthSession session) async {
+    _sessionEpoch++;
     applySession(session);
     await _storage.saveTokens(
       accessToken: session.accessToken,
@@ -143,6 +190,7 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> clear({bool notify = true}) async {
+    _sessionEpoch++;
     _user = null;
     _accessToken = null;
     _refreshToken = null;

@@ -71,6 +71,7 @@ router.patch(
     user.status = status;
     await user.save();
     await invalidateAuthenticatedUser(user._id);
+    if (user.status !== 'active') await require('../services/sessionSecurity.service').revokeSessions({ userId: user._id });
     return ok(res, user, 'User status updated');
   })
 );
@@ -106,6 +107,7 @@ router.put(
 
     await user.save();
     await invalidateAuthenticatedUser(user._id);
+    if (user.status !== 'active') await require('../services/sessionSecurity.service').revokeSessions({ userId: user._id });
     return ok(res, { fullName: user.fullName, email: user.email }, 'Profile updated');
   })
 );
@@ -121,6 +123,7 @@ router.delete(
     user.status = 'deactivated';
     await user.save();
     await invalidateAuthenticatedUser(user._id);
+    if (user.status !== 'active') await require('../services/sessionSecurity.service').revokeSessions({ userId: user._id });
     return ok(res, null, 'User deactivated');
   })
 );

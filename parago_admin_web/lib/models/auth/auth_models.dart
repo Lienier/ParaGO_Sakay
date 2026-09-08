@@ -23,13 +23,13 @@ class AuthSession {
 class AdminLoginChallenge {
   const AdminLoginChallenge({
     required this.challengeId,
-    required this.maskedPhone,
+    required this.maskedEmail,
     required this.expiresAt,
     required this.expiresInSeconds,
   });
 
   final String challengeId;
-  final String maskedPhone;
+  final String maskedEmail;
   final DateTime? expiresAt;
   final int expiresInSeconds;
 
@@ -37,7 +37,7 @@ class AdminLoginChallenge {
     final expiresAtRaw = json['expiresAt']?.toString();
     return AdminLoginChallenge(
       challengeId: json['challengeId']?.toString() ?? '',
-      maskedPhone: json['maskedPhone']?.toString() ?? '',
+      maskedEmail: json['maskedEmail']?.toString() ?? '',
       expiresAt: expiresAtRaw == null || expiresAtRaw.isEmpty
           ? null
           : DateTime.tryParse(expiresAtRaw),

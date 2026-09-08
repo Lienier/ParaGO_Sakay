@@ -25,6 +25,11 @@ server {
     listen [::]:80 default_server;
     server_name _;
 
+    # CloudFront VPC origin ENIs use private addresses. The security group limits
+    # ingress to CloudFront and the per-distribution secret rejects other origins.
+    set_real_ip_from __TRUSTED_VPC_CIDR__;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive off;
     client_max_body_size 12m;
     client_body_timeout 15s;
     keepalive_timeout 65s;
@@ -33,7 +38,7 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "no-referrer" always;
 
-    if ($http_x_parago_origin != "parago-aws-staging-v1") {
+    if ($http_x_parago_origin != "__ORIGIN_SECRET__") {
         return 403;
     }
 

@@ -1,3 +1,4 @@
+const terminalQueue = require('../services/terminalQueue.service');
 const express = require('express');
 const mongoose = require('mongoose');
 const { ADMIN } = require('../constants/roles');
@@ -150,7 +151,7 @@ const buildHybridDispatchBoard = async () => {
     : [];
 
   return {
-    terminalQueue: terminalTrips,
+    terminalQueue: await Promise.all(terminalTrips.map(terminalQueue.describe)),
     waitingTerminalPassengers: terminalRequests,
     routeDrivers: routeTrips,
   };
@@ -211,27 +212,6 @@ const nextQueueNumberForTripRoute = async (trip) => {
 
 const syncJeepneyAssignment = async (driver, newJeepneyId) => {
 
-const setTerminalQueueStatus = async (trip, terminalQueueStatus) => {
-  const normalizedStatus = normalizeTerminalQueueStatus(terminalQueueStatus, {
-    operatingMode: trip.operatingMode,
-  });
-
-  if (normalizedStatus === 'departed') {
-    trip.terminalQueueStatus = 'departed';
-    await trip.save();
-    await syncTripTerminalQueueToDriver(trip);
-    return trip;
-  }
-
-  if (!['waiting', 'loading'].includes(normalizedStatus)) {
-    throw new ApiError(400, 'terminalQueueStatus must be waiting, loading, or departed');
-  }
-
-  trip.terminalQueueStatus = normalizedStatus;
-  await trip.save();
-  await syncTripTerminalQueueToDriver(trip);
-  return trip;
-};
   const previousJeepneyId = driver.assignedJeepneyId;
   if (previousJeepneyId && String(previousJeepneyId) !== String(newJeepneyId || '')) {
     await Jeepney.updateOne(
@@ -317,127 +297,20 @@ router.get(
   })
 );
 
-router.patch(
-  '/terminal-queue/:tripId/reorder',
-  asyncHandler(async (req, res) => {
-    const direction = String(req.body?.direction || '').trim().toLowerCase();
-    if (!['up', 'down'].includes(direction)) {
-      throw new ApiError(400, 'direction must be up or down');
+for (const endpoint of ['reorder', 'skip', 'status']) {
+  router.patch(`/terminal-queue/:tripId/${endpoint}`, asyncHandler(async (req, res) => {
+    ensureObjectId(req.params.tripId, 'trip id');
+    let action = endpoint;
+    if (endpoint === 'skip') action = req.body.skipped === false ? 'restore' : 'skip';
+    if (endpoint === 'status') {
+      if (req.body.terminalQueueStatus !== 'departed') throw new ApiError(409, 'Loading is managed automatically; use skip/restore for queue changes');
+      action = 'depart';
     }
-
-    const trip = await requireManageableTerminalQueueTrip(req.params.tripId);
-    const queue = await findManageableTerminalQueueTrips(trip);
-    const index = queue.findIndex((entry) => String(entry._id) === String(trip._id));
-    if (index < 0) {
-      throw new ApiError(404, 'Terminal queue trip not found in active queue');
-    }
-
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= queue.length) {
-      return ok(
-        res,
-        await buildHybridDispatchBoard(),
-        'Terminal queue order unchanged'
-      );
-    }
-
-    const neighbor = queue[targetIndex];
-    const currentQueueNumber = Number(trip.terminalQueueNumber || index + 1);
-    const neighborQueueNumber = Number(
-      neighbor.terminalQueueNumber || targetIndex + 1
-    );
-    const siblingQueueNumbers = await TripSession.find({
-      routeId: trip.routeId,
-      status: { $in: ['scheduled', 'active'] },
-      operatingMode: 'terminal_queue',
-    }).select('terminalQueueNumber');
-    const temporaryQueueNumber =
-      nextTerminalQueueNumber(siblingQueueNumbers) + 1000;
-
-    await TripSession.updateOne(
-      { _id: trip._id },
-      { $set: { terminalQueueNumber: temporaryQueueNumber } }
-    );
-    await TripSession.updateOne(
-      { _id: neighbor._id },
-      { $set: { terminalQueueNumber: currentQueueNumber } }
-    );
-    await TripSession.updateOne(
-      { _id: trip._id },
-      { $set: { terminalQueueNumber: neighborQueueNumber } }
-    );
-
-    const [updatedTrip, updatedNeighbor] = await Promise.all([
-      TripSession.findById(trip._id),
-      TripSession.findById(neighbor._id),
-    ]);
-    await Promise.all([
-      syncTripTerminalQueueToDriver(updatedTrip),
-      syncTripTerminalQueueToDriver(updatedNeighbor),
-    ]);
-
-    return ok(
-      res,
-      await buildHybridDispatchBoard(),
-      'Terminal queue order updated'
-    );
-  })
-);
-
-router.patch(
-  '/terminal-queue/:tripId/skip',
-  asyncHandler(async (req, res) => {
-    const trip = await requireManageableTerminalQueueTrip(req.params.tripId);
-    const skipped = req.body?.skipped !== false;
-    const nextQueueNumber = await nextQueueNumberForTripRoute(trip);
-    const acknowledgedTerminalRequests = skipped
-      ? 0
-      : await PickupRequest.countDocuments({
-          tripSessionId: trip._id,
-          pickupType: 'terminal',
-          status: 'acknowledged',
-        });
-
-    trip.terminalQueueStatus = skipped
-      ? 'skipped'
-      : acknowledgedTerminalRequests > 0
-      ? 'loading'
-      : 'waiting';
-    trip.terminalQueueNumber = nextQueueNumber;
-    await trip.save();
-    await syncTripTerminalQueueToDriver(trip);
-
-    return ok(
-      res,
-      await buildHybridDispatchBoard(),
-      skipped ? 'Terminal queue trip skipped' : 'Terminal queue trip restored'
-    );
-  })
-);
-
-router.patch(
-  '/terminal-queue/:tripId/status',
-  asyncHandler(async (req, res) => {
-    const trip = await requireManageableTerminalQueueTrip(req.params.tripId);
-    const terminalQueueStatus = String(req.body?.terminalQueueStatus || '')
-      .trim()
-      .toLowerCase();
-    if (!['waiting', 'loading', 'departed'].includes(terminalQueueStatus)) {
-      throw new ApiError(
-        400,
-        'terminalQueueStatus must be waiting, loading, or departed'
-      );
-    }
-
-    await setTerminalQueueStatus(trip, terminalQueueStatus);
-
-    return ok(
-      res,
-      await buildHybridDispatchBoard(),
-      `Terminal queue trip marked ${terminalQueueStatus}`
-    );
-  })
-);
+    await terminalQueue.change({ tripId: req.params.tripId, actor: req.user, action,
+      direction: req.body.direction, requestId: req.body.requestId, reason: req.body.reason });
+    return ok(res, await buildHybridDispatchBoard(), 'Terminal queue updated');
+  }));
+}
 
 router.get(
   '/drivers',
@@ -753,6 +626,7 @@ router.patch(
         throw new ApiError(404, 'Driver user account not found');
       }
       await invalidateAuthenticatedUser(updatedUser._id);
+      if (accountStatus !== 'active') await require('../services/sessionSecurity.service').revokeSessions({ userId: updatedUser._id });
     }
 
     if (updates.assignedRouteId) {

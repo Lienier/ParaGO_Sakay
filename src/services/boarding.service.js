@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { boardingWindowMinutes } = require('../config/env');
+const { boardingWindowMinutes, autoBoardingProximityMeters, autoBoardingPassengerLocationMaxAgeSeconds, autoBoardingDriverLocationMaxAgeSeconds } = require('../config/env');
 const ApiError = require('../utils/apiError');
 const { haversineMeters } = require('../utils/geo');
 const PickupRequest = require('../models/pickupRequest');
@@ -39,36 +39,7 @@ const ensureTripHasBoardingCapacity = async (trip, { session } = {}) => {
 
 const isDuplicateKeyError = (error) => error?.code === 11000;
 
-const syncTerminalQueueAfterBoarding = async ({ trip, pickupType, now }) => {
-  if (!isTerminalPickupType(pickupType) || trip.operatingMode !== 'terminal_queue') {
-    return;
-  }
-
-  const terminalRequests = await PickupRequest.find({
-    tripSessionId: trip._id,
-    pickupType: 'terminal',
-    status: { $in: ['pending', 'acknowledged'] },
-  }).select('status');
-  const hasAcknowledged = terminalRequests.some(
-    (request) => request.status === 'acknowledged'
-  );
-  trip.terminalQueueStatus = normalizeTerminalQueueStatus(
-    hasAcknowledged ? 'loading' : 'waiting',
-    { operatingMode: trip.operatingMode }
-  );
-  await trip.save();
-  if (trip.driverId) {
-    await Driver.findByIdAndUpdate(trip.driverId, {
-      $set: {
-        operatingMode: trip.operatingMode,
-        terminalQueueStatus: trip.terminalQueueStatus,
-        terminalCheckedInAt: trip.terminalCheckedInAt || trip.startedAt || now,
-        terminalQueueNumber: trip.terminalQueueNumber,
-        terminalStopRef: trip.terminalStopRef,
-      },
-    });
-  }
-};
+const syncTerminalQueueAfterBoarding = async () => {};
 
 const completeBoardingForPickupRequest = async ({
   pickupRequest,
@@ -140,6 +111,7 @@ const completeBoardingForPickupRequest = async ({
   try {
     await session.withTransaction(async () => {
       created = false;
+      if (pickupType === 'terminal') await require('./terminalQueue.service').lock(trip.routeId, session);
       const exactExisting = await RideSession.findOne({
         pickupRequestId: pickupRequest._id,
       }).session(session);
@@ -180,6 +152,18 @@ const completeBoardingForPickupRequest = async ({
       }).session(session);
       if (!freshTrip) {
         throw new ApiError(409, 'Trip session is not active');
+      }
+      if (pickupType === 'terminal') {
+        if (boardingMethod !== 'manual' || freshTrip.operatingMode !== 'terminal_queue' || freshTrip.terminalQueueStatus !== 'loading')
+          throw new ApiError(409, 'Only the assigned loading jeep accepts terminal boarding');
+        const passenger = await require('../models/passenger').findById(passengerId).session(session);
+        const vehicle = await Jeepney.findById(freshTrip.jeepneyId).session(session);
+        const fresh = (date, seconds) => date && Date.now() - new Date(date).getTime() >= 0 && Date.now() - new Date(date).getTime() <= seconds * 1000;
+        const p = passenger?.lastKnownLocation?.coordinates; const v = vehicle?.lastKnownLocation?.coordinates;
+        if (!fresh(passenger?.lastSeenAt, autoBoardingPassengerLocationMaxAgeSeconds) || !fresh(vehicle?.lastSeenAt, autoBoardingDriverLocationMaxAgeSeconds) || p?.length !== 2 || v?.length !== 2)
+          throw new ApiError(409, 'Fresh passenger and driver GPS are required. Refresh location and try again');
+        if (haversineMeters(p[1], p[0], v[1], v[0]) > autoBoardingProximityMeters)
+          throw new ApiError(409, 'Move near your assigned jeep before confirming boarding');
       }
       await ensureTripHasBoardingCapacity(freshTrip, { session });
 
@@ -345,15 +329,12 @@ const validateBoardingAttempt = async ({
   }
 
   if (destinationStopRef || destinationLat != null || destinationLng != null) {
-    pickupRequest.destinationStopRef =
-      String(destinationStopRef || pickupRequest.destinationStopRef || '').trim();
-    pickupRequest.destinationLocation = {
-      type: 'Point',
-      coordinates: [
-        destinationLng != null ? Number(destinationLng) : Number(pickupRequest.destinationLocation?.coordinates?.[0]),
-        destinationLat != null ? Number(destinationLat) : Number(pickupRequest.destinationLocation?.coordinates?.[1]),
-      ],
-    };
+    const saved = pickupRequest.destinationLocation?.coordinates || [];
+    if ((destinationStopRef && String(destinationStopRef).trim() !== pickupRequest.destinationStopRef) ||
+        (destinationLat != null && Number(destinationLat) !== Number(saved[1])) ||
+        (destinationLng != null && Number(destinationLng) !== Number(saved[0]))) {
+      throw new ApiError(409, 'Boarding must use the booked destination and fare');
+    }
   }
 
   return completeBoardingForPickupRequest({

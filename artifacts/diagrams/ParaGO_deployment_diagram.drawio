@@ -1,1 +1,274 @@
-<?xml version="1.0" encoding="utf-8"?><mxfile host="app.diagrams.net" modified="2026-08-25T00:00:00.000Z" agent="ParaGO Codex" version="24.7.17"><diagram id="ParaGO-Deployment" name="ParaGO Deployment Diagram"><mxGraphModel dx="1500" dy="1050" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="1050" math="0" shadow="0" background="#FFFFFF"><root><mxCell id="0" /><mxCell id="1" parent="0" /><mxCell id="14" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#202124;fontSize=11;fontFamily=Arial;labelBackgroundColor=#FFFFFF;jumpStyle=arc;jumpSize=8;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=1;entryPerimeter=1;" edge="1" parent="1" source="3" target="7"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="15" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#202124;fontSize=11;fontFamily=Arial;labelBackgroundColor=#FFFFFF;jumpStyle=arc;jumpSize=8;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=1;entryPerimeter=1;" edge="1" parent="1" source="4" target="7"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="16" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#202124;fontSize=11;fontFamily=Arial;labelBackgroundColor=#FFFFFF;jumpStyle=arc;jumpSize=8;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitPerimeter=1;entryPerimeter=1;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="17" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#202124;fontSize=11;fontFamily=Arial;labelBackgroundColor=#FFFFFF;jumpStyle=arc;jumpSize=8;exitX=0.5;exitY=0;entryX=0.5;entryY=1;exitPerimeter=1;entryPerimeter=1;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="340" y="690" /><mxPoint x="340" y="282" /></Array></mxGeometry></mxCell><mxCell id="18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#202124;fontSize=11;fontFamily=Arial;labelBackgroundColor=#FFFFFF;jumpStyle=arc;jumpSize=8;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=1;entryPerimeter=1;" edge="1" parent="1" source="7" target="8"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="19" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#202124;fontSize=11;fontFamily=Arial;labelBackgroundColor=#FFFFFF;jumpStyle=arc;jumpSize=8;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitPerimeter=1;entryPerimeter=1;" edge="1" parent="1" source="8" target="9"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="20" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#202124;fontSize=11;fontFamily=Arial;labelBackgroundColor=#FFFFFF;jumpStyle=arc;jumpSize=8;exitX=0;exitY=0.5;entryX=1;entryY=0.5;exitPerimeter=1;entryPerimeter=1;" edge="1" parent="1" source="8" target="10"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="780" y="282" /><mxPoint x="780" y="542" /></Array></mxGeometry></mxCell><mxCell id="21" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#202124;fontSize=11;fontFamily=Arial;labelBackgroundColor=#FFFFFF;jumpStyle=arc;jumpSize=8;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitPerimeter=1;entryPerimeter=1;" edge="1" parent="1" source="8" target="11"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1160" y="282" /><mxPoint x="1160" y="872" /></Array></mxGeometry></mxCell><mxCell id="22" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#202124;fontSize=11;fontFamily=Arial;labelBackgroundColor=#FFFFFF;jumpStyle=arc;jumpSize=8;exitX=0.5;exitY=0;entryX=0.5;entryY=1;exitPerimeter=1;entryPerimeter=1;" edge="1" parent="1" source="12" target="8"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="970" y="780" /><mxPoint x="970" y="360" /></Array></mxGeometry></mxCell><mxCell id="23" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#202124;fontSize=11;fontFamily=Arial;labelBackgroundColor=#FFFFFF;jumpStyle=arc;jumpSize=8;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitPerimeter=1;entryPerimeter=1;" edge="1" parent="1" source="3" target="12"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="24" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#202124;fontSize=11;fontFamily=Arial;labelBackgroundColor=#FFFFFF;jumpStyle=arc;jumpSize=8;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitPerimeter=1;entryPerimeter=1;" edge="1" parent="1" source="4" target="12"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="25" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#202124;fontSize=11;dashed=1;fontFamily=Arial;labelBackgroundColor=#FFFFFF;jumpStyle=arc;jumpSize=8;exitX=0.5;exitY=0;entryX=0.5;entryY=1;exitPerimeter=1;entryPerimeter=1;" edge="1" parent="1" source="13" target="7"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="2" value="AWS staging deployment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#94a3b8;fontColor=#334155;fontStyle=1;fontSize=16;verticalAlign=top;spacingTop=12;fontFamily=Arial;" vertex="1" parent="1"><mxGeometry x="380" y="120" width="820" height="830" as="geometry" /></mxCell><mxCell id="3" value="&lt;&lt;device&gt;&gt;&#xA;Passenger Android Device&#xA;&lt;&lt;artifact&gt;&gt; Passenger APK" style="shape=cube;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#315b7d;fontColor=#102a43;fontSize=14;fontStyle=1;spacing=8;fontFamily=Arial;" vertex="1" parent="1"><mxGeometry x="40" y="150" width="250" height="120" as="geometry" /></mxCell><mxCell id="4" value="&lt;&lt;device&gt;&gt;&#xA;Driver Android Device&#xA;&lt;&lt;artifact&gt;&gt; Driver APK" style="shape=cube;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#315b7d;fontColor=#102a43;fontSize=14;fontStyle=1;spacing=8;fontFamily=Arial;" vertex="1" parent="1"><mxGeometry x="40" y="310" width="250" height="120" as="geometry" /></mxCell><mxCell id="5" value="&lt;&lt;device&gt;&gt;&#xA;Admin Computer&#xA;&lt;&lt;artifact&gt;&gt; Browser" style="shape=cube;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#315b7d;fontColor=#102a43;fontSize=14;fontStyle=1;spacing=8;fontFamily=Arial;" vertex="1" parent="1"><mxGeometry x="40" y="470" width="250" height="120" as="geometry" /></mxCell><mxCell id="6" value="&lt;&lt;node&gt;&gt; Vercel&#xA;&lt;&lt;artifact&gt;&gt; Admin web application" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#c2410c;fontColor=#7c2d12;fontSize=14;fontStyle=1;spacing=8;fontFamily=Arial;" vertex="1" parent="1"><mxGeometry x="40" y="630" width="270" height="120" as="geometry" /></mxCell><mxCell id="7" value="&lt;&lt;node&gt;&gt; CloudFront&#xA;HTTPS API and Socket.IO entry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#c2410c;fontColor=#7c2d12;fontSize=14;fontStyle=1;spacing=8;fontFamily=Arial;" vertex="1" parent="1"><mxGeometry x="450" y="230" width="260" height="105" as="geometry" /></mxCell><mxCell id="8" value="&lt;&lt;node&gt;&gt; Private EC2 instance&#xA;Node.js / Express API&#xA;Socket.IO + worker" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef6ff;strokeColor=#315b7d;fontColor=#102a43;fontSize=14;fontStyle=1;spacing=8;fontFamily=Arial;" vertex="1" parent="1"><mxGeometry x="820" y="230" width="300" height="105" as="geometry" /></mxCell><mxCell id="9" value="&lt;&lt;node&gt;&gt; AWS Valkey&#xA;Redis-compatible cache and queue" style="shape=cylinder;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#16803c;fontColor=#14532d;fontSize=14;fontStyle=1;spacing=8;fontFamily=Arial;" vertex="1" parent="1"><mxGeometry x="820" y="500" width="300" height="85" as="geometry" /></mxCell><mxCell id="10" value="&lt;&lt;node&gt;&gt; SSM Parameter Store&#xA;SecureString configuration" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#c2410c;fontColor=#7c2d12;fontSize=14;fontStyle=1;spacing=8;fontFamily=Arial;" vertex="1" parent="1"><mxGeometry x="450" y="500" width="260" height="85" as="geometry" /></mxCell><mxCell id="11" value="&lt;&lt;node&gt;&gt; MongoDB Atlas&#xA;&lt;&lt;database&gt;&gt; Durable system data" style="shape=cylinder;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#16803c;fontColor=#14532d;fontSize=14;fontStyle=1;spacing=8;fontFamily=Arial;" vertex="1" parent="1"><mxGeometry x="920" y="820" width="300" height="105" as="geometry" /></mxCell><mxCell id="12" value="&lt;&lt;node&gt;&gt; Firebase Authentication&#xA;Email/password + Google" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#c2410c;fontColor=#7c2d12;fontSize=14;fontStyle=1;spacing=8;fontFamily=Arial;" vertex="1" parent="1"><mxGeometry x="470" y="820" width="300" height="105" as="geometry" /></mxCell><mxCell id="13" value="&lt;&lt;node&gt;&gt; DigitalOcean&#xA;Archived fallback only" style="shape=cube;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#64748b;dashed=1;fontColor=#334155;fontSize=14;fontStyle=1;spacing=8;fontFamily=Arial;" vertex="1" parent="1"><mxGeometry x="40" y="840" width="300" height="105" as="geometry" /></mxCell><mxCell id="page-title-deployment" value="ParaGO Deployment Diagram" style="text;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=22;fontStyle=1;fontColor=#17324D;spacing=4;" vertex="1" parent="1"><mxGeometry x="50" y="25" width="1400" height="30" as="geometry" /></mxCell><mxCell id="driver-documents-s3" value="&lt;&lt;node&gt;&gt; Private Amazon S3&#xA;Encrypted driver license documents" style="shape=cylinder;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#16803c;fontColor=#14532d;fontSize=14;fontStyle=1;spacing=8;fontFamily=Arial;" vertex="1" parent="1"><mxGeometry x="820" y="650" width="300" height="95" as="geometry" /></mxCell><mxCell id="driver-documents-edge" value="private signed access" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#202124;fontSize=11;fontFamily=Arial;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitPerimeter=1;entryPerimeter=1;" edge="1" parent="1" source="8" target="driver-documents-s3"><mxGeometry relative="1" as="geometry" /></mxCell></root></mxGraphModel></diagram></mxfile>
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="app.diagrams.net" agent="ParaGO schema/source generator" version="24.7.17">
+  <diagram id="parago-aws-staging-deployment" name="ParaGO AWS Staging Deployment">
+    <mxGraphModel grid="1" gridSize="10" page="1" pageScale="1" pageWidth="2280" pageHeight="1580" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="aws" value="AWS staging resources (not external identity or database ownership)" style="rounded=0;verticalAlign=top;spacingTop=12;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#f8fafc;strokeColor=#94a3b8;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="boundary">
+          <mxGeometry x="650" y="130" width="980" height="1260" as="geometry" />
+        </mxCell>
+        <mxCell id="ec2" value="Private EC2 instance" style="rounded=0;verticalAlign=top;spacingTop=12;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#f8fafc;strokeColor=#94a3b8;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="boundary">
+          <mxGeometry x="720" y="430" width="840" height="540" as="geometry" />
+        </mxCell>
+        <mxCell id="page-title" value="ParaGO AWS Staging Deployment" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=22;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="30" y="15" width="2220" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="page-subtitle" value="Checked-in infrastructure and client defaults; deployed resources and build overrides require runtime verification" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="30" y="65" width="2220" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-0" value="Fetch web assets" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="browser" target="vercel">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-1" value="API / realtime" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="browser" target="cloudfront">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="900" y="260.0" />
+              <mxPoint x="900" y="280.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-2" value="API / realtime" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="passenger" target="cloudfront">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="760" y="740.0" />
+              <mxPoint x="760" y="280.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-3" value="API / realtime" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="driver" target="cloudfront">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="740" y="960.0" />
+              <mxPoint x="740" y="340" />
+              <mxPoint x="900" y="340" />
+              <mxPoint x="900" y="280.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-4" value="VPC origin HTTP" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="cloudfront" target="nginx">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1120.0" y="470" />
+              <mxPoint x="1140.0" y="470" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-5" value="Proxy :5000" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=0.5;exitY=1;entryX=1;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="nginx" target="api">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1140.0" y="750.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-6" value="Read / write" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="api" target="atlas">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1750" y="750.0" />
+              <mxPoint x="1750" y="280.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-7" value="Background records" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="worker" target="atlas">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1730" y="850" />
+              <mxPoint x="1730" y="280.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-8" value="Cache / queue / pubsub" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="api" target="valkey">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="950.0" y="1030" />
+              <mxPoint x="970.0" y="1030" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-9" value="Consume / publish" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=0;exitY=0.5;entryX=1;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="worker" target="valkey">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1160" y="850" />
+              <mxPoint x="1160" y="1110.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-10" value="Runtime config" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="api" target="ssm">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1140.0" y="750.0" />
+              <mxPoint x="1140.0" y="1030" />
+              <mxPoint x="1200" y="1030" />
+              <mxPoint x="1200" y="1110.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-11" value="Logs" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=0.5;exitY=1;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="api" target="logs">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="950.0" y="830" />
+              <mxPoint x="1120.0" y="830" />
+              <mxPoint x="1120.0" y="1010" />
+              <mxPoint x="1180" y="1010" />
+              <mxPoint x="1180" y="1295.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-12" value="Upload / delete objects" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=0;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="api" target="s3">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="760" y="750.0" />
+              <mxPoint x="760" y="1295.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-13" value="Presigned GET" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="browser" target="s3">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="500" y="260.0" />
+              <mxPoint x="500" y="1260" />
+              <mxPoint x="780" y="1260" />
+              <mxPoint x="780" y="1295.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-14" value="Google identity" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="passenger" target="firebase">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="520" y="740.0" />
+              <mxPoint x="520" y="610" />
+              <mxPoint x="1600" y="610" />
+              <mxPoint x="1600" y="530.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-15" value="Verify ID token" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="api" target="firebase">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1140.0" y="750.0" />
+              <mxPoint x="1140.0" y="740.0" />
+              <mxPoint x="1580" y="740.0" />
+              <mxPoint x="1580" y="540.0" />
+              <mxPoint x="1750" y="540.0" />
+              <mxPoint x="1750" y="530.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-16" value="ETA / preview" style="edgeStyle=none;rounded=0;html=1;noLabel=1;strokeColor=#536675;strokeWidth=1.5;endArrow=block;endFill=1;jumpStyle=gap;jumpSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;" edge="1" parent="1" source="api" target="routing">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1160" y="750.0" />
+              <mxPoint x="1160" y="770" />
+              <mxPoint x="1750" y="770" />
+              <mxPoint x="1750" y="810" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="browser" value="Admin browser&lt;br&gt;Flutter web client" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#edf4fc;strokeColor=#315b7d;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="user">
+          <mxGeometry x="80" y="200" width="400" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="vercel" value="Vercel&lt;br&gt;Static admin web assets" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#fff2e8;strokeColor=#aa5017;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="system">
+          <mxGeometry x="80" y="430" width="400" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="passenger" value="Passenger Android application" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#edf4fc;strokeColor=#315b7d;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="user">
+          <mxGeometry x="80" y="690" width="400" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="driver" value="Driver Android application" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#edf4fc;strokeColor=#315b7d;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="user">
+          <mxGeometry x="80" y="910" width="400" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="cloudfront" value="CloudFront&lt;br&gt;HTTPS API + configured Socket.IO&lt;br&gt;VPC origin: HTTP port 80" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#fff2e8;strokeColor=#aa5017;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="system">
+          <mxGeometry x="920" y="210" width="400" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="nginx" value="NGINX :80&lt;br&gt;Origin-header check and reverse proxy" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#fff2e8;strokeColor=#aa5017;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="system">
+          <mxGeometry x="940" y="490" width="400" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="api" value="Node.js / Express :5000&lt;br&gt;REST API + Socket.IO process" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#fff2e8;strokeColor=#aa5017;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="system">
+          <mxGeometry x="780" y="690" width="340" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="worker" value="Separate Node.js worker process&lt;br&gt;Background jobs and event publication" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#fff2e8;strokeColor=#aa5017;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="system">
+          <mxGeometry x="1180" y="790" width="340" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="valkey" value="Private Valkey (TLS)&lt;br&gt;Cache, job queue and operational pub/sub" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#eaf7ee;strokeColor=#287447;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="data">
+          <mxGeometry x="800" y="1050" width="340" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="ssm" value="SSM Parameter Store + KMS&lt;br&gt;Secure runtime configuration" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#eaf7ee;strokeColor=#287447;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="data">
+          <mxGeometry x="1220" y="1050" width="340" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="s3" value="Private S3&lt;br&gt;Encrypted driver-license image objects" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#eaf7ee;strokeColor=#287447;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="data">
+          <mxGeometry x="800" y="1240" width="340" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="logs" value="CloudWatch&lt;br&gt;Logs and monitoring" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#fff2e8;strokeColor=#aa5017;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="system">
+          <mxGeometry x="1220" y="1240" width="340" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="atlas" value="External: MongoDB Atlas&lt;br&gt;Durable users, trips, rides and document metadata" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#eaf7ee;strokeColor=#287447;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="data">
+          <mxGeometry x="1770" y="210" width="400" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="firebase" value="External: Firebase / Google&lt;br&gt;Passenger Google sign-in only" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#fff2e8;strokeColor=#aa5017;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="system">
+          <mxGeometry x="1770" y="470" width="400" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="routing" value="External: Google Routes / TomTom&lt;br&gt;Traffic ETA and route preview" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#fff2e8;strokeColor=#aa5017;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="system">
+          <mxGeometry x="1770" y="750" width="400" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="fallback" value="Alternative DigitalOcean API endpoint&lt;br&gt;Client candidate when configured and healthy&lt;br&gt;Not a CloudFront origin or automatic AWS failover" style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=15;fontStyle=0;fontColor=#17324d;fillColor=#f5f7fa;strokeColor=#8a98a6;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="note">
+          <mxGeometry x="1770" y="1070" width="400" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" value="Local email/password is checked by the backend against MongoDB.&lt;br&gt;Realtime and API candidates depend on build configuration. S3 document&lt;br&gt;URLs expire after 300 seconds. Lines show initiated requests /&lt;br&gt;dependencies; responses return to the caller." style="rounded=1;arcSize=8;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=13;fontStyle=0;fontColor=#17324d;fillColor=#f5f7fa;strokeColor=#8a98a6;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="note">
+          <mxGeometry x="80" y="1280" width="470" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="label-0" value="Fetch web assets" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="223.0" y="363.0" width="114.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-1" value="API / realtime" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="687.0" y="248.0" width="90.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-2" value="API / realtime" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="547.0" y="728.0" width="90.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-3" value="API / realtime" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="539.0" y="948.0" width="90.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-4" value="VPC origin HTTP" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="1066.0" y="398.0" width="108.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-5" value="Proxy :5000" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="1098.5" y="658.0" width="83.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-6" value="Read / write" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="1394.5" y="738.0" width="81.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-7" value="Background records" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="1664.0" y="610.0" width="132.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-8" value="Cache / queue / pubsub" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="877.0" y="908.0" width="146.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-9" value="Consume / publish" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="1100.5" y="942.0" width="119.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-10" value="Runtime config" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="1090.0" y="990.0" width="100.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-11" value="Logs" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="929.0" y="816.0" width="42.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-12" value="Upload / delete objects" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="688.5" y="1010.5" width="143.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-13" value="Presigned GET" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="450.5" y="648.0" width="99.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-14" value="Google identity" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="470.5" y="611.0" width="99.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-15" value="Verify ID token" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="1267.0" y="728.0" width="98.0" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="label-16" value="ETA / preview" style="text;html=1;whiteSpace=wrap;align=center;fontFamily=Arial;fontSize=12;fontStyle=1;fontColor=#17324d;fillColor=#ffffff;strokeColor=none;strokeWidth=1.5;spacing=8;" vertex="1" parent="1" data-kind="label">
+          <mxGeometry x="1291.0" y="758.0" width="92.0" height="24" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

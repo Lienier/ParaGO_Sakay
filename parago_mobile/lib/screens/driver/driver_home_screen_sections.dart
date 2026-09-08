@@ -517,7 +517,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       onTogglePickup: focusedTrip == null ||
               _loading ||
               focusedTrip.status != 'active' ||
-              (focusedTrip.acceptRequests == false &&
+              (focusedTrip.operatingMode != 'terminal_queue' &&
+                  focusedTrip.acceptRequests == false &&
                   pickupRequirementMessage != null)
           ? null
           : () => _toggleAccept(
@@ -609,7 +610,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           onTogglePickup: liveTrip == null ||
                   _loading ||
                   liveTrip.status != 'active' ||
-                  (liveTrip.acceptRequests == false &&
+                  (liveTrip.operatingMode != 'terminal_queue' &&
+                      liveTrip.acceptRequests == false &&
                       livePickupRequirement != null)
               ? null
               : () => _toggleAccept(

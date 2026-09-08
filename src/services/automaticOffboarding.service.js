@@ -3,7 +3,6 @@ const {
   autoOffboardingDistanceMeters,
   autoOffboardingDriverLocationMaxAgeSeconds,
   autoOffboardingPassengerLocationMaxAgeSeconds,
-  autoOffboardingSustainedSeparationSeconds,
 } = require('../config/env');
 const Jeepney = require('../models/jeepney');
 const Passenger = require('../models/passenger');
@@ -14,6 +13,8 @@ const {
   evaluateAutoOffboardingSeparation,
 } = require('../utils/automaticOffboarding');
 const { completeRideSession } = require('./rideCompletion.service');
+
+const MAX_AUTOMATION_LOCATION_AGE_SECONDS = 15;
 
 const pointCoordinates = (value) => {
   const coordinates = Array.isArray(value?.coordinates) ? value.coordinates : [];
@@ -43,7 +44,11 @@ const isFresh = (value, maxAgeSeconds, now) => {
   if (Number.isNaN(time.getTime())) {
     return false;
   }
-  return now.getTime() - time.getTime() <= Number(maxAgeSeconds || 0) * 1000;
+  const configuredMaxAge = Number(maxAgeSeconds);
+  const maxAgeSecondsAtMost15 = Number.isFinite(configuredMaxAge)
+    ? Math.min(configuredMaxAge, MAX_AUTOMATION_LOCATION_AGE_SECONDS)
+    : MAX_AUTOMATION_LOCATION_AGE_SECONDS;
+  return now.getTime() - time.getTime() <= maxAgeSecondsAtMost15 * 1000;
 };
 
 const resetAutoOffboardingWindow = async (ride, now) => {
@@ -99,7 +104,6 @@ const processAutomaticOffboardingForRide = async ({
     now,
     separationMeters: autoOffboardingDistanceMeters,
     consecutiveOutsideChecks: autoOffboardingConsecutiveOutsideChecks,
-    sustainedSeparationSeconds: autoOffboardingSustainedSeparationSeconds,
   });
 
   if (!evaluation.outside) {

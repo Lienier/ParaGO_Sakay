@@ -7,6 +7,14 @@ class PassengerService {
 
   final ApiClient _client;
 
+  Future<void> decideTransfer(PickupRequestModel request, bool accept) async {
+    await _client.request(
+        method: 'POST',
+        path:
+            '/pickup-requests/${request.id}/transfer/${accept ? "accept" : "decline"}',
+        body: {'offerId': request.transferOfferId});
+  }
+
   Future<List<PickupRequestModel>> getMyPickupRequests({
     bool useCache = true,
   }) async {

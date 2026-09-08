@@ -1,3 +1,5 @@
+import '../widgets/forgot_password_link.dart';
+import '../widgets/legal_pages.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -372,6 +374,9 @@ class _AuthScreenState extends State<AuthScreen> {
                             child: const Text('LOGIN'),
                           ),
                           const SizedBox(height: 16),
+                          const ForgotPasswordLink(
+                              foregroundColor: Colors.white),
+                          const LegalLinks(foregroundColor: Colors.white),
                           if (_loading) ...[
                             const SizedBox(height: 16),
                             ClipRRect(

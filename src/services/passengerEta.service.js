@@ -23,6 +23,7 @@ const ETA_CACHE_TTL_MS = 25 * 1000;
 const VEHICLE_LOCATION_MAX_AGE_MS = 60 * 1000;
 const MAX_GOOGLE_VIA_POINTS = 10;
 const etaCache = new Map();
+const MAX_LOCAL_ETA_ENTRIES = 1000;
 const pendingEtaRequests = new Map();
 
 const normalizeDestination = (value) => {
@@ -275,98 +276,104 @@ const calculatePassengerEta = async ({ tripId, destination }) => {
     destination: normalizedDestination,
   });
   const now = new Date();
-  const cached = readCachedEta(cacheKey, now);
-  if (cached) {
-    return cached;
+  const trip = await TripSession.findById(tripId).populate(
+    'jeepneyId',
+    'plateNumber status lastKnownLocation lastSeenAt'
+  );
+  if (!trip) {
+    throw new ApiError(404, 'Trip not found');
+  }
+  if (trip.status !== 'active' || trip.active === false) {
+    throw new ApiError(409, 'Passenger ETA requires an active trip');
   }
 
-  const pending = pendingEtaRequests.get(cacheKey);
-  if (pending) {
-    return pending;
+  const jeepney = trip.jeepneyId;
+  if (!jeepney || jeepney.status !== 'active') {
+    throw new ApiError(409, 'The trip jeepney is not active');
+  }
+  const transientLocation = await getLatestJeepLocation(jeepney._id);
+  const cachedLocation = validTransientLocation(transientLocation.value);
+  const mongoCoordinates = pointCoordinates(jeepney.lastKnownLocation);
+  const mongoLastSeenAt = jeepney.lastSeenAt
+    ? new Date(jeepney.lastSeenAt)
+    : null;
+  const useCachedLocation =
+    cachedLocation &&
+    (!mongoLastSeenAt ||
+      Number.isNaN(mongoLastSeenAt.getTime()) ||
+      cachedLocation.lastSeenAt >= mongoLastSeenAt);
+  const jeepneyCoordinates = useCachedLocation
+    ? [cachedLocation.longitude, cachedLocation.latitude]
+    : mongoCoordinates;
+  const locationLastSeenAt = useCachedLocation
+    ? cachedLocation.lastSeenAt
+    : mongoLastSeenAt;
+  const lastSeenAt = locationLastSeenAt
+    ? new Date(locationLastSeenAt)
+    : null;
+  if (
+    !jeepneyCoordinates ||
+    !lastSeenAt ||
+    Number.isNaN(lastSeenAt.getTime()) ||
+    now.getTime() - lastSeenAt.getTime() > VEHICLE_LOCATION_MAX_AGE_MS
+  ) {
+    throw new ApiError(409, 'The jeepney location is not fresh enough for ETA');
   }
 
+  const route = await Route.findById(trip.routeId);
+  const routeGeometry = buildRouteGeometry({ trip, route });
+  const origin = {
+    latitude: jeepneyCoordinates[1],
+    longitude: jeepneyCoordinates[0],
+  };
+  const routeSegment = buildRouteSegment({
+    route: routeGeometry,
+    origin,
+    destination: normalizedDestination,
+  });
+  // Validate current trip, GPS and route progress before consulting either cache.
+  // Movement gets a new key instead of reusing an ETA from an old origin.
+  const validatedKey = `${cacheKey}:${roundedCoordinate(origin.latitude)}:${roundedCoordinate(origin.longitude)}`;
+  const cached = readCachedEta(validatedKey, new Date());
+  if (cached) return cached;
+  const pending = pendingEtaRequests.get(validatedKey);
+  if (pending) return pending;
   const request = coalesceEtaRequest({
-    key: cacheKey,
+    key: validatedKey,
     ttlSeconds: Math.ceil(ETA_CACHE_TTL_MS / 1000),
     loader: async () => {
-    const trip = await TripSession.findById(tripId).populate(
-      'jeepneyId',
-      'plateNumber status lastKnownLocation lastSeenAt'
-    );
-    if (!trip) {
-      throw new ApiError(404, 'Trip not found');
-    }
-    if (trip.status !== 'active' || trip.active === false) {
-      throw new ApiError(409, 'Passenger ETA requires an active trip');
-    }
+      const googleEta = await requestGoogleEta({
+        origin,
+        destination: routeSegment.destination,
+        viaPoints: routeSegment.viaPoints,
+      });
+      const calculatedAt = new Date();
+      const expiresAt = new Date(Math.min(
+        calculatedAt.getTime() + ETA_CACHE_TTL_MS,
+        lastSeenAt.getTime() + VEHICLE_LOCATION_MAX_AGE_MS
+      ));
+      const payload = {
+        tripId: String(trip._id),
+        jeepneyId: String(jeepney._id),
+        plateNumber: jeepney.plateNumber,
+        ...googleEta,
+        source: 'google',
+        vehicleLocationLastSeenAt: lastSeenAt.toISOString(),
+        calculatedAt: calculatedAt.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+      };
 
-    const jeepney = trip.jeepneyId;
-    if (!jeepney || jeepney.status !== 'active') {
-      throw new ApiError(409, 'The trip jeepney is not active');
-    }
-    const transientLocation = await getLatestJeepLocation(jeepney._id);
-    const cachedLocation = validTransientLocation(transientLocation.value);
-    const mongoCoordinates = pointCoordinates(jeepney.lastKnownLocation);
-    const mongoLastSeenAt = jeepney.lastSeenAt
-      ? new Date(jeepney.lastSeenAt)
-      : null;
-    const useCachedLocation =
-      cachedLocation &&
-      (!mongoLastSeenAt ||
-        Number.isNaN(mongoLastSeenAt.getTime()) ||
-        cachedLocation.lastSeenAt >= mongoLastSeenAt);
-    const jeepneyCoordinates = useCachedLocation
-      ? [cachedLocation.longitude, cachedLocation.latitude]
-      : mongoCoordinates;
-    const locationLastSeenAt = useCachedLocation
-      ? cachedLocation.lastSeenAt
-      : mongoLastSeenAt;
-    const lastSeenAt = locationLastSeenAt
-      ? new Date(locationLastSeenAt)
-      : null;
-    if (
-      !jeepneyCoordinates ||
-      !lastSeenAt ||
-      Number.isNaN(lastSeenAt.getTime()) ||
-      now.getTime() - lastSeenAt.getTime() > VEHICLE_LOCATION_MAX_AGE_MS
-    ) {
-      throw new ApiError(409, 'The jeepney location is not fresh enough for ETA');
-    }
-
-    const route = await Route.findById(trip.routeId);
-    const routeGeometry = buildRouteGeometry({ trip, route });
-    const origin = {
-      latitude: jeepneyCoordinates[1],
-      longitude: jeepneyCoordinates[0],
-    };
-    const routeSegment = buildRouteSegment({
-      route: routeGeometry,
-      origin,
-      destination: normalizedDestination,
-    });
-    const googleEta = await requestGoogleEta({
-      origin,
-      destination: routeSegment.destination,
-      viaPoints: routeSegment.viaPoints,
-    });
-    const calculatedAt = new Date();
-    const expiresAt = new Date(calculatedAt.getTime() + ETA_CACHE_TTL_MS);
-    const payload = {
-      tripId: String(trip._id),
-      jeepneyId: String(jeepney._id),
-      plateNumber: jeepney.plateNumber,
-      ...googleEta,
-      source: 'google',
-      vehicleLocationLastSeenAt: lastSeenAt.toISOString(),
-      calculatedAt: calculatedAt.toISOString(),
-      expiresAt: expiresAt.toISOString(),
-    };
-
-    return payload;
+      return payload;
     },
   }).then((payload) => {
     const expiresAtMs = Date.parse(payload.expiresAt);
-    etaCache.set(cacheKey, {
+    for (const [key, entry] of etaCache) {
+      if (entry.expiresAtMs <= Date.now()) etaCache.delete(key);
+    }
+    if (etaCache.size >= MAX_LOCAL_ETA_ENTRIES) {
+      etaCache.delete(etaCache.keys().next().value);
+    }
+    etaCache.set(validatedKey, {
       payload,
       expiresAtMs: Number.isFinite(expiresAtMs)
         ? expiresAtMs
@@ -374,10 +381,10 @@ const calculatePassengerEta = async ({ tripId, destination }) => {
     });
     return payload;
   }).finally(() => {
-    pendingEtaRequests.delete(cacheKey);
+    pendingEtaRequests.delete(validatedKey);
   });
 
-  pendingEtaRequests.set(cacheKey, request);
+  pendingEtaRequests.set(validatedKey, request);
   return request;
 };
 

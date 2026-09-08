@@ -1,0 +1,3515 @@
+[
+  {
+    "name": "01 - End-to-End Transportation Process",
+    "purpose": "High-level algorithm from operational setup to completed passenger ride.",
+    "participants": "Admin, Driver, Passenger, ParaGO System",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Start ParaGO operation",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "setup",
+        "text": "Admin configures drivers, jeepneys, routes, stops, fares, and terminal settings",
+        "kind": "user",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "trip",
+        "text": "Driver goes online and starts an assigned route or terminal trip",
+        "kind": "user",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "search",
+        "text": "Passenger selects route, pickup type and points; previews jeepneys",
+        "kind": "user",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "request",
+        "text": "System validates and assigns the pickup request to an eligible trip",
+        "kind": "system",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "ack",
+        "text": "Driver acknowledges the assigned request",
+        "kind": "user",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "board",
+        "text": "Passenger boards manually or through confirmed proximity",
+        "kind": "system",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "ride",
+        "text": "System tracks the ride, location, occupancy, and notifications",
+        "kind": "system",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "alert",
+        "text": "Optional digital para; continue ride if no alert",
+        "kind": "user",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "unload",
+        "text": "Passenger unloads manually or through confirmed separation",
+        "kind": "system",
+        "col": 1,
+        "row": 9
+      },
+      {
+        "id": "complete",
+        "text": "Complete ride and decrease occupancy; reports query saved records",
+        "kind": "process",
+        "col": 1,
+        "row": 10
+      },
+      {
+        "id": "end",
+        "text": "End of passenger ride",
+        "kind": "end",
+        "col": 1,
+        "row": 11
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "setup",
+        "label": ""
+      },
+      {
+        "source": "setup",
+        "target": "trip",
+        "label": ""
+      },
+      {
+        "source": "trip",
+        "target": "search",
+        "label": ""
+      },
+      {
+        "source": "search",
+        "target": "request",
+        "label": ""
+      },
+      {
+        "source": "request",
+        "target": "ack",
+        "label": ""
+      },
+      {
+        "source": "ack",
+        "target": "board",
+        "label": ""
+      },
+      {
+        "source": "board",
+        "target": "ride",
+        "label": ""
+      },
+      {
+        "source": "ride",
+        "target": "alert",
+        "label": ""
+      },
+      {
+        "source": "alert",
+        "target": "unload",
+        "label": ""
+      },
+      {
+        "source": "unload",
+        "target": "complete",
+        "label": ""
+      },
+      {
+        "source": "complete",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "02 - Registration, Login, and Role Authorization",
+    "purpose": "Creates or authenticates an account and allows only the correct application role.",
+    "participants": "Admin, Driver, Passenger",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Open ParaGO application",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "choice",
+        "text": "Register a new passenger or sign in?",
+        "kind": "decision",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "register",
+        "text": "Passenger: full name, email and password; or Google sign-in",
+        "kind": "process",
+        "col": 0,
+        "row": 2
+      },
+      {
+        "id": "login",
+        "text": "All roles: local email/password. Passenger may choose Google",
+        "kind": "process",
+        "col": 2,
+        "row": 2
+      },
+      {
+        "id": "validate",
+        "text": "Local registration creates a password hash; local login verifies it. Passenger Google sign-in verifies an identity token",
+        "kind": "system",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "valid",
+        "text": "Is the identity valid and active?",
+        "kind": "decision",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "error",
+        "text": "Show a safe authentication error",
+        "kind": "warning",
+        "col": 2,
+        "row": 5
+      },
+      {
+        "id": "role",
+        "text": "Does the account role match this application?",
+        "kind": "decision",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "blocked",
+        "text": "Block access and return to sign-in",
+        "kind": "warning",
+        "col": 2,
+        "row": 6
+      },
+      {
+        "id": "tokens",
+        "text": "Backend issues ParaGO access and refresh tokens; client stores session",
+        "kind": "system",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "home",
+        "text": "Open the correct dashboard or home screen",
+        "kind": "process",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "end",
+        "text": "Authentication attempt finished",
+        "kind": "end",
+        "col": 1,
+        "row": 8
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "choice",
+        "label": ""
+      },
+      {
+        "source": "choice",
+        "target": "register",
+        "label": "Register"
+      },
+      {
+        "source": "choice",
+        "target": "login",
+        "label": "Sign in"
+      },
+      {
+        "source": "register",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "login",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "validate",
+        "target": "valid",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "error",
+        "label": "No"
+      },
+      {
+        "source": "error",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "role",
+        "label": "Yes"
+      },
+      {
+        "source": "role",
+        "target": "blocked",
+        "label": "No"
+      },
+      {
+        "source": "blocked",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "role",
+        "target": "tokens",
+        "label": "Yes"
+      },
+      {
+        "source": "tokens",
+        "target": "home",
+        "label": ""
+      },
+      {
+        "source": "home",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "03 - Session Restore, Token Rotation, and Logout",
+    "purpose": "Keeps a valid user signed in and safely ends or replaces expired sessions.",
+    "participants": "Admin, Driver, Passenger",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Application starts",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "read",
+        "text": "Read locally stored session credentials",
+        "kind": "system",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "stored",
+        "text": "Are stored credentials available?",
+        "kind": "decision",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "signin",
+        "text": "Show the sign-in screen",
+        "kind": "process",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "access",
+        "text": "Does GET /auth/me accept the stored access token and role?",
+        "kind": "decision",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "refresh",
+        "text": "Send the refresh credential to the backend",
+        "kind": "system",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "refreshok",
+        "text": "Is the refresh credential valid and not revoked?",
+        "kind": "decision",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "rotate",
+        "text": "Revoke the old refresh credential and issue replacement credentials",
+        "kind": "system",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "store",
+        "text": "Keep or save session credentials; verify application role",
+        "kind": "system",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "home",
+        "text": "Continue to the correct home screen",
+        "kind": "process",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "logout",
+        "text": "On logout: attempt server revocation; always clear local session",
+        "kind": "user",
+        "col": 1,
+        "row": 9
+      },
+      {
+        "id": "end",
+        "text": "Signed out or no restorable session",
+        "kind": "end",
+        "col": 1,
+        "row": 10
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "read",
+        "label": ""
+      },
+      {
+        "source": "read",
+        "target": "stored",
+        "label": ""
+      },
+      {
+        "source": "stored",
+        "target": "signin",
+        "label": "No"
+      },
+      {
+        "source": "signin",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "stored",
+        "target": "access",
+        "label": "Yes"
+      },
+      {
+        "source": "access",
+        "target": "store",
+        "label": "Yes"
+      },
+      {
+        "source": "access",
+        "target": "refresh",
+        "label": "No"
+      },
+      {
+        "source": "refresh",
+        "target": "refreshok",
+        "label": ""
+      },
+      {
+        "source": "refreshok",
+        "target": "signin",
+        "label": "No"
+      },
+      {
+        "source": "refreshok",
+        "target": "rotate",
+        "label": "Yes"
+      },
+      {
+        "source": "rotate",
+        "target": "store",
+        "label": ""
+      },
+      {
+        "source": "store",
+        "target": "home",
+        "label": ""
+      },
+      {
+        "source": "home",
+        "target": "logout",
+        "label": ""
+      },
+      {
+        "source": "logout",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "04 - Driver and Jeepney Management",
+    "purpose": "Creates operational driver and jeepney records and assigns a valid vehicle.",
+    "participants": "Administrator",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Open driver and jeepney management",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "select",
+        "text": "Create or edit a driver or jeepney?",
+        "kind": "decision",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "driver",
+        "text": "Enter driver identity, license, status and assignments; upload license images via API",
+        "kind": "process",
+        "col": 0,
+        "row": 2
+      },
+      {
+        "id": "jeep",
+        "text": "Enter plate number, passenger capacity, and operating status",
+        "kind": "process",
+        "col": 2,
+        "row": 2
+      },
+      {
+        "id": "validate",
+        "text": "Validate required values, uniqueness, role, and permissions",
+        "kind": "system",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "valid",
+        "text": "Are the details valid?",
+        "kind": "decision",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "errors",
+        "text": "Highlight invalid or conflicting information",
+        "kind": "warning",
+        "col": 2,
+        "row": 5
+      },
+      {
+        "id": "assign",
+        "text": "If requested, verify that driver and jeepney can be assigned",
+        "kind": "system",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "save",
+        "text": "Create or update the records and assignment",
+        "kind": "data",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "audit",
+        "text": "Record the administrator action and refresh the management list",
+        "kind": "system",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "end",
+        "text": "Management attempt finished; list changes only after successful save",
+        "kind": "end",
+        "col": 1,
+        "row": 8
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "select",
+        "label": ""
+      },
+      {
+        "source": "select",
+        "target": "driver",
+        "label": "Driver"
+      },
+      {
+        "source": "select",
+        "target": "jeep",
+        "label": "Jeepney"
+      },
+      {
+        "source": "driver",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "jeep",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "validate",
+        "target": "valid",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "errors",
+        "label": "No"
+      },
+      {
+        "source": "errors",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "assign",
+        "label": "Yes"
+      },
+      {
+        "source": "assign",
+        "target": "save",
+        "label": ""
+      },
+      {
+        "source": "save",
+        "target": "audit",
+        "label": ""
+      },
+      {
+        "source": "audit",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "05 - Route, Stop, Fare, and Terminal Configuration",
+    "purpose": "Builds an active route and its supporting booking and terminal rules.",
+    "participants": "Administrator",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Open route management",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "basic",
+        "text": "Enter route name, code, direction, and status",
+        "kind": "process",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "geometry",
+        "text": "Draw or update the route path and stops or landmarks",
+        "kind": "process",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "fare",
+        "text": "Configure fare rules used for request and ride snapshots",
+        "kind": "process",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "terminal",
+        "text": "Enable terminal support?",
+        "kind": "decision",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "terminaldata",
+        "text": "Set terminal name, label, location, and service radius",
+        "kind": "process",
+        "col": 0,
+        "row": 5
+      },
+      {
+        "id": "fallback",
+        "text": "Use roadside operation without terminal queue support",
+        "kind": "process",
+        "col": 2,
+        "row": 5
+      },
+      {
+        "id": "validate",
+        "text": "Validate route geometry, stops, fares, coordinates, and status",
+        "kind": "system",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "valid",
+        "text": "Is the configuration valid?",
+        "kind": "decision",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "error",
+        "text": "Show configuration errors without saving",
+        "kind": "warning",
+        "col": 2,
+        "row": 8
+      },
+      {
+        "id": "save",
+        "text": "Save the route and preserve existing geometry unless changed",
+        "kind": "data",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "Configuration attempt finished; only saved active routes are available",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "basic",
+        "label": ""
+      },
+      {
+        "source": "basic",
+        "target": "geometry",
+        "label": ""
+      },
+      {
+        "source": "geometry",
+        "target": "fare",
+        "label": ""
+      },
+      {
+        "source": "fare",
+        "target": "terminal",
+        "label": ""
+      },
+      {
+        "source": "terminal",
+        "target": "terminaldata",
+        "label": "Yes"
+      },
+      {
+        "source": "terminal",
+        "target": "fallback",
+        "label": "No"
+      },
+      {
+        "source": "terminaldata",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "fallback",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "validate",
+        "target": "valid",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "error",
+        "label": "No"
+      },
+      {
+        "source": "error",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "save",
+        "label": "Yes"
+      },
+      {
+        "source": "save",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "06 - Terminal Resolution and Queue Dispatch",
+    "purpose": "Resolves a route terminal and dispatches eligible jeepneys in queue order.",
+    "participants": "Administrator, Driver, Passenger",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "A terminal operation or booking is requested",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "enabled",
+        "text": "Is terminal support enabled for the active route?",
+        "kind": "decision",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "roadside",
+        "text": "Use roadside operation only",
+        "kind": "process",
+        "col": 2,
+        "row": 2
+      },
+      {
+        "id": "location",
+        "text": "Is an explicit terminal location configured?",
+        "kind": "decision",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "configured",
+        "text": "Use the configured terminal location",
+        "kind": "process",
+        "col": 0,
+        "row": 3
+      },
+      {
+        "id": "stop",
+        "text": "Is a valid first route stop available?",
+        "kind": "decision",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "fallback",
+        "text": "Use the first valid route stop as terminal",
+        "kind": "process",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "unavailable",
+        "text": "Mark terminal operation unavailable",
+        "kind": "warning",
+        "col": 2,
+        "row": 4
+      },
+      {
+        "id": "queue",
+        "text": "Load active terminal trips and sort loading, waiting, skipped, then departed",
+        "kind": "system",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "eligible",
+        "text": "Exclude skipped, full, completed, and cancelled trips",
+        "kind": "system",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "action",
+        "text": "Optional separate admin actions: reorder, skip or restore queue entries",
+        "kind": "user",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "assign",
+        "text": "Booking selects first eligible queue trip; admin editing is not required",
+        "kind": "process",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "Refresh dispatch board and affected applications",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "enabled",
+        "label": ""
+      },
+      {
+        "source": "enabled",
+        "target": "roadside",
+        "label": "No"
+      },
+      {
+        "source": "roadside",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "enabled",
+        "target": "location",
+        "label": "Yes"
+      },
+      {
+        "source": "location",
+        "target": "configured",
+        "label": "Yes"
+      },
+      {
+        "source": "location",
+        "target": "stop",
+        "label": "No"
+      },
+      {
+        "source": "stop",
+        "target": "fallback",
+        "label": "Yes"
+      },
+      {
+        "source": "stop",
+        "target": "unavailable",
+        "label": "No"
+      },
+      {
+        "source": "unavailable",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "configured",
+        "target": "queue",
+        "label": ""
+      },
+      {
+        "source": "fallback",
+        "target": "queue",
+        "label": ""
+      },
+      {
+        "source": "queue",
+        "target": "eligible",
+        "label": ""
+      },
+      {
+        "source": "eligible",
+        "target": "action",
+        "label": ""
+      },
+      {
+        "source": "action",
+        "target": "assign",
+        "label": ""
+      },
+      {
+        "source": "assign",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "07 - Driver Online Status and Trip Lifecycle",
+    "purpose": "Validates assignments, starts a route or terminal trip, and safely ends it.",
+    "participants": "Driver, ParaGO System",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Driver opens the operations screen",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "session",
+        "text": "Validate driver session, role, profile, and account status",
+        "kind": "system",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "ready",
+        "text": "Are a valid jeepney and route assigned?",
+        "kind": "decision",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "blocked",
+        "text": "Show assignment requirement and prevent trip start",
+        "kind": "warning",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "online",
+        "text": "Driver enables operation and selects mode",
+        "kind": "user",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "mode",
+        "text": "Route mode or terminal queue mode?",
+        "kind": "decision",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "route",
+        "text": "Start active route trip for roadside requests",
+        "kind": "process",
+        "col": 0,
+        "row": 5
+      },
+      {
+        "id": "terminal",
+        "text": "Enter terminal queue with queue number and waiting status",
+        "kind": "process",
+        "col": 2,
+        "row": 5
+      },
+      {
+        "id": "operate",
+        "text": "Share location, receive requests, and update trip status",
+        "kind": "system",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "finish",
+        "text": "Driver requests trip completion",
+        "kind": "user",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "close",
+        "text": "On trip end: API closes trip and stops requests; client stops GPS. Presence has a separate five-minute freshness timeout",
+        "kind": "process",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "Trip operation attempt finished; presence is independent of trip state",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "session",
+        "label": ""
+      },
+      {
+        "source": "session",
+        "target": "ready",
+        "label": ""
+      },
+      {
+        "source": "ready",
+        "target": "blocked",
+        "label": "No"
+      },
+      {
+        "source": "blocked",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "ready",
+        "target": "online",
+        "label": "Yes"
+      },
+      {
+        "source": "online",
+        "target": "mode",
+        "label": ""
+      },
+      {
+        "source": "mode",
+        "target": "route",
+        "label": "Route"
+      },
+      {
+        "source": "mode",
+        "target": "terminal",
+        "label": "Terminal"
+      },
+      {
+        "source": "route",
+        "target": "operate",
+        "label": ""
+      },
+      {
+        "source": "terminal",
+        "target": "operate",
+        "label": ""
+      },
+      {
+        "source": "operate",
+        "target": "finish",
+        "label": ""
+      },
+      {
+        "source": "finish",
+        "target": "close",
+        "label": ""
+      },
+      {
+        "source": "close",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "08 - Driver Location, Live Tracking, and ETA",
+    "purpose": "Processes fresh driver locations for maps, ETA, and automation checks.",
+    "participants": "Driver, Passenger, Administrator",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Driver application receives a GPS position",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "permission",
+        "text": "Are location permission, service, and active trip available?",
+        "kind": "decision",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "pause",
+        "text": "Pause reporting and show location status",
+        "kind": "warning",
+        "col": 2,
+        "row": 2
+      },
+      {
+        "id": "send",
+        "text": "Send coordinates, accuracy, direction, speed, and timestamp",
+        "kind": "process",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "validate",
+        "text": "Backend authenticates driver and rejects invalid or stale updates",
+        "kind": "system",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "accepted",
+        "text": "Is the update accepted?",
+        "kind": "decision",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "retry",
+        "text": "Keep the last valid location and retry later",
+        "kind": "warning",
+        "col": 2,
+        "row": 5
+      },
+      {
+        "id": "store",
+        "text": "Update jeepney location and ordering; update applicable transient state",
+        "kind": "data",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "broadcast",
+        "text": "Broadcast location to authorized trip, route, and admin viewers",
+        "kind": "system",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "eta",
+        "text": "Passenger requests backend traffic ETA (Google Routes) and updates map",
+        "kind": "process",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "automation",
+        "text": "Location-driven boarding, offboarding and destination checks; pass-by scan runs separately",
+        "kind": "system",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "Wait for the next location update",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "permission",
+        "label": ""
+      },
+      {
+        "source": "permission",
+        "target": "pause",
+        "label": "No"
+      },
+      {
+        "source": "pause",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "permission",
+        "target": "send",
+        "label": "Yes"
+      },
+      {
+        "source": "send",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "validate",
+        "target": "accepted",
+        "label": ""
+      },
+      {
+        "source": "accepted",
+        "target": "retry",
+        "label": "No"
+      },
+      {
+        "source": "retry",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "accepted",
+        "target": "store",
+        "label": "Yes"
+      },
+      {
+        "source": "store",
+        "target": "broadcast",
+        "label": ""
+      },
+      {
+        "source": "broadcast",
+        "target": "eta",
+        "label": ""
+      },
+      {
+        "source": "eta",
+        "target": "automation",
+        "label": ""
+      },
+      {
+        "source": "automation",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "09 - Passenger Route, Trip, and Pin Selection",
+    "purpose": "Finds an active service and validates pickup and destination points.",
+    "participants": "Passenger, ParaGO System",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Passenger opens route search",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "routes",
+        "text": "Load active routes and available trips",
+        "kind": "system",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "select",
+        "text": "Select route and preview jeepneys; backend chooses actual assigned trip",
+        "kind": "user",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "type",
+        "text": "Choose roadside or terminal pickup",
+        "kind": "decision",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "roadside",
+        "text": "Pick roadside point near route and within 50 m of current location by default",
+        "kind": "process",
+        "col": 0,
+        "row": 4
+      },
+      {
+        "id": "terminal",
+        "text": "Use the resolved terminal pickup point",
+        "kind": "process",
+        "col": 2,
+        "row": 4
+      },
+      {
+        "id": "destination",
+        "text": "Select destination or unload point",
+        "kind": "process",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "validate",
+        "text": "Check pins, current location, terminal and service availability; destination follows pickup and is within 5 m of route by default",
+        "kind": "system",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "valid",
+        "text": "Are the selections valid?",
+        "kind": "decision",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "correct",
+        "text": "Explain the invalid selection and allow correction",
+        "kind": "warning",
+        "col": 2,
+        "row": 8
+      },
+      {
+        "id": "preview",
+        "text": "Show jeepney details, estimated fare, distance, and ETA",
+        "kind": "process",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "Selection attempt finished; submit only valid booking details",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "routes",
+        "label": ""
+      },
+      {
+        "source": "routes",
+        "target": "select",
+        "label": ""
+      },
+      {
+        "source": "select",
+        "target": "type",
+        "label": ""
+      },
+      {
+        "source": "type",
+        "target": "roadside",
+        "label": "Roadside"
+      },
+      {
+        "source": "type",
+        "target": "terminal",
+        "label": "Terminal"
+      },
+      {
+        "source": "roadside",
+        "target": "destination",
+        "label": ""
+      },
+      {
+        "source": "terminal",
+        "target": "destination",
+        "label": ""
+      },
+      {
+        "source": "destination",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "validate",
+        "target": "valid",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "correct",
+        "label": "No"
+      },
+      {
+        "source": "correct",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "preview",
+        "label": "Yes"
+      },
+      {
+        "source": "preview",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "10 - Roadside Pickup Request",
+    "purpose": "Creates a roadside request and assigns an active route trip.",
+    "participants": "Passenger, Driver, ParaGO System",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Passenger submits roadside pickup details",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "validate",
+        "text": "Validate passenger, route, pins, destination, and duplicate-request limit",
+        "kind": "system",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "valid",
+        "text": "Is the request valid?",
+        "kind": "decision",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "error",
+        "text": "Return a clear booking error",
+        "kind": "warning",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "trips",
+        "text": "Filter active accepting trips, active accounts/vehicles, operating mode and reserved capacity",
+        "kind": "system",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "eligible",
+        "text": "Is an eligible trip available?",
+        "kind": "decision",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "pending",
+        "text": "Return HTTP 409; do not create an unassigned request",
+        "kind": "warning",
+        "col": 2,
+        "row": 5
+      },
+      {
+        "id": "choose",
+        "text": "Rank roadside trips by direct pickup distance, then available seats; no direction or age filter",
+        "kind": "system",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "save",
+        "text": "Save pending request with fare and location snapshots",
+        "kind": "data",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "notify",
+        "text": "Notify assigned driver and show waiting status to passenger",
+        "kind": "process",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "end",
+        "text": "Request accepted for acknowledgment, or booking rejected",
+        "kind": "end",
+        "col": 1,
+        "row": 8
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "validate",
+        "target": "valid",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "error",
+        "label": "No"
+      },
+      {
+        "source": "error",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "trips",
+        "label": "Yes"
+      },
+      {
+        "source": "trips",
+        "target": "eligible",
+        "label": ""
+      },
+      {
+        "source": "eligible",
+        "target": "pending",
+        "label": "No"
+      },
+      {
+        "source": "pending",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "eligible",
+        "target": "choose",
+        "label": "Yes"
+      },
+      {
+        "source": "choose",
+        "target": "save",
+        "label": ""
+      },
+      {
+        "source": "save",
+        "target": "notify",
+        "label": ""
+      },
+      {
+        "source": "notify",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "11 - Terminal Pickup Request",
+    "purpose": "Creates a terminal booking and assigns the first eligible queue jeepney.",
+    "participants": "Passenger, Administrator, ParaGO System",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Passenger selects terminal pickup",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "route",
+        "text": "Validate active route and enabled terminal support",
+        "kind": "system",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "resolve",
+        "text": "Resolve configured terminal location or first valid route stop",
+        "kind": "system",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "available",
+        "text": "Is a terminal location available?",
+        "kind": "decision",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "error",
+        "text": "Show terminal booking unavailable",
+        "kind": "warning",
+        "col": 2,
+        "row": 4
+      },
+      {
+        "id": "queue",
+        "text": "Load queue trips ordered by loading, waiting, and queue number",
+        "kind": "system",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "filter",
+        "text": "Exclude skipped, full, inactive, completed, and cancelled trips",
+        "kind": "system",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "eligible",
+        "text": "Is an eligible queue trip available?",
+        "kind": "decision",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "wait",
+        "text": "Show no jeepney currently available",
+        "kind": "warning",
+        "col": 2,
+        "row": 7
+      },
+      {
+        "id": "save",
+        "text": "Assign the first eligible trip and save terminal request snapshot",
+        "kind": "data",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "loading",
+        "text": "Notify users of pending request; queue loading begins only after later driver acknowledgment",
+        "kind": "process",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "Booking attempt finished; accepted passenger waits at the terminal",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "route",
+        "label": ""
+      },
+      {
+        "source": "route",
+        "target": "resolve",
+        "label": ""
+      },
+      {
+        "source": "resolve",
+        "target": "available",
+        "label": ""
+      },
+      {
+        "source": "available",
+        "target": "error",
+        "label": "No"
+      },
+      {
+        "source": "error",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "available",
+        "target": "queue",
+        "label": "Yes"
+      },
+      {
+        "source": "queue",
+        "target": "filter",
+        "label": ""
+      },
+      {
+        "source": "filter",
+        "target": "eligible",
+        "label": ""
+      },
+      {
+        "source": "eligible",
+        "target": "wait",
+        "label": "No"
+      },
+      {
+        "source": "wait",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "eligible",
+        "target": "save",
+        "label": "Yes"
+      },
+      {
+        "source": "save",
+        "target": "loading",
+        "label": ""
+      },
+      {
+        "source": "loading",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "12 - Initial Assignment and Missed-Pickup Expiration",
+    "purpose": "Assigns new bookings and expires missed pickups; no automatic transfer to another trip.",
+    "participants": "Passenger, Driver, ParaGO System",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Booking submission or scheduled pass-by scan",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "mode",
+        "text": "New booking or pass-by scan?",
+        "kind": "decision",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "assign",
+        "text": "New booking: select eligible trip using roadside ranking or terminal queue order",
+        "kind": "system",
+        "col": 0,
+        "row": 2
+      },
+      {
+        "id": "save",
+        "text": "Save pending request if eligible; otherwise reject with availability error",
+        "kind": "data",
+        "col": 0,
+        "row": 3
+      },
+      {
+        "id": "scan",
+        "text": "Load pending and acknowledged requests that have not expired",
+        "kind": "data",
+        "col": 2,
+        "row": 2
+      },
+      {
+        "id": "trip",
+        "text": "Assigned active trip and route coordinates available?",
+        "kind": "decision",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "passed",
+        "text": "Route progress beyond pickup AND direct distance > configured 50 m default?",
+        "kind": "decision",
+        "col": 2,
+        "row": 4
+      },
+      {
+        "id": "keep",
+        "text": "Leave current request unchanged",
+        "kind": "process",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "expire",
+        "text": "Set request status to expired; do not change its trip assignment",
+        "kind": "data",
+        "col": 2,
+        "row": 5
+      },
+      {
+        "id": "notify",
+        "text": "Notify passenger to send a new request; notify assigned driver",
+        "kind": "system",
+        "col": 2,
+        "row": 6
+      },
+      {
+        "id": "end",
+        "text": "Evaluation finished; passenger can submit a new booking",
+        "kind": "end",
+        "col": 1,
+        "row": 7
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "mode",
+        "label": ""
+      },
+      {
+        "source": "mode",
+        "target": "assign",
+        "label": "New booking"
+      },
+      {
+        "source": "mode",
+        "target": "scan",
+        "label": "Scan"
+      },
+      {
+        "source": "assign",
+        "target": "save",
+        "label": ""
+      },
+      {
+        "source": "save",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "scan",
+        "target": "trip",
+        "label": ""
+      },
+      {
+        "source": "trip",
+        "target": "keep",
+        "label": "No"
+      },
+      {
+        "source": "trip",
+        "target": "passed",
+        "label": "Yes"
+      },
+      {
+        "source": "passed",
+        "target": "keep",
+        "label": "No"
+      },
+      {
+        "source": "passed",
+        "target": "expire",
+        "label": "Yes"
+      },
+      {
+        "source": "keep",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "expire",
+        "target": "notify",
+        "label": ""
+      },
+      {
+        "source": "notify",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "13 - Driver Acknowledgment and Manual Boarding",
+    "purpose": "Accepts a request and explicitly moves the passenger into an onboard ride.",
+    "participants": "Driver, Passenger, ParaGO System",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Driver opens an assigned pending request",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "validate",
+        "text": "Validate driver ownership, active trip, request status, and capacity",
+        "kind": "system",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "valid",
+        "text": "Can the request be acknowledged?",
+        "kind": "decision",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "error",
+        "text": "Keep existing state and show the reason",
+        "kind": "warning",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "ack",
+        "text": "Mark request acknowledged and notify passenger",
+        "kind": "process",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "board",
+        "text": "Passenger submits manual boarding validation (driver cannot create this ride)",
+        "kind": "user",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "boardvalid",
+        "text": "Acknowledged request, active trip, capacity, time window and pickup-area checks pass?",
+        "kind": "decision",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "reject",
+        "text": "Do not change ride or occupancy",
+        "kind": "warning",
+        "col": 2,
+        "row": 6
+      },
+      {
+        "id": "ride",
+        "text": "Create or update ride as onboard with manual boarding method",
+        "kind": "data",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "count",
+        "text": "Complete pickup request and increase occupancy exactly once",
+        "kind": "system",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "sync",
+        "text": "Refresh terminal queue if needed and notify applications",
+        "kind": "process",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "Boarding attempt finished; onboard only after successful validation",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "validate",
+        "target": "valid",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "error",
+        "label": "No"
+      },
+      {
+        "source": "error",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "ack",
+        "label": "Yes"
+      },
+      {
+        "source": "ack",
+        "target": "board",
+        "label": ""
+      },
+      {
+        "source": "board",
+        "target": "boardvalid",
+        "label": ""
+      },
+      {
+        "source": "boardvalid",
+        "target": "reject",
+        "label": "No"
+      },
+      {
+        "source": "reject",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "boardvalid",
+        "target": "ride",
+        "label": "Yes"
+      },
+      {
+        "source": "ride",
+        "target": "count",
+        "label": ""
+      },
+      {
+        "source": "count",
+        "target": "sync",
+        "label": ""
+      },
+      {
+        "source": "sync",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "14 - Automatic Onboarding by Proximity",
+    "purpose": "Boards an acknowledged passenger only after fresh, sustained proximity.",
+    "participants": "Passenger, Driver, ParaGO System",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Acknowledged passenger and active trip are monitored",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "locations",
+        "text": "Receive passenger and driver locations",
+        "kind": "process",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "fresh",
+        "text": "Valid coordinates and fresh locations? Defaults: passenger 45 s, driver 20 s",
+        "kind": "decision",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "pause",
+        "text": "Skip this evaluation; manual boarding remains available",
+        "kind": "warning",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "distance",
+        "text": "Calculate passenger-to-jeepney distance",
+        "kind": "system",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "near",
+        "text": "Distance <= configured boarding radius? Default: 25 m",
+        "kind": "decision",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "reset",
+        "text": "Reset the proximity timer",
+        "kind": "process",
+        "col": 2,
+        "row": 5
+      },
+      {
+        "id": "dwell",
+        "text": "Configured dwell reached? Default: 10 seconds",
+        "kind": "decision",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "wait",
+        "text": "Continue monitoring without changing occupancy",
+        "kind": "process",
+        "col": 0,
+        "row": 6
+      },
+      {
+        "id": "board",
+        "text": "Shared boarding service rechecks active trip and capacity; create onboard ride on success",
+        "kind": "data",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "count",
+        "text": "Complete request and increase occupancy exactly once",
+        "kind": "system",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "notify",
+        "text": "Notify passenger, driver, and admin views",
+        "kind": "process",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "Automatic onboarding check complete",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "locations",
+        "label": ""
+      },
+      {
+        "source": "locations",
+        "target": "fresh",
+        "label": ""
+      },
+      {
+        "source": "fresh",
+        "target": "pause",
+        "label": "No"
+      },
+      {
+        "source": "pause",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "fresh",
+        "target": "distance",
+        "label": "Yes"
+      },
+      {
+        "source": "distance",
+        "target": "near",
+        "label": ""
+      },
+      {
+        "source": "near",
+        "target": "reset",
+        "label": "No"
+      },
+      {
+        "source": "reset",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "near",
+        "target": "dwell",
+        "label": "Yes"
+      },
+      {
+        "source": "dwell",
+        "target": "wait",
+        "label": "No"
+      },
+      {
+        "source": "wait",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "dwell",
+        "target": "board",
+        "label": "Yes"
+      },
+      {
+        "source": "board",
+        "target": "count",
+        "label": ""
+      },
+      {
+        "source": "count",
+        "target": "notify",
+        "label": ""
+      },
+      {
+        "source": "notify",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "15 - Ride Monitoring and Passenger Count",
+    "purpose": "Maintains one consistent ride state and occupancy value across all applications.",
+    "participants": "Passenger, Driver, Administrator",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Ride state or trip event changes",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "state",
+        "text": "Read current ride, pickup request, trip, and occupancy state",
+        "kind": "data",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "event",
+        "text": "Ride boarding, completion or walk-in count update?",
+        "kind": "decision",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "boarding",
+        "text": "Manual or automatic boarding succeeds",
+        "kind": "process",
+        "col": 0,
+        "row": 3
+      },
+      {
+        "id": "offboarding",
+        "text": "Manual or automatic ride completion succeeds",
+        "kind": "process",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "idempotent",
+        "text": "Has this state change already been applied?",
+        "kind": "decision",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "unchanged",
+        "text": "Keep occupancy unchanged",
+        "kind": "process",
+        "col": 2,
+        "row": 5
+      },
+      {
+        "id": "adjust",
+        "text": "For app rides: increment on boarding or decrement on completion; never below zero",
+        "kind": "system",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "save",
+        "text": "Save ride method, timestamps, request status, and trip occupancy",
+        "kind": "data",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "publish",
+        "text": "Publish relevant status/count notifications; views can refetch",
+        "kind": "system",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "views",
+        "text": "Refresh passenger, driver, admin, queue, and report views",
+        "kind": "process",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "Event handling finished",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      },
+      {
+        "id": "manual",
+        "text": "Driver/admin sets manual walk-in count; occupancy = onboard rides + manual count; validate capacity in transaction",
+        "kind": "system",
+        "col": 0,
+        "row": 4
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "state",
+        "label": ""
+      },
+      {
+        "source": "state",
+        "target": "event",
+        "label": ""
+      },
+      {
+        "source": "event",
+        "target": "boarding",
+        "label": "Boarding"
+      },
+      {
+        "source": "event",
+        "target": "offboarding",
+        "label": "Completion"
+      },
+      {
+        "source": "boarding",
+        "target": "idempotent",
+        "label": ""
+      },
+      {
+        "source": "offboarding",
+        "target": "idempotent",
+        "label": ""
+      },
+      {
+        "source": "idempotent",
+        "target": "unchanged",
+        "label": "Yes"
+      },
+      {
+        "source": "unchanged",
+        "target": "publish",
+        "label": ""
+      },
+      {
+        "source": "idempotent",
+        "target": "adjust",
+        "label": "No"
+      },
+      {
+        "source": "adjust",
+        "target": "save",
+        "label": ""
+      },
+      {
+        "source": "save",
+        "target": "publish",
+        "label": ""
+      },
+      {
+        "source": "publish",
+        "target": "views",
+        "label": ""
+      },
+      {
+        "source": "views",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "event",
+        "target": "manual",
+        "label": "Walk-in count"
+      },
+      {
+        "source": "manual",
+        "target": "publish",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "16 - Digital Para Stop Alert",
+    "purpose": "Creates, delivers, acknowledges, and dismisses a passenger stop request.",
+    "participants": "Passenger, Driver, ParaGO System",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Passenger selects digital para",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "ride",
+        "text": "Validate passenger ownership and onboard ride state",
+        "kind": "system",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "allowed",
+        "text": "Are destination context and cooldown rules satisfied?",
+        "kind": "decision",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "reject",
+        "text": "Show why the stop alert cannot be sent",
+        "kind": "warning",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "save",
+        "text": "Create alert linked to the active ride and unload point",
+        "kind": "data",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "deliver",
+        "text": "Notify the assigned driver through realtime or refresh fallback",
+        "kind": "system",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "show",
+        "text": "Driver sees passenger and requested unload information",
+        "kind": "process",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "ack",
+        "text": "Driver chooses to acknowledge?",
+        "kind": "decision",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "status",
+        "text": "Mark alert acknowledged and notify passenger",
+        "kind": "process",
+        "col": 0,
+        "row": 7
+      },
+      {
+        "id": "active",
+        "text": "Keep alert active until acknowledged or ride completion",
+        "kind": "process",
+        "col": 2,
+        "row": 7
+      },
+      {
+        "id": "complete",
+        "text": "When ride completes, dismiss any active alert",
+        "kind": "system",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "Stop-alert attempt or lifecycle step finished",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "ride",
+        "label": ""
+      },
+      {
+        "source": "ride",
+        "target": "allowed",
+        "label": ""
+      },
+      {
+        "source": "allowed",
+        "target": "reject",
+        "label": "No"
+      },
+      {
+        "source": "reject",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "allowed",
+        "target": "save",
+        "label": "Yes"
+      },
+      {
+        "source": "save",
+        "target": "deliver",
+        "label": ""
+      },
+      {
+        "source": "deliver",
+        "target": "show",
+        "label": ""
+      },
+      {
+        "source": "show",
+        "target": "ack",
+        "label": ""
+      },
+      {
+        "source": "ack",
+        "target": "status",
+        "label": "Yes"
+      },
+      {
+        "source": "ack",
+        "target": "active",
+        "label": "No"
+      },
+      {
+        "source": "status",
+        "target": "complete",
+        "label": ""
+      },
+      {
+        "source": "active",
+        "target": "complete",
+        "label": ""
+      },
+      {
+        "source": "complete",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "17 - Manual Unload and Ride Completion",
+    "purpose": "Explicitly completes an onboard ride and safely updates occupancy and alerts.",
+    "participants": "Passenger, Driver, Administrator, ParaGO System",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Passenger, assigned driver or admin requests ride completion",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "validate",
+        "text": "Validate active onboard ride, trip ownership, and session role",
+        "kind": "system",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "valid",
+        "text": "Can this ride be completed?",
+        "kind": "decision",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "reject",
+        "text": "Keep the ride onboard and show the reason",
+        "kind": "warning",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "complete",
+        "text": "Mark ride completed with manual offboarding method and end time",
+        "kind": "data",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "count",
+        "text": "Decrease occupancy exactly once and never below zero",
+        "kind": "system",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "alerts",
+        "text": "Dismiss active stop alerts for the completed ride",
+        "kind": "system",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "queue",
+        "text": "Clients may refresh their views; server does not synchronize terminal queue here",
+        "kind": "system",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "notify",
+        "text": "Notify passenger, driver, and admin monitoring views",
+        "kind": "process",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "end",
+        "text": "Completion attempt finished; only successful completion changes ride state",
+        "kind": "end",
+        "col": 1,
+        "row": 8
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "validate",
+        "target": "valid",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "reject",
+        "label": "No"
+      },
+      {
+        "source": "reject",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "complete",
+        "label": "Yes"
+      },
+      {
+        "source": "complete",
+        "target": "count",
+        "label": ""
+      },
+      {
+        "source": "count",
+        "target": "alerts",
+        "label": ""
+      },
+      {
+        "source": "alerts",
+        "target": "queue",
+        "label": ""
+      },
+      {
+        "source": "queue",
+        "target": "notify",
+        "label": ""
+      },
+      {
+        "source": "notify",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "18 - Automatic Offboarding by Separation",
+    "purpose": "Completes an onboard ride only after repeated fresh separation checks.",
+    "participants": "Passenger, Driver, ParaGO System",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Onboard passenger and active trip are monitored",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "locations",
+        "text": "Receive passenger and driver locations",
+        "kind": "process",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "fresh",
+        "text": "Valid coordinates and location age within configured limits (maximum 15 s each)?",
+        "kind": "decision",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "pause",
+        "text": "Skip evaluation; retain state and manual unload option",
+        "kind": "warning",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "distance",
+        "text": "Calculate passenger-to-jeepney distance",
+        "kind": "system",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "outside",
+        "text": "Distance >= configured separation limit? Default: 120 m",
+        "kind": "decision",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "reset",
+        "text": "Reset consecutive outside checks",
+        "kind": "process",
+        "col": 0,
+        "row": 5
+      },
+      {
+        "id": "record",
+        "text": "Increment outside count for this qualifying evaluation; samples are not deduplicated",
+        "kind": "process",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "enough",
+        "text": "Required evaluation count reached? Default: 3",
+        "kind": "decision",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "wait",
+        "text": "Continue monitoring without changing ride state",
+        "kind": "process",
+        "col": 2,
+        "row": 7
+      },
+      {
+        "id": "complete",
+        "text": "Complete ride with automatic separation method",
+        "kind": "data",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "effects",
+        "text": "Decrease occupancy, dismiss alerts, and notify applications",
+        "kind": "process",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "Automatic offboarding check complete",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "locations",
+        "label": ""
+      },
+      {
+        "source": "locations",
+        "target": "fresh",
+        "label": ""
+      },
+      {
+        "source": "fresh",
+        "target": "pause",
+        "label": "No"
+      },
+      {
+        "source": "pause",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "fresh",
+        "target": "distance",
+        "label": "Yes"
+      },
+      {
+        "source": "distance",
+        "target": "outside",
+        "label": ""
+      },
+      {
+        "source": "outside",
+        "target": "reset",
+        "label": "No"
+      },
+      {
+        "source": "reset",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "outside",
+        "target": "record",
+        "label": "Yes"
+      },
+      {
+        "source": "record",
+        "target": "enough",
+        "label": ""
+      },
+      {
+        "source": "enough",
+        "target": "wait",
+        "label": "No"
+      },
+      {
+        "source": "wait",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "enough",
+        "target": "complete",
+        "label": "Yes"
+      },
+      {
+        "source": "complete",
+        "target": "effects",
+        "label": ""
+      },
+      {
+        "source": "effects",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "19 - Notifications, Realtime, and Polling Fallback",
+    "purpose": "Delivers authorized updates quickly while preserving REST polling fallback.",
+    "participants": "All Applications, ParaGO System",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "A request, trip, ride, alert, queue, support, or announcement event occurs",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "save",
+        "text": "Save durable state and any user-specific notification",
+        "kind": "data",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "socket",
+        "text": "Is realtime enabled and the authenticated socket connected?",
+        "kind": "decision",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "emit",
+        "text": "Emit event only to authorized user, role, route, or trip rooms",
+        "kind": "system",
+        "col": 0,
+        "row": 3
+      },
+      {
+        "id": "poll",
+        "text": "REST refresh or screen-specific polling; often 30 seconds",
+        "kind": "system",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "receive",
+        "text": "Client receives event or detects change during refresh",
+        "kind": "process",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "refetch",
+        "text": "Apply supported event payload or refetch authoritative API state",
+        "kind": "system",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "newer",
+        "text": "For refetched data: response still current for its cache generation?",
+        "kind": "decision",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "discard",
+        "text": "Discard stale response and preserve newer state",
+        "kind": "warning",
+        "col": 2,
+        "row": 7
+      },
+      {
+        "id": "update",
+        "text": "Update visible state and scoped cache entries",
+        "kind": "process",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "retry",
+        "text": "If disconnected, retry socket and restore subscriptions after connection",
+        "kind": "system",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "This delivery or refresh attempt finished",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "save",
+        "label": ""
+      },
+      {
+        "source": "save",
+        "target": "socket",
+        "label": ""
+      },
+      {
+        "source": "socket",
+        "target": "emit",
+        "label": "Yes"
+      },
+      {
+        "source": "socket",
+        "target": "poll",
+        "label": "No"
+      },
+      {
+        "source": "emit",
+        "target": "receive",
+        "label": ""
+      },
+      {
+        "source": "poll",
+        "target": "receive",
+        "label": ""
+      },
+      {
+        "source": "receive",
+        "target": "refetch",
+        "label": ""
+      },
+      {
+        "source": "refetch",
+        "target": "newer",
+        "label": ""
+      },
+      {
+        "source": "newer",
+        "target": "discard",
+        "label": "No"
+      },
+      {
+        "source": "discard",
+        "target": "retry",
+        "label": ""
+      },
+      {
+        "source": "newer",
+        "target": "update",
+        "label": "Yes"
+      },
+      {
+        "source": "update",
+        "target": "retry",
+        "label": ""
+      },
+      {
+        "source": "retry",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "name": "20 - Passenger and Driver Support Conversation",
+    "purpose": "Creates and maintains a private support thread between one user and administrators.",
+    "participants": "Passenger, Driver, Administrator",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Passenger or driver opens support",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "existing",
+        "text": "Select an existing thread or create a new concern",
+        "kind": "decision",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "create",
+        "text": "Enter category, subject, first message, and optional ride context",
+        "kind": "process",
+        "col": 0,
+        "row": 2
+      },
+      {
+        "id": "open",
+        "text": "Load authorized thread and complete message history",
+        "kind": "system",
+        "col": 2,
+        "row": 2
+      },
+      {
+        "id": "validate",
+        "text": "Validate ownership, message content, and thread state",
+        "kind": "system",
+        "col": 1,
+        "row": 3
+      },
+      {
+        "id": "save",
+        "text": "Save thread or message and update unread and last-message details",
+        "kind": "data",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "notify",
+        "text": "Notify the owner and admin role; clients refetch the thread",
+        "kind": "system",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "admin",
+        "text": "Admin may reply, assign, resolve, close or reopen as a separate action",
+        "kind": "user",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "userreply",
+        "text": "User may read and reply while the thread permits it",
+        "kind": "user",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "realtime",
+        "text": "Use realtime events or silent polling fallback",
+        "kind": "system",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "Support conversation remains stored and auditable",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      },
+      {
+        "id": "reply",
+        "text": "User chooses to send a new message?",
+        "kind": "decision",
+        "col": 2,
+        "row": 3
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "existing",
+        "label": ""
+      },
+      {
+        "source": "existing",
+        "target": "create",
+        "label": "New"
+      },
+      {
+        "source": "existing",
+        "target": "open",
+        "label": "Existing"
+      },
+      {
+        "source": "create",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "validate",
+        "target": "save",
+        "label": ""
+      },
+      {
+        "source": "save",
+        "target": "notify",
+        "label": ""
+      },
+      {
+        "source": "notify",
+        "target": "admin",
+        "label": ""
+      },
+      {
+        "source": "admin",
+        "target": "userreply",
+        "label": ""
+      },
+      {
+        "source": "userreply",
+        "target": "realtime",
+        "label": ""
+      },
+      {
+        "source": "realtime",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "open",
+        "target": "reply",
+        "label": "History loaded"
+      },
+      {
+        "source": "reply",
+        "target": "validate",
+        "label": "Yes"
+      },
+      {
+        "source": "reply",
+        "target": "end",
+        "label": "No; read only"
+      }
+    ]
+  },
+  {
+    "name": "21 - Service Announcement Lifecycle",
+    "purpose": "Publishes targeted service information with scheduling, revision, expiry, and dismissal rules.",
+    "participants": "Administrator, Passenger, Driver",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Administrator creates or edits an announcement",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "details",
+        "text": "Enter title, message, audience, severity, start time, and optional expiry",
+        "kind": "process",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "critical",
+        "text": "Is this a critical change?",
+        "kind": "decision",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "confirm",
+        "text": "Require explicit critical-action confirmation",
+        "kind": "user",
+        "col": 0,
+        "row": 3
+      },
+      {
+        "id": "normal",
+        "text": "Continue without additional confirmation",
+        "kind": "process",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "validate",
+        "text": "Validate permissions, lifecycle state, schedule, and content",
+        "kind": "system",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "publish",
+        "text": "Start time reached?",
+        "kind": "decision",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "scheduled",
+        "text": "Keep announcement scheduled until its start time",
+        "kind": "process",
+        "col": 2,
+        "row": 6
+      },
+      {
+        "id": "active",
+        "text": "Publish to passenger, driver, or both audiences",
+        "kind": "process",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "dismiss",
+        "text": "User may dismiss only the revision currently displayed",
+        "kind": "user",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "updated",
+        "text": "Was the published announcement revised?",
+        "kind": "decision",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "showagain",
+        "text": "Increment revision and show updated content again",
+        "kind": "process",
+        "col": 0,
+        "row": 9
+      },
+      {
+        "id": "expire",
+        "text": "When expiry is reached, expire; or archive after required confirmation",
+        "kind": "system",
+        "col": 1,
+        "row": 10
+      },
+      {
+        "id": "end",
+        "text": "Expired or archived; otherwise lifecycle continues",
+        "kind": "end",
+        "col": 1,
+        "row": 11
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "details",
+        "label": ""
+      },
+      {
+        "source": "details",
+        "target": "critical",
+        "label": ""
+      },
+      {
+        "source": "critical",
+        "target": "confirm",
+        "label": "Yes"
+      },
+      {
+        "source": "critical",
+        "target": "normal",
+        "label": "No"
+      },
+      {
+        "source": "confirm",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "normal",
+        "target": "validate",
+        "label": ""
+      },
+      {
+        "source": "validate",
+        "target": "publish",
+        "label": ""
+      },
+      {
+        "source": "publish",
+        "target": "scheduled",
+        "label": "No"
+      },
+      {
+        "source": "publish",
+        "target": "active",
+        "label": "Yes"
+      },
+      {
+        "source": "active",
+        "target": "dismiss",
+        "label": ""
+      },
+      {
+        "source": "dismiss",
+        "target": "updated",
+        "label": ""
+      },
+      {
+        "source": "updated",
+        "target": "showagain",
+        "label": "Yes"
+      },
+      {
+        "source": "updated",
+        "target": "expire",
+        "label": "No"
+      },
+      {
+        "source": "showagain",
+        "target": "expire",
+        "label": ""
+      },
+      {
+        "source": "expire",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "scheduled",
+        "target": "publish",
+        "label": "Later lifecycle evaluation"
+      }
+    ]
+  },
+  {
+    "name": "22 - Dashboard, Reports, and Monitoring",
+    "purpose": "Builds operational views and reports from authorized, filtered system records.",
+    "participants": "Administrator, ParaGO System",
+    "nodes": [
+      {
+        "id": "start",
+        "text": "Administrator opens dashboard or reports",
+        "kind": "start",
+        "col": 1,
+        "row": 0
+      },
+      {
+        "id": "authorize",
+        "text": "Validate administrator session and permission",
+        "kind": "system",
+        "col": 1,
+        "row": 1
+      },
+      {
+        "id": "view",
+        "text": "Dashboard overview or formal report?",
+        "kind": "decision",
+        "col": 1,
+        "row": 2
+      },
+      {
+        "id": "dashboard",
+        "text": "Load metrics, active trips, queue state, waiting passengers, and recent activity",
+        "kind": "system",
+        "col": 0,
+        "row": 3
+      },
+      {
+        "id": "report",
+        "text": "Choose report category: requests, boarding, alerts, trips, route demand, or passenger flow",
+        "kind": "process",
+        "col": 2,
+        "row": 3
+      },
+      {
+        "id": "filters",
+        "text": "Apply date, route, status, driver, jeepney, and report filters",
+        "kind": "process",
+        "col": 1,
+        "row": 4
+      },
+      {
+        "id": "query",
+        "text": "Query and aggregate saved operational records; no report write required per ride",
+        "kind": "data",
+        "col": 1,
+        "row": 5
+      },
+      {
+        "id": "valid",
+        "text": "Are results available?",
+        "kind": "decision",
+        "col": 1,
+        "row": 6
+      },
+      {
+        "id": "empty",
+        "text": "Show an empty state with the applied filters",
+        "kind": "process",
+        "col": 2,
+        "row": 7
+      },
+      {
+        "id": "present",
+        "text": "Display charts, totals, tables, activity, and queue information",
+        "kind": "process",
+        "col": 1,
+        "row": 7
+      },
+      {
+        "id": "realtime",
+        "text": "Refresh dashboard through realtime events or polling fallback",
+        "kind": "system",
+        "col": 1,
+        "row": 8
+      },
+      {
+        "id": "end",
+        "text": "Display results or an empty state for review",
+        "kind": "end",
+        "col": 1,
+        "row": 9
+      }
+    ],
+    "edges": [
+      {
+        "source": "start",
+        "target": "authorize",
+        "label": ""
+      },
+      {
+        "source": "authorize",
+        "target": "view",
+        "label": ""
+      },
+      {
+        "source": "view",
+        "target": "dashboard",
+        "label": "Dashboard"
+      },
+      {
+        "source": "view",
+        "target": "report",
+        "label": "Report"
+      },
+      {
+        "source": "dashboard",
+        "target": "filters",
+        "label": ""
+      },
+      {
+        "source": "report",
+        "target": "filters",
+        "label": ""
+      },
+      {
+        "source": "filters",
+        "target": "query",
+        "label": ""
+      },
+      {
+        "source": "query",
+        "target": "valid",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "empty",
+        "label": "No"
+      },
+      {
+        "source": "empty",
+        "target": "end",
+        "label": ""
+      },
+      {
+        "source": "valid",
+        "target": "present",
+        "label": "Yes"
+      },
+      {
+        "source": "present",
+        "target": "realtime",
+        "label": ""
+      },
+      {
+        "source": "realtime",
+        "target": "end",
+        "label": ""
+      }
+    ]
+  }
+]

@@ -1,3 +1,4 @@
+import '../../widgets/legal_pages.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -56,7 +57,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const double _tripMarkerSnapSpeedAllowanceMetersPerSecond = 35;
   static const double _autoUnloadDistanceMeters = 120;
   static const int _autoUnloadConsecutiveOutsideChecks = 3;
-  static const Duration _autoUnloadSustainedSeparation = Duration(seconds: 60);
   static const Duration _tripMarkerAnimationTick = Duration(milliseconds: 33);
   static const Duration _tripMarkerAnimationDefaultDuration =
       Duration(milliseconds: 900);
@@ -65,9 +65,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const Duration _tripMarkerAnimationMaxDuration =
       Duration(milliseconds: 1400);
   static const Duration _tripRealtimeStaleAfter = Duration(seconds: 8);
-  static const Duration _liveRefreshInterval = Duration(seconds: 15);
+  static const Duration _liveRefreshInterval = Duration(seconds: 10);
   static const Duration _backgroundLocationRefreshInterval =
-      Duration(seconds: 25);
+      Duration(seconds: 10);
   static const Duration _passengerLocationReportInterval = Duration(seconds: 5);
   static const double _passengerLocationReportDistanceMeters = 8;
   static const Duration _metadataRefreshInterval = Duration(seconds: 45);
@@ -115,6 +115,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   Timer? _passengerEtaTimer;
   Timer? _tripMarkerAnimationTimer;
   StreamSubscription<Map<String, dynamic>>? _realtimeNotificationSubscription;
+  StreamSubscription<Map<String, dynamic>>? _realtimeOperationsSubscription;
   StreamSubscription<Map<String, dynamic>>? _realtimeLocationSubscription;
   StreamSubscription<Map<String, dynamic>>? _realtimeVehicleBatchSubscription;
   StreamSubscription<Map<String, dynamic>>? _realtimeAnnouncementSubscription;
@@ -131,7 +132,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   bool _showingCachedPassengerSnapshot = false;
   _PassengerBookingMode _bookingMode = _PassengerBookingMode.roadside;
   int _outsideAutoUnloadWindowCount = 0;
-  DateTime? _outsideAutoUnloadSince;
   DateTime? _autoUnloadPromptedAt;
   int _pickupLabelLookupSerial = 0;
   int _unloadLabelLookupSerial = 0;
@@ -901,6 +901,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     );
   }
 
+  bool get _hasTerminalSeats => _trips.any((trip) =>
+      trip.routeId == _selectedRouteId &&
+      trip.operatingMode == 'terminal_queue' &&
+      trip.terminalQueueStatus == 'loading' &&
+      (trip.terminalSummary?['availableSeats'] as num? ?? 0) > 0);
+  bool get _terminalBookingFull =>
+      _bookingMode == _PassengerBookingMode.terminal && !_hasTerminalSeats;
+
   Future<void> _sendPickup() async {
     final selectedRoute = _selectedRoute;
     if (_selectedRouteId == null || selectedRoute == null) {
@@ -996,6 +1004,43 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     );
   }
 
+  List<PickupRequestModel> get _transferOffers => _requests
+      .where((r) =>
+          r.status == 'transfer_offered' &&
+          (DateTime.tryParse(r.expiresAt ?? '')?.isAfter(DateTime.now()) ??
+              false))
+      .toList();
+
+  Future<void> _showTransferOffers() async {
+    if (_transferOffers.isEmpty) return;
+    final offer = _transferOffers.first;
+    final accept = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+                title: const Text('Your terminal booking needs a new jeep'),
+                content: Text(
+                    'Your previous jeep departed or was skipped. Accept a seat on the current loading jeep when available. Your destination (${offer.destinationStopRef ?? "saved destination"}), fare and original expiry stay unchanged.'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Later')),
+                  TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Cancel booking')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('Accept transfer'))
+                ]));
+    if (accept == null || !mounted) return;
+    final service =
+        PassengerService(context.read<SessionController>().apiClient);
+    await _runPassengerAction(
+        loadingMessage: 'Updating booking...',
+        successMessage:
+            accept ? 'Transferred to the loading jeep.' : 'Booking cancelled.',
+        action: () => service.decideTransfer(offer, accept));
+  }
+
   Future<void> _board() async {
     final acknowledgedRequests = _requests
         .where((request) => request.status == 'acknowledged')
@@ -1031,12 +1076,18 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       loadingMessage: 'Validating boarding...',
       successMessage:
           'Boarding validated. Saved unload point is now active for this ride.',
-      action: () => passengerService.validateBoarding(
-        tripSessionId: request.tripSessionId,
-        pickupRequestId: request.id,
-        lat: currentLocation?.latitude,
-        lng: currentLocation?.longitude,
-      ),
+      action: () async {
+        if (currentLocation != null) {
+          await passengerService.updateLocationForRideAutomation(
+              lat: currentLocation.latitude, lng: currentLocation.longitude);
+        }
+        return passengerService.validateBoarding(
+          tripSessionId: request.tripSessionId,
+          pickupRequestId: request.id,
+          lat: currentLocation?.latitude,
+          lng: currentLocation?.longitude,
+        );
+      },
     );
   }
 
@@ -1135,7 +1186,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   void _resetAutoUnloadWindow({String? rideId}) {
     _outsideAutoUnloadWindowCount = 0;
-    _outsideAutoUnloadSince = null;
     _autoUnloadPromptedAt = null;
     _autoUnloadWindowRideId = rideId;
   }
@@ -1177,13 +1227,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
 
     final now = DateTime.now();
-    _outsideAutoUnloadSince ??= now;
     _outsideAutoUnloadWindowCount += 1;
-    final outsideDuration = now.difference(_outsideAutoUnloadSince!);
-    final sustainedSeparation =
-        _outsideAutoUnloadWindowCount >= _autoUnloadConsecutiveOutsideChecks ||
-            outsideDuration >= _autoUnloadSustainedSeparation;
-    if (!sustainedSeparation) {
+    if (_outsideAutoUnloadWindowCount < _autoUnloadConsecutiveOutsideChecks) {
       return;
     }
 
@@ -1353,13 +1398,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   Future<_PassengerBookingDetails?> _showPickupDialog() async {
     final terminalStop = _routeTerminalStop(_selectedRoute);
     var selectedBookingMode = _bookingMode;
-    final farePreview = _estimateFarePreview(
-      _selectedRoute,
-      _bookingMode == _PassengerBookingMode.terminal
-          ? terminalStop?.position
-          : _draftPickupPoint,
-      _draftUnloadPoint,
-    );
     final pickupStopCtrl = TextEditingController(
       text: _bookingMode == _PassengerBookingMode.terminal
           ? (terminalStop?.name ?? 'Route terminal')
@@ -1371,8 +1409,20 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final noteCtrl = TextEditingController();
     final result = await showDialog<_PassengerBookingDetails>(
       context: context,
-      builder: (context) {
+      builder: (context) => StatefulBuilder(builder: (context, setDialogState) {
+        final farePreview = _estimateFarePreview(
+          _selectedRoute,
+          selectedBookingMode == _PassengerBookingMode.terminal
+              ? terminalStop?.position
+              : _draftPickupPoint,
+          _draftUnloadPoint,
+        );
+
         void submit() {
+          if (selectedBookingMode == _PassengerBookingMode.terminal &&
+              !_hasTerminalSeats) {
+            return;
+          }
           FocusManager.instance.primaryFocus?.unfocus();
           Navigator.of(context).pop(
             _PassengerBookingDetails(
@@ -1397,7 +1447,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               StatefulBuilder(
-                builder: (context, setInnerState) {
+                builder: (context, _) {
                   return Wrap(
                     spacing: 8,
                     runSpacing: 8,
@@ -1407,7 +1457,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                         selected: selectedBookingMode ==
                             _PassengerBookingMode.roadside,
                         onSelected: (_) {
-                          setInnerState(() {
+                          setDialogState(() {
                             selectedBookingMode =
                                 _PassengerBookingMode.roadside;
                             pickupStopCtrl.text =
@@ -1422,7 +1472,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                         onSelected: terminalStop == null
                             ? null
                             : (_) {
-                                setInnerState(() {
+                                setDialogState(() {
                                   selectedBookingMode =
                                       _PassengerBookingMode.terminal;
                                   pickupStopCtrl.text =
@@ -1507,12 +1557,20 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed: submit,
-              child: const Text('Book now'),
+              onPressed:
+                  selectedBookingMode == _PassengerBookingMode.terminal &&
+                          !_hasTerminalSeats
+                      ? null
+                      : submit,
+              child: Text(
+                  selectedBookingMode == _PassengerBookingMode.terminal &&
+                          !_hasTerminalSeats
+                      ? 'Wait for the next jeep'
+                      : 'Book now'),
             ),
           ],
         );
-      },
+      }),
     );
     pickupStopCtrl.dispose();
     unloadStopCtrl.dispose();
@@ -2825,8 +2883,32 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
   }
 
-  LatLng? get _passengerEtaDestination =>
-      _draftPickupPoint ?? _currentPassengerLocation;
+  LatLng? _passengerEtaRequestedDestination;
+
+  LatLng? get _passengerEtaDestination {
+    final ride = _activeRide;
+    if (ride != null && ride.tripSessionId == _passengerEtaTripId) {
+      final latitude = ride.destinationLatitude;
+      final longitude = ride.destinationLongitude;
+      return latitude == null || longitude == null
+          ? null
+          : LatLng(latitude, longitude);
+    }
+    return _draftPickupPoint ?? _currentPassengerLocation;
+  }
+
+  PassengerJeepEta? get _freshPassengerEta {
+    final eta = _selectedJeepEta;
+    if (eta == null ||
+        _passengerEtaError != null ||
+        eta.expiresAt == null ||
+        !DateTime.now().isBefore(eta.expiresAt!) ||
+        !_sameMapPoint(
+            _passengerEtaRequestedDestination, _passengerEtaDestination)) {
+      return null;
+    }
+    return eta;
+  }
 
   void _startPassengerEtaRefreshLoop() {
     _passengerEtaTimer?.cancel();
@@ -2879,6 +2961,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 
   Future<void> _refreshSelectedPassengerEta({bool force = false}) async {
+    final ride = _activeRide;
+    if (ride != null && _passengerEtaTripId != ride.tripSessionId) {
+      _passengerEtaTripId = ride.tripSessionId;
+      _selectedJeepEta = null;
+      _passengerEtaLastRequestedAt = null;
+    }
     final tripId = _passengerEtaTripId;
     final destination = _passengerEtaDestination;
     if (tripId == null || tripId.isEmpty) {
@@ -2897,6 +2985,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final now = DateTime.now();
     final lastRequestedAt = _passengerEtaLastRequestedAt;
     if (!force &&
+        _sameMapPoint(_passengerEtaRequestedDestination, destination) &&
         lastRequestedAt != null &&
         now.difference(lastRequestedAt) < _passengerEtaRefreshInterval) {
       return;
@@ -2934,6 +3023,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       }
       setState(() {
         _selectedJeepEta = eta;
+        _passengerEtaRequestedDestination = destinationSnapshot;
         _passengerEtaError = null;
         _passengerEtaLoading = false;
       });
@@ -2983,7 +3073,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   }
 
   String _passengerEtaLabel() {
-    final eta = _selectedJeepEta;
+    final eta = _freshPassengerEta;
     if (_passengerEtaLoading && eta == null) {
       return 'ETA loading';
     }
@@ -2994,6 +3084,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       eta.durationSeconds,
       fallback: 'ETA unavailable',
     );
+    if (_activeRide?.tripSessionId == _passengerEtaTripId) {
+      return '$duration to destination';
+    }
     return _draftPickupPoint != null
         ? '$duration to pickup'
         : '$duration to you';
@@ -3452,12 +3545,42 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     });
   }
 
+  SessionController? _securitySession;
+  String? _securitySocketToken;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final session = context.read<SessionController>();
+    if (!identical(session, _securitySession)) {
+      _securitySession?.removeListener(_handleSecuritySession);
+      _securitySession = session;
+      _securitySocketToken = session.token;
+      session.addListener(_handleSecuritySession);
+    }
+  }
+
+  void _handleSecuritySession() {
+    final session = _securitySession;
+    if (!mounted || session == null || session.token == _securitySocketToken) {
+      return;
+    }
+    _securitySocketToken = session.token;
+    if (session.token == null) {
+      _realtimeSocketService.disconnect();
+      return;
+    }
+    _connectRealtimeSocket();
+  }
+
   @override
   void dispose() {
+    _securitySession?.removeListener(_handleSecuritySession);
     _liveRefreshTimer?.cancel();
     _passengerEtaTimer?.cancel();
     _tripMarkerAnimationTimer?.cancel();
     _realtimeNotificationSubscription?.cancel();
+    _realtimeOperationsSubscription?.cancel();
     _realtimeLocationSubscription?.cancel();
     _realtimeVehicleBatchSubscription?.cancel();
     _realtimeAnnouncementSubscription?.cancel();
@@ -3478,6 +3601,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     }
 
     _realtimeNotificationSubscription?.cancel();
+    _realtimeOperationsSubscription?.cancel();
     _realtimeLocationSubscription?.cancel();
     _realtimeVehicleBatchSubscription?.cancel();
     _realtimeAnnouncementSubscription?.cancel();
@@ -3486,6 +3610,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     _realtimeNotificationSubscription =
         _realtimeSocketService.notificationCreatedStream.listen(
       _handleRealtimeSocketNotification,
+    );
+    _realtimeOperationsSubscription =
+        _realtimeSocketService.operationsChangedStream.listen(
+      _handleRealtimeOperationsChanged,
     );
 
     _realtimeLocationSubscription =
@@ -3522,6 +3650,22 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       previousRouteId: null,
       nextRouteId: _selectedRouteId,
     );
+  }
+
+  Future<void> _handleRealtimeOperationsChanged(
+    Map<String, dynamic> event,
+  ) async {
+    if (!mounted || event['type']?.toString() != 'trip.occupancy.updated') {
+      return;
+    }
+    final tripId = event['tripId']?.toString().trim() ?? '';
+    if (tripId.isEmpty || !_trips.any((trip) => trip.id == tripId)) {
+      return;
+    }
+    // Reconcile from the backend so occupancy, capacity, and request
+    // availability are all updated together instead of applying a partial
+    // event over a possibly newer trip snapshot.
+    await _refreshTripsOnly(useCache: false, replacePending: true);
   }
 
   AnnouncementFeedController _announcementFeed() {
@@ -5185,24 +5329,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     );
   }
 
-  double? _estimatedEtaSeconds({
-    required double? distanceMeters,
-    required RouteSummaryModel? route,
-  }) {
-    if (distanceMeters == null ||
-        route?.distanceMeters == null ||
-        route?.durationSeconds == null ||
-        route!.distanceMeters! <= 0 ||
-        route.durationSeconds! <= 0) {
-      return null;
-    }
-    final metersPerSecond = route.distanceMeters! / route.durationSeconds!;
-    if (!metersPerSecond.isFinite || metersPerSecond <= 0) {
-      return null;
-    }
-    return distanceMeters / metersPerSecond;
-  }
-
   double? _tripProgressFraction(
     TripSession? trip,
     RouteSummaryModel? route,
@@ -5378,6 +5504,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
+                  const LegalLinks(),
                   // Passenger account-menu items temporarily disabled:
                   // ListTile(
                   //   leading: const Icon(Icons.settings_outlined),
@@ -6271,15 +6398,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         _distanceFromJeepneyToRideDestination(selectedTrip, activeRide);
     final passengerToDestinationMeters =
         _distanceFromPassengerToDestination(activeRide);
-    final etaToDestinationSeconds = _estimatedEtaSeconds(
-      distanceMeters: jeepneyToDestinationMeters,
-      route: selectedRoute,
-    );
-    final trackingEta = activeRide?.status == 'onboard'
-        ? etaToDestinationSeconds
-        : (_passengerEtaTripId == selectedTrip.id
-            ? _selectedJeepEta?.durationSeconds
-            : null);
+    final trackingEta = _passengerEtaTripId == selectedTrip.id
+        ? _freshPassengerEta?.durationSeconds
+        : null;
     final approachingDestination =
         jeepneyToDestinationMeters != null && jeepneyToDestinationMeters <= 180;
 
@@ -6634,7 +6755,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                             PassengerPrimaryButton(
                               label: 'Request pickup',
                               icon: Icons.near_me_rounded,
-                              onPressed: _loading ? null : _sendPickup,
+                              onPressed: _loading || _terminalBookingFull
+                                  ? null
+                                  : _sendPickup,
                             ),
                             const SizedBox(height: 12),
                             PassengerSecondaryActionCard(
@@ -6819,6 +6942,25 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                         unawaited(_handleDashboardAction(session, action));
                       },
                     ),
+                    if (_terminalBookingFull)
+                      const Material(
+                          child: Padding(
+                              padding: EdgeInsets.all(8),
+                              child: Text(
+                                  'No terminal seats available. Wait for the loading jeep to depart.'))),
+                    if (_transferOffers.isNotEmpty)
+                      FilledButton.icon(
+                          onPressed: _loading ? null : _showTransferOffers,
+                          icon: const Icon(Icons.swap_horiz),
+                          label: Text(
+                              'Review terminal transfers (${_transferOffers.length})')),
+                    if (selectedTrip?.operatingMode == 'terminal_queue')
+                      Material(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: Text(
+                                  'Terminal jeep: ${selectedTrip!.terminalQueueStatus}. ${selectedTrip.terminalSummary?["availableSeats"] ?? 0} unreserved seats. ${selectedTrip.terminalSummary?["availableSeats"] == 0 ? "Wait for departure before booking." : ""}'))),
                     const SizedBox(height: 14),
                     _buildRouteSearchBar(
                       selectedRoute: selectedRoute,
@@ -7234,7 +7376,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                       title: 'Book this route',
                       subtitle:
                           'Send your pinned pickup and unload points to the nearest eligible jeep',
-                      onPressed: _loading ? null : _sendPickup,
+                      onPressed:
+                          _loading || _terminalBookingFull ? null : _sendPickup,
                     ),
                     const SizedBox(height: 12),
                     _PassengerActionButton(

@@ -1,10 +1,9 @@
 const bcrypt = require('bcryptjs');
 const axios = require('axios');
 const crypto = require('crypto');
-const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const { OAuth2Client } = require('google-auth-library');
-const { googleClientIds, facebookAppToken, nodeEnv } = require('../config/env');
+const { googleClientIds, facebookAppToken } = require('../config/env');
 const { getFirebaseAuth, isFirebaseAdminConfigured } = require('../config/firebaseAdmin');
 
 const User = require('../models/user');
@@ -17,7 +16,12 @@ const PasswordResetToken = require('../models/passwordResetToken');
 const { signToken, verifyRefreshToken } = require('../utils/jwt');
 const tokenHash = require('../utils/tokenHash');
 const ApiError = require('../utils/apiError');
-const { sendSms } = require('./sms.service');
+const AuthSession = require('../models/authSession');
+const { requireSession, revokeSessions, notifyRevocation } = require('./sessionSecurity.service');
+const { sendAuthEmail, ensureAuthEmailAvailable } = require('./authEmail.service');
+const { reserveAuthEmail } = require('./securityCounters.service');
+const { jwtSecret } = require('../config/env');
+const otpHash = (challengeId, code) => crypto.createHmac('sha256', jwtSecret).update(`admin-otp:${challengeId}:${code}`).digest('hex');
 
 const GENERIC_LOGIN_FAILURE_MESSAGE = 'Invalid email/password';
 const GENERIC_ROLE_SCOPED_LOGIN_FAILURE_MESSAGE =
@@ -57,45 +61,13 @@ const ensureActiveUser = (user) => {
 
 const ensureStrongPassword = (password) => {
   const value = String(password || '');
-  if (value.length < 8) {
-    throw new ApiError(400, 'Password must be at least 8 characters long');
+  if (typeof password !== 'string' || value.length < 8 || value.length > 128) {
+    throw new ApiError(400, 'Password must be between 8 and 128 characters long');
   }
 };
 
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
 const normalizeRole = (role) => String(role || '').trim().toUpperCase();
-const normalizeAdminPhone = (phone) => {
-  const raw = String(phone || '').trim();
-  const digits = raw.replace(/\D/g, '');
-
-  if (!digits) {
-    return '';
-  }
-  if (digits.length === 10 && digits.startsWith('9')) {
-    return `+63${digits}`;
-  }
-  if (digits.length === 11 && digits.startsWith('09')) {
-    return `+63${digits.slice(1)}`;
-  }
-  if (digits.length === 12 && digits.startsWith('63')) {
-    return `+${digits}`;
-  }
-  throw new ApiError(400, 'Enter a valid Philippine mobile number');
-};
-const tryNormalizeAdminPhone = (phone) => {
-  try {
-    return normalizeAdminPhone(phone);
-  } catch (_error) {
-    return '';
-  }
-};
-const maskPhone = (phone) => {
-  const normalized = normalizeAdminPhone(phone);
-  if (normalized.length < 6) {
-    return normalized;
-  }
-  return `${normalized.slice(0, 5)}***${normalized.slice(-2)}`;
-};
 const generateOtpCode = () => crypto.randomInt(0, 1000000).toString().padStart(6, '0');
 
 const ensureAllowedRequestedRole = (role) => {
@@ -140,43 +112,24 @@ const ensureRoleProfile = async (user) => {
   );
 };
 
-const issueSession = async (user, replacedTokenHash = null) => {
+const issueSession = async (user, existingSession = null, dbSession = null) => {
   ensureActiveUser(user);
-  // Repair legacy/orphaned accounts created before profile creation became atomic.
   await ensureRoleProfile(user);
-
-  const accessToken = signToken({ sub: user._id.toString(), role: user.role });
-  const refreshToken = signToken({ sub: user._id.toString(), role: user.role }, 'refresh');
-
-  const decoded = jwt.decode(refreshToken);
-  const expMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + 30 * 24 * 60 * 60 * 1000;
-  const newHash = tokenHash(refreshToken);
-
-  await RefreshToken.create({
-    userId: user._id,
-    tokenHash: newHash,
-    expiresAt: new Date(expMs),
-  });
-
-  if (replacedTokenHash) {
-    await RefreshToken.findOneAndUpdate(
-      { tokenHash: replacedTokenHash, revokedAt: null },
-      {
-        $set: {
-          revokedAt: new Date(),
-          replacedByHash: newHash,
-        },
-      }
-    );
-  }
-
-  return { token: accessToken, refreshToken, user: await buildProfile(user) };
+  const sid = existingSession?._id || crypto.randomUUID();
+  const expiresAt = existingSession?.expiresAt || new Date(Date.now() + 30 * 86400000);
+  if (!existingSession) await AuthSession.create([{ _id: sid, userId: user._id, expiresAt, authVersion: user.authVersion || 0 }], { session: dbSession });
+  const claims = { sub: String(user._id), role: user.role, sid };
+  const token = signToken(claims);
+  const refreshToken = signToken({ ...claims, exp: Math.floor(expiresAt.getTime() / 1000) }, 'refresh');
+  await RefreshToken.create([{ userId: user._id, sessionId: sid,
+    tokenHash: tokenHash(refreshToken), expiresAt }], { session: dbSession });
+  return { token, refreshToken, user: await buildProfile(user) };
 };
 
 const authenticateLocalUser = async ({ email, password, role }) => {
   const requestedRole = ensureAllowedRequestedRole(role);
   const user = await User.findOne({ email: normalizeEmail(email), authProvider: 'local' }).select(
-    '+passwordHash'
+    '+passwordHash +authVersion'
   );
   if (!user) {
     if (isRoleScopedRequest(requestedRole)) {
@@ -296,107 +249,47 @@ const createUserByAdmin = async ({
 
 const loginEmail = async ({ email, password, role }) => {
   const user = await authenticateLocalUser({ email, password, role });
+  if (user.role === 'ADMIN') throw new ApiError(403, 'Admin email verification is required');
   return issueSession(user);
 };
 
-const startAdminLoginOtp = async ({ email, password, phone }) => {
-  const user = await authenticateLocalUser({
-    email,
-    password,
-    role: 'ADMIN',
-  });
-
-  const persistedPhone = tryNormalizeAdminPhone(user.phone);
-  const requestedPhone = normalizeAdminPhone(phone);
-  let targetPhone = persistedPhone;
-
-  if (!targetPhone) {
-    if (!requestedPhone) {
-      throw new ApiError(
-        400,
-        'Enter your mobile number to receive the admin verification code'
-      );
-    }
-    targetPhone = requestedPhone;
-    user.phone = targetPhone;
-    await user.save();
-  } else if (requestedPhone && requestedPhone !== targetPhone) {
-    throw new ApiError(
-      409,
-      'This admin account is already linked to a different mobile number'
-    );
-  }
-
-  const otpCode = generateOtpCode();
+const startAdminLoginOtp = async ({ email, password }) => {
+  await ensureAuthEmailAvailable();
+  const user = await authenticateLocalUser({ email, password, role: 'ADMIN' });
+  await reserveAuthEmail(user.email);
+  const id = new mongoose.Types.ObjectId();
+  const code = generateOtpCode();
   const expiresAt = new Date(Date.now() + ADMIN_OTP_EXPIRY_MS);
-
-  await AdminLoginChallenge.updateMany(
-    {
-      userId: user._id,
-      usedAt: null,
-      expiresAt: { $gt: new Date() },
-    },
-    { $set: { usedAt: new Date() } }
-  );
-
-  const challenge = await AdminLoginChallenge.create({
-    userId: user._id,
-    phone: targetPhone,
-    codeHash: tokenHash(otpCode),
-    expiresAt,
-    maxAttempts: ADMIN_OTP_MAX_ATTEMPTS,
-  });
-
-  const responsePayload = {
-    challengeId: challenge._id.toString(),
-    maskedPhone: maskPhone(targetPhone),
-    expiresAt: expiresAt.toISOString(),
-    expiresInSeconds: Math.floor(ADMIN_OTP_EXPIRY_MS / 1000),
-  };
-
-  await sendSms({
-    recipient: targetPhone,
-    message: `Your ParaGO admin verification code is ${otpCode}. It expires in 5 minutes.`,
-  });
-
-  return responsePayload;
+  await AdminLoginChallenge.updateMany({ userId: user._id, usedAt: null }, { $set: { usedAt: new Date() } });
+  await AdminLoginChallenge.create({ _id: id, userId: user._id, email: user.email,
+    codeHash: otpHash(String(id), code), expiresAt, maxAttempts: ADMIN_OTP_MAX_ATTEMPTS });
+  try {
+    await sendAuthEmail({ email: user.email, subject: 'Your SakayGaray admin sign-in code',
+      text: `Your sign-in code is ${code}. It expires in 5 minutes. Do not share this code.` });
+  } catch (error) {
+    await AdminLoginChallenge.updateOne({ _id: id }, { $set: { usedAt: new Date() } });
+    throw error;
+  }
+  const [local, domain] = user.email.split('@');
+  return { challengeId: String(id), maskedEmail: `${local.slice(0, 1)}***@${domain}`,
+    expiresAt, expiresInSeconds: 300, resendAfterSeconds: 60 };
 };
 
 const verifyAdminLoginOtp = async ({ challengeId, code }) => {
-  const normalizedCode = String(code || '').trim();
-  if (!challengeId || !normalizedCode) {
-    throw new ApiError(400, 'challengeId and code are required');
-  }
-
-  const challenge = await AdminLoginChallenge.findById(challengeId);
-  if (!challenge || challenge.usedAt || challenge.expiresAt <= new Date()) {
+  if (!mongoose.isValidObjectId(challengeId) || !/^\d{6}$/.test(String(code || ''))) {
     throw new ApiError(401, 'Invalid or expired verification code');
   }
-
-  if (challenge.attempts >= challenge.maxAttempts) {
-    challenge.usedAt = new Date();
-    await challenge.save();
-    throw new ApiError(429, 'Too many incorrect verification attempts');
-  }
-
-  if (challenge.codeHash !== tokenHash(normalizedCode)) {
-    challenge.attempts += 1;
-    if (challenge.attempts >= challenge.maxAttempts) {
-      challenge.usedAt = new Date();
-    }
-    await challenge.save();
+  const filter = { _id: challengeId, usedAt: null, expiresAt: { $gt: new Date() }, attempts: { $lt: 5 } };
+  const codeHash = otpHash(String(challengeId), String(code));
+  const challenge = await AdminLoginChallenge.findOneAndUpdate({ ...filter, codeHash },
+    { $set: { usedAt: new Date() } }, { new: true });
+  if (!challenge) {
+    await AdminLoginChallenge.updateOne({ ...filter, codeHash: { $ne: codeHash } }, { $inc: { attempts: 1 } });
     throw new ApiError(401, 'Invalid or expired verification code');
   }
-
-  const user = await User.findById(challenge.userId).select('+passwordHash');
+  const user = await User.findById(challenge.userId).select('+authVersion');
   ensureActiveUser(user);
-  if (user.role !== 'ADMIN') {
-    throw new ApiError(403, 'You are not authorized for this resource');
-  }
-
-  challenge.usedAt = new Date();
-  await challenge.save();
-
+  if (user.role !== 'ADMIN' || user.email !== challenge.email) throw new ApiError(401, 'Please sign in again');
   return issueSession(user);
 };
 
@@ -412,7 +305,7 @@ const verifyGoogleToken = async (idToken) => {
       audience: googleClientIds,
     });
     const payload = ticket.getPayload();
-    if (!payload?.sub || !payload?.email) return null;
+    if (!payload?.sub || !payload?.email || payload.email_verified !== true) return null;
     return {
       providerId: payload.sub,
       email: payload.email.toLowerCase(),
@@ -429,7 +322,7 @@ const verifyFirebaseGoogleToken = async (idToken) => {
       const auth = getFirebaseAuth();
       const decoded = await auth.verifyIdToken(idToken);
 
-      if (!decoded?.uid || !decoded?.email) {
+      if (!decoded?.uid || !decoded?.email || decoded.email_verified !== true) {
         throw new ApiError(401, 'Invalid Firebase login token');
       }
 
@@ -513,7 +406,7 @@ const issueSocialAccountSession = async ({ profile, provider, role }) => {
   let user = await User.findOne({
     authProvider: provider,
     providerId: profile.providerId,
-  });
+  }).select('+authVersion');
   if (user && normalizedRole && user.role !== normalizedRole) {
     if (isRoleScopedRequest(normalizedRole)) {
       throwRoleScopedLoginFailure();
@@ -530,12 +423,7 @@ const issueSocialAccountSession = async ({ profile, provider, role }) => {
         }
         throw new ApiError(401, GENERIC_LOGIN_FAILURE_MESSAGE);
       }
-      user = existingEmailUser;
-      user.authProvider = provider;
-      user.providerId = profile.providerId;
-      user.fullName = user.fullName || profile.fullName;
-      user.isVerified = true;
-      await user.save();
+      throw new ApiError(409, 'Please use your existing sign-in method');
     } else {
       user = await User.create({
         email: profile.email,
@@ -549,6 +437,7 @@ const issueSocialAccountSession = async ({ profile, provider, role }) => {
     }
   }
 
+  if (user.role !== 'PASSENGER') throw new ApiError(403, 'Use your assigned sign-in method');
   if (isPassengerScopedRequest(normalizedRole) && user.status !== 'active') {
     throwRoleScopedLoginFailure();
   }
@@ -574,50 +463,32 @@ const firebaseGoogleLogin = async ({ idToken, role }) => {
 };
 
 const refreshSession = async ({ refreshToken }) => {
-  if (!refreshToken) throw new ApiError(400, 'refreshToken required');
-
   let payload;
+  try { payload = verifyRefreshToken(refreshToken); }
+  catch (_) { throw new ApiError(401, 'Invalid or expired refresh token'); }
+  const session = await mongoose.startSession();
+  let result;
   try {
-    payload = verifyRefreshToken(refreshToken);
-  } catch (_error) {
-    throw new ApiError(401, 'Invalid or expired refresh token');
-  }
-
-  const hash = tokenHash(refreshToken);
-  const stored = await RefreshToken.findOne({
-    tokenHash: hash,
-    revokedAt: null,
-    expiresAt: { $gt: new Date() },
-  });
-  if (!stored) {
-    throw new ApiError(401, 'Refresh token no longer valid');
-  }
-
-  const user = await User.findById(payload.sub);
-  ensureActiveUser(user);
-
-  return issueSession(user, hash);
+    await session.withTransaction(async () => {
+      const { active, user } = await requireSession(payload, session);
+      const stored = await RefreshToken.findOneAndUpdate({ tokenHash: tokenHash(refreshToken),
+        sessionId: payload.sid, userId: payload.sub, revokedAt: null, expiresAt: { $gt: new Date() } },
+        { $set: { revokedAt: new Date() } }, { new: true, session });
+      if (!stored) throw new ApiError(401, 'Refresh token no longer valid');
+      // Write the parent session to serialize rotation with revocation.
+      await AuthSession.updateOne({ _id: active._id, revokedAt: null }, { $set: { updatedAt: new Date() } }, { session });
+      result = await issueSession(user, active, session);
+      await RefreshToken.updateOne({ _id: stored._id }, { $set: { replacedByHash: tokenHash(result.refreshToken) } }, { session });
+    });
+  } finally { await session.endSession(); }
+  return result;
 };
 
 const logoutSession = async ({ refreshToken }) => {
-  if (!refreshToken) throw new ApiError(400, 'refreshToken required');
-
   let payload;
-  try {
-    payload = verifyRefreshToken(refreshToken);
-  } catch (_error) {
-    throw new ApiError(401, 'Invalid or expired refresh token');
-  }
-
-  const hash = tokenHash(refreshToken);
-  await RefreshToken.findOneAndUpdate(
-    {
-      tokenHash: hash,
-      userId: payload.sub,
-      revokedAt: null,
-    },
-    { $set: { revokedAt: new Date() } }
-  );
+  try { payload = verifyRefreshToken(refreshToken); }
+  catch (_) { throw new ApiError(401, 'Invalid or expired refresh token'); }
+  await revokeSessions({ userId: payload.sub, sessionId: payload.sid });
 };
 
 const changePassword = async ({ userId, currentPassword, newPassword }) => {
@@ -639,72 +510,48 @@ const changePassword = async ({ userId, currentPassword, newPassword }) => {
   user.passwordHash = await bcrypt.hash(newPassword, 11);
   await user.save();
 
-  await RefreshToken.updateMany(
-    { userId: user._id, revokedAt: null },
-    { $set: { revokedAt: new Date() } }
-  );
+  await revokeSessions({ userId: user._id });
 };
 
 const requestPasswordReset = async ({ email }) => {
+  await ensureAuthEmailAvailable();
   const normalizedEmail = normalizeEmail(email);
-  const user = await User.findOne({ email: normalizedEmail, authProvider: 'local' }).select(
-    '_id status'
-  );
-
-  // Intentionally return generic success even when user does not exist.
-  if (!user || user.status !== 'active') {
-    return { delivered: true };
-  }
-
+  const user = await User.findOne({ email: normalizedEmail, authProvider: 'local', status: 'active' });
+  await reserveAuthEmail(normalizedEmail, { send: Boolean(user) });
+  if (!user) return { delivered: true };
   const rawToken = crypto.randomBytes(32).toString('hex');
-  const hash = tokenHash(rawToken);
-  const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
-
-  await PasswordResetToken.create({
-    userId: user._id,
-    tokenHash: hash,
-    expiresAt,
-  });
-
-  // In thesis/dev mode, expose token so the app can proceed without email SMTP setup.
-  if (nodeEnv === 'development') {
-    return { delivered: true, resetToken: rawToken, expiresAt };
+  const record = await PasswordResetToken.create({ userId: user._id, tokenHash: tokenHash(rawToken),
+    expiresAt: new Date(Date.now() + 30 * 60000) });
+  try {
+    await sendAuthEmail({ email: user.email, subject: 'Reset your SakayGaray password',
+      text: `Open https://api.sakaygaray.com/reset-password#${rawToken} to reset your password. This link expires in 30 minutes. If you did not request it, ignore this email.` });
+  } catch (error) {
+    await PasswordResetToken.updateOne({ _id: record._id }, { $set: { usedAt: new Date() } });
+    throw error;
   }
   return { delivered: true };
 };
 
 const resetPassword = async ({ token, newPassword }) => {
-  if (!token || !newPassword) {
-    throw new ApiError(400, 'token and newPassword are required');
-  }
+  if (!/^[a-f0-9]{64}$/.test(String(token || ''))) throw new ApiError(401, 'Invalid or expired reset token');
   ensureStrongPassword(newPassword);
-
-  const hash = tokenHash(token);
-  const record = await PasswordResetToken.findOne({
-    tokenHash: hash,
-    usedAt: null,
-    expiresAt: { $gt: new Date() },
-  });
-  if (!record) {
-    throw new ApiError(401, 'Invalid or expired reset token');
-  }
-
-  const user = await User.findById(record.userId).select('+passwordHash');
-  ensureActiveUser(user);
-  if (user.authProvider !== 'local') {
-    throw new ApiError(400, 'Password reset is only available for email login accounts');
-  }
-
-  user.passwordHash = await bcrypt.hash(newPassword, 11);
-  await user.save();
-
-  record.usedAt = new Date();
-  await record.save();
-
-  await RefreshToken.updateMany(
-    { userId: user._id, revokedAt: null },
-    { $set: { revokedAt: new Date() } }
-  );
+  const passwordHash = await bcrypt.hash(newPassword, 11);
+  const session = await mongoose.startSession();
+  let userId;
+  try {
+    await session.withTransaction(async () => {
+      const record = await PasswordResetToken.findOneAndUpdate({ tokenHash: tokenHash(token), usedAt: null,
+        expiresAt: { $gt: new Date() } }, { $set: { usedAt: new Date() } }, { new: true, session });
+      if (!record) throw new ApiError(401, 'Invalid or expired reset token');
+      userId = record.userId;
+      const updated = await User.updateOne({ _id: userId, status: 'active', authProvider: 'local' },
+        { $set: { passwordHash } }, { session });
+      if (!updated.matchedCount) throw new ApiError(401, 'Invalid reset request');
+      await PasswordResetToken.updateMany({ userId, usedAt: null }, { $set: { usedAt: new Date() } }, { session });
+      await revokeSessions({ userId, mongoSession: session });
+    });
+  } finally { await session.endSession(); }
+  await notifyRevocation({ userId });
 };
 
 module.exports = {

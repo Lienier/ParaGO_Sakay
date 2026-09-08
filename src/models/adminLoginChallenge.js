@@ -5,7 +5,7 @@ const { Schema } = mongoose;
 const adminLoginChallengeSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    phone: { type: String, required: true, trim: true },
+    email: { type: String, required: true, trim: true },
     codeHash: { type: String, required: true },
     expiresAt: { type: Date, required: true },
     attempts: { type: Number, default: 0 },

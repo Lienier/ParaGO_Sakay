@@ -98,7 +98,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('More workspace tools', style: Theme.of(context).textTheme.titleLarge),
+              Text('More workspace tools',
+                  style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: AppSpacing.sm),
               for (final section in const [
                 _AdminWorkspaceSection.routeBuilder,
@@ -112,7 +113,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                   title: Text(_sectionLabel(section)),
                   selected: _selectedSection == section,
                   selectedTileColor: AppColors.primaryContainer,
-                  shape: const RoundedRectangleBorder(borderRadius: AppRadius.medium),
+                  shape: const RoundedRectangleBorder(
+                      borderRadius: AppRadius.medium),
                   onTap: () {
                     Navigator.of(sheetContext).pop();
                     setState(() => _selectedSection = section);
@@ -188,8 +190,37 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     });
   }
 
+  SessionController? _securitySession;
+  String? _securitySocketToken;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final session = context.read<SessionController>();
+    if (!identical(session, _securitySession)) {
+      _securitySession?.removeListener(_handleSecuritySession);
+      _securitySession = session;
+      _securitySocketToken = session.token;
+      session.addListener(_handleSecuritySession);
+    }
+  }
+
+  void _handleSecuritySession() {
+    final session = _securitySession;
+    if (!mounted || session == null || session.token == _securitySocketToken) {
+      return;
+    }
+    _securitySocketToken = session.token;
+    if (session.token == null) {
+      _realtimeSocketService.disconnect();
+      return;
+    }
+    _connectRealtimeSocket();
+  }
+
   @override
   void dispose() {
+    _securitySession?.removeListener(_handleSecuritySession);
     _pollingTimer?.cancel();
     _operationsSubscription?.cancel();
     _realtimeSocketService.dispose();
@@ -300,14 +331,44 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     return next;
   }
 
+  Future<String?> _terminalReason() async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+                title: const Text('Reason for terminal change'),
+                content: TextField(
+                    controller: controller,
+                    maxLength: 500,
+                    decoration:
+                        const InputDecoration(labelText: 'Required reason')),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      onPressed: () {
+                        if (controller.text.trim().isNotEmpty) {
+                          Navigator.pop(context, controller.text.trim());
+                        }
+                      },
+                      child: const Text('Confirm'))
+                ]));
+    controller.dispose();
+    return result;
+  }
+
   Future<void> _reorderTerminalQueueTrip(
     String tripId,
     String direction,
   ) async {
+    final reason = await _terminalReason();
+    if (reason == null || !mounted) return;
     try {
       final session = context.read<SessionController>();
       final board = await AdminService(session.apiClient)
-          .reorderTerminalQueueTrip(tripId: tripId, direction: direction);
+          .reorderTerminalQueueTrip(
+              tripId: tripId, direction: direction, reason: reason);
       if (!mounted) return;
       setState(() {
         _hybridDispatchBoard = board;
@@ -325,10 +386,13 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     String tripId,
     bool skipped,
   ) async {
+    final reason = await _terminalReason();
+    if (reason == null || !mounted) return;
     try {
       final session = context.read<SessionController>();
       final board = await AdminService(session.apiClient)
-          .setTerminalQueueSkipped(tripId: tripId, skipped: skipped);
+          .setTerminalQueueSkipped(
+              tripId: tripId, skipped: skipped, reason: reason);
       if (!mounted) return;
       setState(() {
         _hybridDispatchBoard = board;
@@ -409,12 +473,15 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     String tripId,
     String terminalQueueStatus,
   ) async {
+    final reason = await _terminalReason();
+    if (reason == null || !mounted) return;
     try {
       final session = context.read<SessionController>();
       final board =
           await AdminService(session.apiClient).setTerminalQueueStatus(
         tripId: tripId,
         terminalQueueStatus: terminalQueueStatus,
+        reason: reason,
       );
       if (!mounted) return;
       setState(() {
@@ -513,13 +580,16 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                     groupAlignment: -0.85,
                     useIndicator: true,
                     indicatorColor: AppColors.primaryContainer,
-                    selectedIconTheme: const IconThemeData(color: AppColors.primaryDark),
+                    selectedIconTheme:
+                        const IconThemeData(color: AppColors.primaryDark),
                     selectedLabelTextStyle: const TextStyle(
                       color: AppColors.primaryDark,
                       fontWeight: FontWeight.w600,
                     ),
-                    unselectedIconTheme: const IconThemeData(color: AppColors.textSecondary),
-                    unselectedLabelTextStyle: const TextStyle(color: AppColors.textSecondary),
+                    unselectedIconTheme:
+                        const IconThemeData(color: AppColors.textSecondary),
+                    unselectedLabelTextStyle:
+                        const TextStyle(color: AppColors.textSecondary),
                     selectedIndex: _AdminWorkspaceSection.values.indexOf(
                       _selectedSection,
                     ),
@@ -541,7 +611,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                   const VerticalDivider(width: 1, color: AppColors.border),
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, 0),
+                      padding: const EdgeInsets.fromLTRB(
+                          AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, 0),
                       child: content,
                     ),
                   ),
@@ -562,7 +633,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                       children: [
                         _AdminCompactNav(
                           selectedSection: _selectedSection,
-                          onSelect: (section) => setState(() => _selectedSection = section),
+                          onSelect: (section) =>
+                              setState(() => _selectedSection = section),
                         ),
                         const SizedBox(height: AppSpacing.md),
                         Expanded(child: content),
@@ -591,10 +663,20 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                   });
                 },
                 destinations: const [
-                  NavigationDestination(icon: Icon(Icons.space_dashboard_outlined), selectedIcon: Icon(Icons.space_dashboard), label: 'Overview'),
-                  NavigationDestination(icon: Icon(Icons.manage_accounts_outlined), selectedIcon: Icon(Icons.manage_accounts), label: 'Drivers'),
-                  NavigationDestination(icon: Icon(Icons.place_outlined), selectedIcon: Icon(Icons.place), label: 'Routes'),
-                  NavigationDestination(icon: Icon(Icons.more_horiz), label: 'More'),
+                  NavigationDestination(
+                      icon: Icon(Icons.space_dashboard_outlined),
+                      selectedIcon: Icon(Icons.space_dashboard),
+                      label: 'Overview'),
+                  NavigationDestination(
+                      icon: Icon(Icons.manage_accounts_outlined),
+                      selectedIcon: Icon(Icons.manage_accounts),
+                      label: 'Drivers'),
+                  NavigationDestination(
+                      icon: Icon(Icons.place_outlined),
+                      selectedIcon: Icon(Icons.place),
+                      label: 'Routes'),
+                  NavigationDestination(
+                      icon: Icon(Icons.more_horiz), label: 'More'),
                 ],
               ),
             )
@@ -637,7 +719,8 @@ class _AdminHeaderBrand extends StatelessWidget {
               width: compact ? 34 : 40,
               height: compact ? 34 : 40,
               color: AppColors.primaryContainer,
-              child: const Icon(Icons.admin_panel_settings_outlined, color: AppColors.primary),
+              child: const Icon(Icons.admin_panel_settings_outlined,
+                  color: AppColors.primary),
             ),
           ),
         ),

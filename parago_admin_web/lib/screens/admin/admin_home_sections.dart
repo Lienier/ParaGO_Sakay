@@ -90,11 +90,13 @@ class _AdminOverviewPage extends StatelessWidget {
     return RefreshIndicator(
       onRefresh: () => onRefresh(silent: false),
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, AppSpacing.xxl),
+        padding: const EdgeInsets.fromLTRB(
+            AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, AppSpacing.xxl),
         children: [
           const AppPageHeader(
             title: 'Operations overview',
-            subtitle: 'Monitor active trips, dispatch queues, and passenger movement.',
+            subtitle:
+                'Monitor active trips, dispatch queues, and passenger movement.',
           ),
           if (loading) ...[
             const Padding(
@@ -199,7 +201,7 @@ class _AdminOverviewPage extends StatelessWidget {
                         subtitle:
                             '${_dispatchTripMode(trip)} · ${_dispatchTerminalLabel(trip)}',
                         caption:
-                            '${trip['occupancyCount'] ?? 0} onboard · ${ParagoFormat.statusLabel(trip['terminalQueueStatus']?.toString() ?? 'waiting')}',
+                            '${trip['terminalSummary']?["reservedSeats"] ?? 0} reserved / ${trip['terminalSummary']?["availableSeats"] ?? 0} free / GPS ${trip['terminalSummary']?["gpsWarning"] == true ? "old or missing" : "recent"} / ${trip['occupancyCount'] ?? 0} onboard · ${ParagoFormat.statusLabel(trip['terminalQueueStatus']?.toString() ?? 'waiting')}',
                       ),
                   ],
                 );
@@ -243,7 +245,7 @@ class _AdminOverviewPage extends StatelessWidget {
                           title: _dispatchTripLabel(trip),
                           subtitle: _dispatchTripMode(trip),
                           caption:
-                              '${trip['occupancyCount'] ?? 0} onboard · ${ParagoFormat.statusLabel(trip['status']?.toString() ?? 'active')}',
+                              '${trip['terminalSummary']?["reservedSeats"] ?? 0} reserved / ${trip['terminalSummary']?["availableSeats"] ?? 0} free / GPS ${trip['terminalSummary']?["gpsWarning"] == true ? "old or missing" : "recent"} / ${trip['occupancyCount'] ?? 0} onboard · ${ParagoFormat.statusLabel(trip['status']?.toString() ?? 'active')}',
                         ),
                   ],
                 );
@@ -425,16 +427,18 @@ List<Widget> _terminalQueueActions(
   final skipped = map['terminalQueueStatus']?.toString() == 'skipped';
   final status = map['terminalQueueStatus']?.toString() ?? 'waiting';
   final loading = status == 'loading';
-  final departed = status == 'departed';
+  final waiting = status == 'waiting';
 
   return [
     IconButton.outlined(
-      onPressed: index <= 0 ? null : () => onReorder(tripId, 'up'),
+      onPressed: !waiting || index <= 0 ? null : () => onReorder(tripId, 'up'),
       tooltip: 'Move up',
       icon: const Icon(Icons.keyboard_arrow_up),
     ),
     IconButton.outlined(
-      onPressed: index >= total - 1 ? null : () => onReorder(tripId, 'down'),
+      onPressed: !waiting || index >= total - 1
+          ? null
+          : () => onReorder(tripId, 'down'),
       tooltip: 'Move down',
       icon: const Icon(Icons.keyboard_arrow_down),
     ),
@@ -444,21 +448,10 @@ List<Widget> _terminalQueueActions(
       icon: Icon(skipped ? Icons.undo : Icons.skip_next),
     ),
     IconButton.filledTonal(
-      onPressed: departed ? null : () => onStatusChanged(tripId, 'loading'),
-      tooltip: 'Mark loading',
-      icon: const Icon(Icons.local_shipping_outlined),
-    ),
-    IconButton.filledTonal(
-      onPressed: departed ? null : () => onStatusChanged(tripId, 'departed'),
-      tooltip: 'Mark departed',
+      onPressed: loading ? () => onStatusChanged(tripId, 'departed') : null,
+      tooltip: 'Depart terminal',
       icon: const Icon(Icons.departure_board_outlined),
     ),
-    if (loading || departed)
-      IconButton.outlined(
-        onPressed: () => onStatusChanged(tripId, 'waiting'),
-        tooltip: 'Mark waiting',
-        icon: const Icon(Icons.access_time_outlined),
-      ),
   ];
 }
 
@@ -845,7 +838,8 @@ class _PassengerFlowChart extends StatelessWidget {
             height: 240,
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final chartWidth = math.max(constraints.maxWidth, series.length * 72.0);
+                final chartWidth =
+                    math.max(constraints.maxWidth, series.length * 72.0);
                 return SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: SizedBox(
@@ -856,7 +850,8 @@ class _PassengerFlowChart extends StatelessWidget {
                         for (final point in series)
                           Expanded(
                             child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 4),
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
@@ -864,8 +859,10 @@ class _PassengerFlowChart extends StatelessWidget {
                                     child: Align(
                                       alignment: Alignment.bottomCenter,
                                       child: Row(
-                                        crossAxisAlignment: CrossAxisAlignment.end,
-                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.end,
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
                                         children: [
                                           _FlowBar(
                                             value: point.boarded,
@@ -888,7 +885,8 @@ class _PassengerFlowChart extends StatelessWidget {
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
                                     textAlign: TextAlign.center,
-                                    style: Theme.of(context).textTheme.bodySmall,
+                                    style:
+                                        Theme.of(context).textTheme.bodySmall,
                                   ),
                                 ],
                               ),
@@ -1191,13 +1189,13 @@ class _SectionCard extends StatelessWidget {
     return AppCard(
       padding: AppSpacing.xl,
       child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            AppSectionHeader(title: title, subtitle: subtitle),
-            const SizedBox(height: AppSpacing.xl),
-            child,
-          ],
-        ),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AppSectionHeader(title: title, subtitle: subtitle),
+          const SizedBox(height: AppSpacing.xl),
+          child,
+        ],
+      ),
     );
   }
 }

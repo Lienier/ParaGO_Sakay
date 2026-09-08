@@ -29,7 +29,6 @@ class AuthService {
   Future<AdminLoginChallenge> startAdminLogin({
     required String email,
     required String password,
-    String? phone,
   }) async {
     final response = await _client.request(
       method: 'POST',
@@ -37,7 +36,6 @@ class AuthService {
       body: {
         'email': email.trim(),
         'password': password,
-        if ((phone ?? '').trim().isNotEmpty) 'phone': phone!.trim(),
       },
       useCache: false,
     );

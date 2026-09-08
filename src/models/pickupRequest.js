@@ -43,11 +43,14 @@ const pickupRequestSchema = new Schema(
     fareSnapshot: fareSnapshotSchema,
     status: {
       type: String,
-      enum: ['pending', 'acknowledged', 'completed', 'expired', 'cancelled'],
+      enum: ['pending', 'acknowledged', 'completed', 'expired', 'cancelled', 'transfer_offered'],
       default: 'pending',
     },
     acknowledgedBy: { type: Schema.Types.ObjectId, ref: 'Driver' },
     acknowledgedAt: { type: Date },
+    transferOfferId: String,
+    acceptedTransferOfferId: String,
+    transferFromTripId: { type: Schema.Types.ObjectId, ref: 'TripSession' },
     autoBoarding: {
       proximityStartedAt: { type: Date },
       lastCheckedAt: { type: Date },

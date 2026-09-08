@@ -1,6 +1,5 @@
 const crypto = require('crypto');
-const rateLimit = require('express-rate-limit');
-const { verifyAccessToken } = require('../utils/jwt');
+const { verifyAccessToken, verifyRefreshToken } = require('../utils/jwt');
 const {
   rateLimitWindowMs,
   rateLimitAuthMax,
@@ -31,46 +30,79 @@ const verifiedUserRateLimitKey = (req) => {
 const clientRateLimitKey = (req) =>
   `client:${hashIdentity(req.ip || req.socket?.remoteAddress)}`;
 
-const buildLimiter = ({ max, message, keyGenerator = verifiedUserRateLimitKey }) =>
-  rateLimit({
-    windowMs: rateLimitWindowMs,
-    max,
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator,
-    message: {
-      success: false,
-      message,
-    },
-  });
+const { incrementWindow } = require('../services/securityCounters.service');
+const { redisKey } = require('../services/redis.service');
+const buildLimiter = ({ max, message, group, sensitive = false, keyGenerator = verifiedUserRateLimitKey }) => {
+  const fallback = new Map();
+  return async (req, res, next) => {
+    const identity = keyGenerator(req);
+    let count, ttlMs;
+    try {
+      ({ count, ttlMs } = await incrementWindow(redisKey('http-limit', group, identity), rateLimitWindowMs));
+    } catch (error) {
+      if (sensitive) return next(error);
+      const now = Date.now();
+      for (const [key, value] of fallback) if (value.until <= now) fallback.delete(key);
+      if (!fallback.has(identity) && fallback.size >= 10000) {
+        return res.status(503).json({ success: false, message: 'Service is temporarily busy' });
+      }
+      const value = fallback.get(identity) || { count: 0, until: now + rateLimitWindowMs };
+      value.count += 1;
+      fallback.set(identity, value);
+      count = value.count; ttlMs = value.until - now;
+    }
+    const reset = Math.max(1, Math.ceil(ttlMs / 1000));
+    res.set('RateLimit', `limit=${max}, remaining=${Math.max(0, max - count)}, reset=${reset}`);
+    res.set('RateLimit-Policy', `${max};w=${Math.ceil(rateLimitWindowMs / 1000)}`);
+    if (count > max) return res.set('Retry-After', String(reset)).status(429).json({ success: false, message });
+    next();
+  };
+};
+
+const sessionKey = (req) => {
+  try { const payload = verifyRefreshToken(req.body?.refreshToken); return `user:${payload.sub}`; }
+  catch (_) { return verifiedUserRateLimitKey(req); }
+};
+const credentialKey = (req) => req.body?.email
+  ? `email:${hashIdentity(String(req.body.email).trim().toLowerCase())}`
+  : clientRateLimitKey(req);
 
 const createApiRateLimiters = (overrides = {}) => ({
+  authIp: buildLimiter({ group: 'auth-ip', max: 300, sensitive: true, keyGenerator: clientRateLimitKey, message: 'Authentication request limit reached' }),
+  session: buildLimiter({ group: 'session', max: 60, sensitive: true, keyGenerator: sessionKey, message: 'Session request limit reached' }),
   auth: buildLimiter({
+    group: 'auth', sensitive: true,
     max: overrides.auth ?? rateLimitAuthMax,
-    keyGenerator: clientRateLimitKey,
+    keyGenerator: credentialKey,
     message: 'Too many authentication requests. Please try again in a minute.',
   }),
   driverLocation: buildLimiter({
+    group: 'driverLocation',
     max: overrides.driverLocation ?? rateLimitDriverLocationMax,
     message: 'Driver location update limit reached. Please slow down.',
   }),
   passengerLocation: buildLimiter({
+    group: 'passengerLocation',
     max: overrides.passengerLocation ?? rateLimitPassengerLocationMax,
     message: 'Passenger location update limit reached. Please slow down.',
   }),
   eta: buildLimiter({
+    group: 'eta',
     max: overrides.eta ?? rateLimitEtaMax,
     message: 'ETA request limit reached. Please try again shortly.',
   }),
   support: buildLimiter({
+    group: 'support',
     max: overrides.support ?? rateLimitSupportMax,
     message: 'Support request limit reached. Please try again shortly.',
   }),
   admin: buildLimiter({
+    group: 'admin',
     max: overrides.admin ?? rateLimitAdminMax,
     message: 'Admin operation limit reached. Please try again shortly.',
   }),
   general: buildLimiter({
+    group: 'general',
     max: overrides.general ?? rateLimitGeneralMax,
     message: 'API request limit reached. Please try again shortly.',
   }),

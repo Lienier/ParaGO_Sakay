@@ -26,6 +26,18 @@ class LicenseImageUpload {
 }
 
 class AdminService {
+  void _validateReportRange(String fromIso, String toIso) {
+    final from = DateTime.tryParse(fromIso);
+    final to = DateTime.tryParse(toIso);
+    if (from == null ||
+        to == null ||
+        from.isAfter(to) ||
+        to.difference(from) > const Duration(days: 366)) {
+      throw ArgumentError(
+          'Report range must be ordered and no longer than 366 days');
+    }
+  }
+
   AdminService(this._client);
 
   final ApiClient _client;
@@ -62,42 +74,52 @@ class AdminService {
     }
   }
 
+  static final Map<String, String> _terminalActionIds = {};
+  Future<Map<String, dynamic>> _terminalRequest(
+      String path, Map<String, dynamic> body) async {
+    final key =
+        '$path:${body['direction'] ?? body['skipped'] ?? body['terminalQueueStatus']}';
+    final id = _terminalActionIds.putIfAbsent(
+        key, () => 'queue-${DateTime.now().microsecondsSinceEpoch}');
+    final response = await _client.request(
+        method: 'PATCH',
+        path: path,
+        body: {...body, 'requestId': id},
+        useCache: false);
+    _terminalActionIds.remove(key);
+    return response;
+  }
+
   Future<Map<String, dynamic>> reorderTerminalQueueTrip({
     required String tripId,
     required String direction,
+    required String reason,
   }) async {
-    final response = await _client.request(
-      method: 'PATCH',
-      path: '/admin/terminal-queue/$tripId/reorder',
-      body: {'direction': direction},
-      useCache: false,
-    );
+    final response = await _terminalRequest(
+        '/admin/terminal-queue/$tripId/reorder',
+        {'direction': direction, 'reason': reason});
     return response['data'] as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> setTerminalQueueSkipped({
     required String tripId,
     required bool skipped,
+    required String reason,
   }) async {
-    final response = await _client.request(
-      method: 'PATCH',
-      path: '/admin/terminal-queue/$tripId/skip',
-      body: {'skipped': skipped},
-      useCache: false,
-    );
+    final response = await _terminalRequest(
+        '/admin/terminal-queue/$tripId/skip',
+        {'skipped': skipped, 'reason': reason});
     return response['data'] as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> setTerminalQueueStatus({
     required String tripId,
     required String terminalQueueStatus,
+    required String reason,
   }) async {
-    final response = await _client.request(
-      method: 'PATCH',
-      path: '/admin/terminal-queue/$tripId/status',
-      body: {'terminalQueueStatus': terminalQueueStatus},
-      useCache: false,
-    );
+    final response = await _terminalRequest(
+        '/admin/terminal-queue/$tripId/status',
+        {'terminalQueueStatus': terminalQueueStatus, 'reason': reason});
     return response['data'] as Map<String, dynamic>;
   }
 
@@ -252,6 +274,7 @@ class AdminService {
     required String toIso,
     String? routeId,
   }) async {
+    _validateReportRange(fromIso, toIso);
     final response = await _client.request(
       method: 'GET',
       path: '/reports/requests',
@@ -270,6 +293,7 @@ class AdminService {
     required String toIso,
     String? routeId,
   }) async {
+    _validateReportRange(fromIso, toIso);
     final response = await _client.request(
       method: 'GET',
       path: '/reports/boarding',
@@ -288,6 +312,7 @@ class AdminService {
     required String toIso,
     String? routeId,
   }) async {
+    _validateReportRange(fromIso, toIso);
     final response = await _client.request(
       method: 'GET',
       path: '/reports/alerts',
@@ -306,6 +331,7 @@ class AdminService {
     required String toIso,
     String? routeId,
   }) async {
+    _validateReportRange(fromIso, toIso);
     final response = await _client.request(
       method: 'GET',
       path: '/reports/trip-activity',
@@ -323,6 +349,7 @@ class AdminService {
     required String fromIso,
     required String toIso,
   }) async {
+    _validateReportRange(fromIso, toIso);
     final response = await _client.request(
       method: 'GET',
       path: '/reports/route-demand',
@@ -340,6 +367,7 @@ class AdminService {
     required String toIso,
     String? routeId,
   }) async {
+    _validateReportRange(fromIso, toIso);
     final response = await _client.request(
       method: 'GET',
       path: '/reports/passenger-flow',

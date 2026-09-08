@@ -1,9 +1,11 @@
+import 'admin_email_otp_screen.dart';
+import '../widgets/forgot_password_link.dart';
+import '../widgets/legal_pages.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/config/app_config.dart';
 import '../models/auth/auth_models.dart';
-import '../models/user_role.dart';
 import '../core/utils/action_feedback.dart';
 import '../services/auth_service.dart';
 import '../services/session_controller.dart';
@@ -45,30 +47,23 @@ class _AuthScreenState extends State<AuthScreen> {
     });
 
     try {
-      final response = await ActionFeedback.run<AuthSession>(
-        context: context,
-        loadingMessage: 'Signing in...',
-        showSuccess: false,
-        action: () async {
-          final result = await auth.loginEmail(
+      final challenge = await auth.startAdminLogin(
+          email: _emailCtrl.text, password: _passwordCtrl.text);
+      if (!mounted) return;
+      final response =
+          await Navigator.of(context).push<AuthSession>(MaterialPageRoute(
+        builder: (_) => AdminEmailOtpScreen(
+            auth: auth,
+            challenge: challenge,
             email: _emailCtrl.text,
-            password: _passwordCtrl.text,
-            role: 'ADMIN',
-          );
-          if (result.user.role != UserRole.admin) {
-            throw Exception('This account is not authorized for admin access.');
-          }
-          return result;
-        },
-        onError: (error) async {
-          if (!mounted) return;
-          setState(() => _error = ActionFeedback.messageOf(error));
-        },
-      );
+            password: _passwordCtrl.text),
+      ));
       if (response == null) {
         return;
       }
       await session.saveAuth(response);
+    } catch (error) {
+      if (mounted) setState(() => _error = ActionFeedback.messageOf(error));
     } finally {
       if (mounted) {
         setState(() => _loading = false);
@@ -504,6 +499,8 @@ class _LoginPane extends StatelessWidget {
             ),
             const SizedBox(height: 40),
             child,
+            const ForgotPasswordLink(foregroundColor: Colors.white),
+            const LegalLinks(foregroundColor: Colors.white),
           ],
         ),
       ),

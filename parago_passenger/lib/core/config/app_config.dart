@@ -2,8 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 class AppConfig {
-  static const String awsApiBaseUrl =
-      'https://api.sakaygaray.com/api/v1';
+  static const String awsApiBaseUrl = 'https://api.sakaygaray.com/api/v1';
   static const String digitalOceanApiBaseUrl =
       'https://paragosakay-app-qulmw.ondigitalocean.app/api/v1';
 
@@ -50,8 +49,8 @@ class AppConfig {
 
     final client = Dio(
       BaseOptions(
-        connectTimeout: const Duration(seconds: 2),
-        receiveTimeout: const Duration(seconds: 2),
+        connectTimeout: const Duration(seconds: 8),
+        receiveTimeout: const Duration(seconds: 12),
         headers: const {
           'Accept': 'application/json',
         },
@@ -59,8 +58,14 @@ class AppConfig {
     );
 
     try {
-      for (final candidate in candidates) {
-        if (await _isHealthyBaseUrl(client, candidate)) {
+      for (var index = 0; index < candidates.length; index++) {
+        final candidate = candidates[index];
+        final attempts = index == 0 ? 1 : 3;
+        if (await _isHealthyBaseUrl(
+          client,
+          candidate,
+          attempts: attempts,
+        )) {
           _resolvedApiBaseUrl = candidate;
           debugPrint('Resolved ParaGO API base URL: $candidate');
           return;
@@ -70,9 +75,11 @@ class AppConfig {
       client.close(force: true);
     }
 
-    _resolvedApiBaseUrl = candidates.first;
+    _resolvedApiBaseUrl =
+        candidates.length > 1 ? candidates[1] : candidates.first;
     debugPrint(
-      'No healthy ParaGO API candidate responded. Falling back to ${candidates.first}',
+      'No healthy ParaGO API candidate responded. Using '
+      '$_resolvedApiBaseUrl for the next request.',
     );
   }
 
@@ -151,14 +158,25 @@ class AppConfig {
     return '$trimmed/';
   }
 
-  static Future<bool> _isHealthyBaseUrl(Dio client, String baseUrl) async {
+  static Future<bool> _isHealthyBaseUrl(
+    Dio client,
+    String baseUrl, {
+    int attempts = 1,
+  }) async {
     final healthUrl = _joinUrl(baseUrl, 'health');
-    try {
-      final response = await client.get(healthUrl);
-      return response.statusCode == 200;
-    } catch (_) {
-      return false;
+    for (var attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        final response = await client.get(healthUrl);
+        if (response.statusCode == 200) {
+          return true;
+        }
+      } catch (_) {
+        if (attempt < attempts) {
+          await Future<void>.delayed(const Duration(milliseconds: 750));
+        }
+      }
     }
+    return false;
   }
 
   static String _joinUrl(String baseUrl, String path) {

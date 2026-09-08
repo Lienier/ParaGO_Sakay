@@ -272,7 +272,7 @@ resource "aws_instance" "api" {
   iam_instance_profile        = aws_iam_instance_profile.ec2.name
   associate_public_ip_address = false
   monitoring                  = true
-  user_data                   = file("${path.module}/user-data.sh")
+  user_data                   = replace(replace(file("${path.module}/user-data.sh"), "__ORIGIN_SECRET__", random_password.origin_header.result), "__TRUSTED_VPC_CIDR__", var.vpc_cidr)
 
   depends_on = [aws_route_table_association.app]
 
@@ -432,7 +432,7 @@ resource "aws_cloudfront_distribution" "api" {
 
     custom_header {
       name  = "X-ParaGO-Origin"
-      value = var.origin_header_value
+      value = random_password.origin_header.result
     }
 
     vpc_origin_config {

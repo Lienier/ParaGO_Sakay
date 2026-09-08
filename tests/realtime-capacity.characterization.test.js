@@ -63,7 +63,12 @@ const routePath = [
   [121.0001, 14.6142],
 ];
 
-const tokenFor = (user) => signToken({ sub: user._id.toString() });
+const tokenFor = async (user) => {
+  const sid = require('crypto').randomUUID();
+  await require('../src/models/authSession').create({ _id: sid, userId: user._id,
+    authVersion: user.authVersion || 0, expiresAt: new Date(Date.now() + 3600000) });
+  return signToken({ sub: user._id.toString(), sid });
+};
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
 const delay = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -220,11 +225,11 @@ const seedCoreFixture = async () => {
       otherPassenger: otherPassengerUser,
     },
     tokens: {
-      admin: tokenFor(adminUser),
-      driver: tokenFor(driverUser),
-      otherDriver: tokenFor(otherDriverUser),
-      passenger: tokenFor(passengerUser),
-      otherPassenger: tokenFor(otherPassengerUser),
+      admin: await tokenFor(adminUser),
+      driver: await tokenFor(driverUser),
+      otherDriver: await tokenFor(otherDriverUser),
+      passenger: await tokenFor(passengerUser),
+      otherPassenger: await tokenFor(otherPassengerUser),
     },
     route,
     otherRoute,
@@ -1366,6 +1371,18 @@ test('subscription rejection logs are structured and redact credentials and coor
   assert.equal(captured[0].includes('longitude'), false);
 });
 
+test('revoked sessions lose existing socket access within thirty seconds', async () => {
+  const fixture = await seedCoreFixture();
+  const socket = await connectClient(fixture.tokens.passenger);
+  const disconnected = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Revoked socket stayed connected')), 30000);
+    socket.once('disconnect', () => { clearTimeout(timer); resolve(); });
+  });
+  await require('../src/services/sessionSecurity.service').revokeSessions({ userId: fixture.users.passenger._id });
+  await disconnected;
+  assert.equal(socket.connected, false);
+});
+
 test('simultaneous boarding is idempotent for one pickup request', async () => {
   const fixture = await seedCoreFixture();
   const pickup = await createPickupRequest({ fixture });
@@ -1395,4 +1412,326 @@ test('simultaneous boarding is idempotent for one pickup request', async () => {
     1,
   );
   assert.equal((await TripSession.findById(fixture.trip._id)).occupancyCount, 1);
+});
+
+test('boarding rejects a changed destination and preserves the saved booking', async () => {
+  const fixture = await seedCoreFixture();
+  const pickup = await createPickupRequest({ fixture });
+  const response = await request(app).post('/api/v1/boarding/validate')
+    .set(auth(fixture.tokens.passenger)).send({
+      tripSessionId: String(fixture.trip._id), pickupRequestId: String(pickup._id),
+      lat: routePath[0][1], lng: routePath[0][0],
+      destinationStopRef: 'Changed destination', destinationLocation: point(routePath[2][0], routePath[2][1]),
+    });
+  assert.equal(response.status, 409, response.text);
+  assert.equal(await RideSession.countDocuments({ pickupRequestId: pickup._id }), 0);
+  assert.equal((await PickupRequest.findById(pickup._id)).destinationStopRef, 'P1-4');
+  const accepted = await request(app).post('/api/v1/boarding/validate')
+    .set(auth(fixture.tokens.passenger)).send({
+      tripSessionId: String(fixture.trip._id), pickupRequestId: String(pickup._id),
+      lat: routePath[0][1], lng: routePath[0][0],
+      destinationStopRef: pickup.destinationStopRef, destinationLocation: pickup.destinationLocation,
+    });
+  assert.equal(accepted.status, 200, accepted.text);
+});
+
+test('concurrent cancellation and boarding cannot produce a cancelled boarded pickup', async () => {
+  const fixture = await seedCoreFixture();
+  const pickup = await createPickupRequest({ fixture });
+  const responses = await Promise.all([
+    request(app).post('/api/v1/boarding/validate').set(auth(fixture.tokens.passenger)).send({
+      tripSessionId: String(fixture.trip._id), pickupRequestId: String(pickup._id),
+      lat: routePath[0][1], lng: routePath[0][0],
+    }),
+    request(app).patch(`/api/v1/pickup-requests/${pickup._id}/cancel`).set(auth(fixture.tokens.passenger)),
+  ]);
+  assert.ok(responses.every((response) => [200, 409].includes(response.status)));
+  const saved = await PickupRequest.findById(pickup._id);
+  const rides = await RideSession.countDocuments({ pickupRequestId: pickup._id });
+  assert.equal(rides, saved.status === 'completed' ? 1 : 0);
+  assert.equal((await TripSession.findById(fixture.trip._id)).occupancyCount, rides);
+});
+
+test('manual occupancy is authoritative, reaches final capacity, and can return to zero', async () => {
+  const fixture = await seedCoreFixture();
+  await Jeepney.findByIdAndUpdate(fixture.jeepney._id, { $set: { capacity: 1 } });
+
+  const added = await request(app)
+    .patch(`/api/v1/trips/${fixture.trip._id}/occupancy`)
+    .set(auth(fixture.tokens.driver))
+    .send({ manualOccupancyCount: 1 });
+  assert.equal(added.status, 200, added.text);
+  assert.equal(added.body.data.manualOccupancyCount, 1);
+  assert.equal(added.body.data.occupancyCount, 1);
+
+  const removed = await request(app)
+    .patch(`/api/v1/trips/${fixture.trip._id}/occupancy`)
+    .set(auth(fixture.tokens.driver))
+    .send({ manualOccupancyCount: 0 });
+  assert.equal(removed.status, 200, removed.text);
+  assert.equal(removed.body.data.manualOccupancyCount, 0);
+  assert.equal(removed.body.data.occupancyCount, 0);
+
+  const negative = await request(app)
+    .patch(`/api/v1/trips/${fixture.trip._id}/occupancy`)
+    .set(auth(fixture.tokens.driver))
+    .send({ manualOccupancyCount: -1 });
+  assert.equal(negative.status, 400, negative.text);
+});
+
+test('manual occupancy preserves app-tracked rides and publishes an update to the passenger', async () => {
+  const fixture = await seedCoreFixture();
+  const pickup = await createPickupRequest({ fixture });
+  const boarding = await request(app)
+    .post('/api/v1/boarding/validate')
+    .set(auth(fixture.tokens.passenger))
+    .send({
+      tripSessionId: fixture.trip._id.toString(),
+      pickupRequestId: pickup._id.toString(),
+      lat: routePath[0][1],
+      lng: routePath[0][0],
+    });
+  assert.equal(boarding.status, 200, boarding.text);
+
+  const socket = await connectClient(fixture.tokens.passenger);
+  const event = await waitForEvent(socket, 'ops.changed', async () => {
+    const response = await request(app)
+      .patch(`/api/v1/trips/${fixture.trip._id}/occupancy`)
+      .set(auth(fixture.tokens.driver))
+      .send({ manualOccupancyCount: 1 });
+    assert.equal(response.status, 200, response.text);
+  });
+
+  assert.equal(event.type, 'trip.occupancy.updated');
+  assert.equal(event.tripId, fixture.trip._id.toString());
+  assert.equal(event.manualOccupancyCount, 1);
+  assert.equal(event.occupancyCount, 2);
+  assert.equal((await TripSession.findById(fixture.trip._id)).occupancyCount, 2);
+});
+
+test('automatic offboarding rejects locations older than 15 seconds and completes on the third fresh check', async () => {
+  const fixture = await seedCoreFixture();
+  const pickup = await createPickupRequest({ fixture });
+  const boarding = await request(app)
+    .post('/api/v1/boarding/validate')
+    .set(auth(fixture.tokens.passenger))
+    .send({
+      tripSessionId: fixture.trip._id.toString(),
+      pickupRequestId: pickup._id.toString(),
+      lat: routePath[0][1],
+      lng: routePath[0][0],
+    });
+  assert.equal(boarding.status, 200, boarding.text);
+  const ride = await RideSession.findOne({ pickupRequestId: pickup._id });
+  const now = new Date();
+
+  const passenger = await Passenger.findById(fixture.passenger._id);
+  passenger.lastKnownLocation = point(121.5, 15.1);
+  passenger.lastSeenAt = new Date(now.getTime() - 16_000);
+  await passenger.save();
+  await Jeepney.findByIdAndUpdate(fixture.jeepney._id, {
+    $set: {
+      lastKnownLocation: point(routePath[0][0], routePath[0][1]),
+      lastSeenAt: now,
+    },
+  });
+
+  const staleResponse = await request(app)
+    .patch('/api/v1/drivers/me/location')
+    .set(auth(fixture.tokens.driver))
+    .send({ lat: routePath[0][1], lng: routePath[0][0] });
+  assert.equal(staleResponse.status, 200, staleResponse.text);
+  assert.equal((await RideSession.findById(ride._id)).status, 'onboard');
+
+  passenger.lastSeenAt = new Date();
+  await passenger.save();
+  const rideWithWindow = await RideSession.findById(ride._id);
+  rideWithWindow.autoOffboarding = {
+    separationStartedAt: new Date(),
+    outsideCount: 2,
+    lastDistanceMeters: 1000,
+  };
+  await rideWithWindow.save();
+
+  const freshResponse = await request(app)
+    .patch('/api/v1/drivers/me/location')
+    .set(auth(fixture.tokens.driver))
+    .send({ lat: routePath[0][1], lng: routePath[0][0] });
+  assert.equal(freshResponse.status, 200, freshResponse.text);
+  const completed = await RideSession.findById(ride._id);
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.offboardingMethod, 'auto_separation');
+  assert.equal((await TripSession.findById(fixture.trip._id)).occupancyCount, 0);
+});
+
+
+test('ending a trip atomically closes rides, pending pickups and alerts', async () => {
+  const f = await seedCoreFixture();
+  const pickup = await createPickupRequest({ fixture: f });
+  const boarded = await request(app).post('/api/v1/boarding/validate').set(auth(f.tokens.passenger))
+    .send({ tripSessionId: String(f.trip._id), pickupRequestId: String(pickup._id), lat: routePath[0][1], lng: routePath[0][0] });
+  assert.equal(boarded.status, 200, boarded.text);
+  const ride = await RideSession.findOne({ tripSessionId: f.trip._id });
+  await StopAlert.create({ passengerId: f.passenger._id, tripSessionId: f.trip._id,
+    rideSessionId: ride._id, routeId: f.route._id, stopRef: 'P1-4' });
+  await createPickupRequest({ fixture: f, passenger: f.otherPassenger });
+  const closed = await request(app).patch(`/api/v1/trips/${f.trip._id}/end`).set(auth(f.tokens.driver));
+  assert.equal(closed.status, 200, closed.text);
+  assert.equal(closed.body.data.occupancyCount, 0);
+  assert.equal((await RideSession.findById(ride._id)).offboardingMethod, 'trip_ended');
+  assert.equal(await StopAlert.countDocuments({ tripSessionId: f.trip._id, status: { $ne: 'dismissed' } }), 0);
+  assert.equal(await PickupRequest.countDocuments({ tripSessionId: f.trip._id, status: { $in: ['pending', 'acknowledged'] } }), 0);
+  assert.equal((await request(app).patch(`/api/v1/trips/${f.trip._id}/availability`).set(auth(f.tokens.driver)).send({ acceptRequests: true })).status, 409);
+});
+
+test('ending a trip racing boarding leaves no onboard rides or occupancy', async () => {
+  const f = await seedCoreFixture();
+  const pickup = await createPickupRequest({ fixture: f });
+  const [boarding, ending] = await Promise.all([
+    request(app).post('/api/v1/boarding/validate').set(auth(f.tokens.passenger))
+      .send({ tripSessionId: String(f.trip._id), pickupRequestId: String(pickup._id), lat: routePath[0][1], lng: routePath[0][0] }),
+    request(app).patch(`/api/v1/trips/${f.trip._id}/end`).set(auth(f.tokens.driver)),
+  ]);
+  assert.equal(ending.status, 200, ending.text);
+  assert.ok([200, 409].includes(boarding.status), boarding.text);
+  assert.equal(await RideSession.countDocuments({ tripSessionId: f.trip._id, status: 'onboard' }), 0);
+  assert.equal((await TripSession.findById(f.trip._id)).occupancyCount, 0);
+});
+
+test('inactivity pauses only stale trips and requires explicit resume without closing riders', async () => {
+  const { pauseInactiveTrips, setAvailability } = require('../src/services/tripLifecycle.service');
+  const f = await seedCoreFixture();
+  const now = new Date(Date.now() + 10 * 60000);
+  await Jeepney.updateOne({ _id: f.otherJeepney._id }, { $set: { lastSeenAt: now } });
+  await pauseInactiveTrips(now);
+  const trip = await TripSession.findById(f.trip._id);
+  assert.equal(trip.status, 'active');
+  assert.equal(trip.acceptRequests, false);
+  assert.ok(trip.inactivityPausedAt);
+  assert.equal((await TripSession.findById(f.otherTrip._id)).inactivityPausedAt, undefined);
+  assert.equal(await pauseInactiveTrips(now), 0);
+  const resumed = await setAvailability(f.trip._id, true);
+  assert.equal(resumed.acceptRequests, true);
+  assert.equal(resumed.inactivityPausedAt, undefined);
+  assert.equal(await pauseInactiveTrips(new Date()), 0);
+});
+
+
+test('terminal check-in without GPS serializes promotion, departure and retry', async () => {
+  const f = await seedCoreFixture();
+  const q = require('../src/services/terminalQueue.service');
+  await TripSession.createIndexes();
+  await require('../src/models/terminalQueueAction').createIndexes();
+  const document = { driverId: f.driver._id, jeepneyId: f.jeepney._id, routeId: f.route._id };
+  const first = await q.checkIn({ document, actor: f.users.driver, requestId: 'checkin-first' });
+  const second = await q.checkIn({ document: { ...document, driverId: f.otherDriver._id, jeepneyId: f.otherJeepney._id }, actor: f.users.otherDriver, requestId: 'checkin-second' });
+  assert.equal(first.terminalQueueStatus, 'loading');
+  assert.equal(second.terminalQueueStatus, 'waiting');
+  assert.equal((await q.checkIn({ document, actor: f.users.driver, requestId: 'checkin-first' })).id, first.id);
+  const departed = await q.change({ tripId: first._id, actor: f.users.driver, action: 'depart', requestId: 'departure-first' });
+  assert.equal(departed.operatingMode, 'route');
+  assert.equal(departed.status, 'active');
+  assert.equal((await TripSession.findById(second._id)).terminalQueueStatus, 'loading');
+  assert.equal((await q.change({ tripId: first._id, actor: f.users.driver, action: 'depart', requestId: 'departure-first' })).id, first.id);
+});
+
+test('terminal capacity reservations and transfer acceptance are atomic', async () => {
+  const f = await seedCoreFixture();
+  const q = require('../src/services/terminalQueue.service');
+  await TripSession.createIndexes();
+  await require('../src/models/terminalQueueAction').createIndexes();
+  const { createTripRecord } = require('../src/services/tripLifecycle.service');
+  await Jeepney.updateOne({ _id: f.jeepney._id }, { $set: { capacity: 1 } });
+  const first = await q.checkIn({ document: { driverId: f.driver._id, jeepneyId: f.jeepney._id, routeId: f.route._id }, actor: f.users.driver, requestId: 'reserve-first' });
+  const second = await q.checkIn({ document: { driverId: f.otherDriver._id, jeepneyId: f.otherJeepney._id, routeId: f.route._id }, actor: f.users.otherDriver, requestId: 'reserve-second' });
+  const booking = { passengerId: f.passenger._id, tripSessionId: first._id, routeId: f.route._id, pickupType: 'terminal',
+    pickupLocation: point(...routePath[0]), destinationLocation: point(...routePath[3]), destinationStopRef: 'P1-4', fareSnapshot: { amount: 25 }, expiresAt: new Date(Date.now() + 60000) };
+  const results = await Promise.allSettled([1,2].map(() => createTripRecord(PickupRequest, booking, { accepting: true })));
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  const original = results.find(r => r.status === 'fulfilled').value;
+  await q.change({ tripId: first._id, actor: f.users.driver, action: 'skip', requestId: 'skip-first' });
+  const offer = await PickupRequest.findById(original._id);
+  assert.equal(offer.status, 'transfer_offered');
+  const transfers = await Promise.all([1,2].map(() => q.transfer({ requestId: offer._id, passengerId: f.passenger._id, offerId: offer.transferOfferId, accept: true })));
+  assert.ok(transfers.every(r => String(r.tripSessionId) === String(second._id)));
+  assert.equal(transfers[0].fareSnapshot.amount, 25);
+  assert.equal(transfers[0].expiresAt.getTime(), original.expiresAt.getTime());
+  assert.equal(await PickupRequest.countDocuments({ tripSessionId: second._id, status: 'pending' }), 1);
+});
+
+test('terminal status endpoint requires reason and enforces driver ownership', async () => {
+  const f = await seedCoreFixture(); const q = require('../src/services/terminalQueue.service');
+  const first = await q.checkIn({ document: { driverId: f.driver._id, jeepneyId: f.jeepney._id, routeId: f.route._id }, actor: f.users.driver, requestId: 'endpoint-checkin' });
+  const path = `/api/v1/admin/terminal-queue/${first._id}/status`;
+  assert.equal((await request(app).patch(path).set(auth(f.tokens.admin)).send({ terminalQueueStatus: 'departed', requestId: 'admin-departure' })).status, 400);
+  assert.equal((await request(app).patch(`/api/v1/trips/${first._id}/terminal/depart`).set(auth(f.tokens.otherDriver)).send({ requestId: 'wrong-departure' })).status, 403);
+  const result = await request(app).patch(path).set(auth(f.tokens.admin)).send({ terminalQueueStatus: 'departed', requestId: 'admin-departure', reason: 'Driver requested dispatch' });
+  assert.equal(result.status, 200, result.text);
+});
+
+
+test('terminal boarding needs fresh GPS and departure preserves onboard rides', async () => {
+  const f = await seedCoreFixture(); const q = require('../src/services/terminalQueue.service');
+  await TripSession.createIndexes();
+  const trip = await q.checkIn({ document: { driverId: f.driver._id, jeepneyId: f.jeepney._id, routeId: f.route._id }, actor: f.users.driver, requestId: 'boarding-checkin' });
+  const pickup = await createPickupRequest({ fixture: f, trip });
+  pickup.pickupType = 'terminal'; pickup.terminalLocation = point(...routePath[0]); await pickup.save();
+  const board = () => request(app).post('/api/v1/boarding/validate').set(auth(f.tokens.passenger))
+    .send({ tripSessionId: String(trip._id), pickupRequestId: String(pickup._id), lat: routePath[0][1], lng: routePath[0][0] });
+  await Passenger.updateOne({ _id: f.passenger._id }, { $unset: { lastSeenAt: 1 } });
+  assert.equal((await board()).status, 409);
+  await Passenger.updateOne({ _id: f.passenger._id }, { $set: { lastSeenAt: new Date(), lastKnownLocation: point(...routePath[0]) } });
+  await Jeepney.updateOne({ _id: f.jeepney._id }, { $set: { lastSeenAt: new Date(), lastKnownLocation: point(...routePath[0]) } });
+  const result = await board(); assert.equal(result.status, 200, result.text);
+  assert.equal((await TripSession.findById(trip._id)).terminalQueueStatus, 'loading');
+  const departed = await q.change({ tripId: trip._id, actor: f.users.driver, action: 'depart', requestId: 'boarded-departure' });
+  assert.equal(departed.occupancyCount, 1);
+  assert.equal(await RideSession.countDocuments({ tripSessionId: trip._id, status: 'onboard' }), 1);
+});
+
+test('terminal GPS inactivity is advisory and returning jeeps go to the back', async () => {
+  const f = await seedCoreFixture(); const q = require('../src/services/terminalQueue.service');
+  const trip = await q.checkIn({ document: { driverId: f.driver._id, jeepneyId: f.jeepney._id, routeId: f.route._id }, actor: f.users.driver, requestId: 'inactive-checkin' });
+  const originalPosition = trip.terminalQueueNumber;
+  await require('../src/services/tripLifecycle.service').pauseInactiveTrips(new Date(Date.now() + 600000));
+  const active = await TripSession.findById(trip._id);
+  assert.equal(active.acceptRequests, true); assert.equal(active.inactivityPausedAt, undefined);
+  await q.change({ tripId: trip._id, actor: f.users.driver, action: 'skip', requestId: 'inactive-skip' });
+  const restored = await q.change({ tripId: trip._id, actor: f.users.driver, action: 'restore', requestId: 'inactive-restore' });
+  assert.ok(restored.terminalQueueNumber > originalPosition);
+  assert.equal(restored.terminalQueueStatus, 'loading');
+});
+
+test('terminal transfer cannot be accepted by another passenger or after expiry', async () => {
+  const f = await seedCoreFixture(); const q = require('../src/services/terminalQueue.service');
+  const pickup = await createPickupRequest({ fixture: f });
+  pickup.status = 'transfer_offered'; pickup.transferOfferId = 'test-offer'; pickup.expiresAt = new Date(Date.now() - 1000); await pickup.save();
+  await assert.rejects(q.transfer({ requestId: pickup._id, passengerId: f.otherPassenger._id, offerId: 'test-offer', accept: true }), error => error.statusCode === 404);
+  await assert.rejects(q.transfer({ requestId: pickup._id, passengerId: f.passenger._id, offerId: 'test-offer', accept: true }), error => error.statusCode === 409);
+});
+
+
+test('terminal waiting reorder keeps unique positions and does not move loading jeep', async () => {
+ const f = await seedCoreFixture(); const q = require('../src/services/terminalQueue.service');
+ await TripSession.createIndexes();
+ const first = await q.checkIn({ document: { driverId: f.driver._id, jeepneyId: f.jeepney._id, routeId: f.route._id }, actor: f.users.driver, requestId: 'order-first' });
+ const second = await q.checkIn({ document: { driverId: f.otherDriver._id, jeepneyId: f.otherJeepney._id, routeId: f.route._id }, actor: f.users.otherDriver, requestId: 'order-second' });
+ const third = await TripSession.create({ routeId: f.route._id, driverId: new mongoose.Types.ObjectId(), jeepneyId: new mongoose.Types.ObjectId(), status: 'active', operatingMode: 'terminal_queue', terminalQueueStatus: 'waiting', terminalQueueNumber: 10 });
+ await q.change({ tripId: third._id, actor: f.users.admin, action: 'reorder', direction: 'up', reason: 'Correct arrival order', requestId: 'order-third-up' });
+ assert.equal((await TripSession.findById(third._id)).terminalQueueNumber, second.terminalQueueNumber);
+ assert.equal((await TripSession.findById(first._id)).terminalQueueStatus, 'loading');
+ await assert.rejects(q.change({ tripId: first._id, actor: f.users.admin, action: 'reorder', direction: 'down', reason: 'Test', requestId: 'order-loading' }), error => error.statusCode === 409);
+ const audit = await require('../scripts/terminal-queue-migration').inspect();
+ assert.equal(audit.conflicts.length, 0);
+});
+
+
+test('terminal end-trip audits closure and promotes the next jeep', async () => {
+ const f = await seedCoreFixture(); const q = require('../src/services/terminalQueue.service');
+ const first = await q.checkIn({ document: { driverId: f.driver._id, jeepneyId: f.jeepney._id, routeId: f.route._id }, actor: f.users.driver, requestId: 'end-first' });
+ const next = await q.checkIn({ document: { driverId: f.otherDriver._id, jeepneyId: f.otherJeepney._id, routeId: f.route._id }, actor: f.users.otherDriver, requestId: 'end-next' });
+ const ended = await request(app).patch(`/api/v1/trips/${first._id}/end`).set(auth(f.tokens.driver)).send({ requestId: 'end-terminal' });
+ assert.equal(ended.status, 200, ended.text);
+ assert.equal((await TripSession.findById(next._id)).terminalQueueStatus, 'loading');
+ assert.ok(await require('../src/models/terminalQueueAction').exists({ tripId: first._id, action: 'end_trip', actorId: f.users.driver._id }));
 });

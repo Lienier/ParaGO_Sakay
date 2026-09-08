@@ -42,13 +42,14 @@ app.use(
     }),
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Authorization', 'Content-Type', 'X-Request-Id'],
-    exposedHeaders: ['X-Request-Id', 'RateLimit', 'RateLimit-Policy'],
+    exposedHeaders: ['X-Request-Id', 'RateLimit', 'RateLimit-Policy', 'Retry-After'],
     maxAge: 600,
   })
 );
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
+app.get('/reset-password', require('./routes/passwordResetPage'));
 app.get('/', apiRootInfo);
 app.get('/api', apiRootInfo);
 app.get('/api/v1', apiRootInfo);

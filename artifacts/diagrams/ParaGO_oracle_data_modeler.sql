@@ -2,6 +2,15 @@
 -- Import with File > Import > DDL File. This does not replace MongoDB Atlas.
 -- MongoDB ObjectIds are represented as VARCHAR2(24 CHAR). Embedded objects that
 -- do not need independent relationships are represented as JSON CLOB columns.
+-- DOCUMENTATION PROJECTION ONLY: this is not the deployed physical schema.
+-- SQL NOT NULL, foreign keys, cascades and normalized tables express this
+-- relational projection; they do not assert equivalent MongoDB enforcement.
+-- Mongoose defaults are not identical to required validators. MongoDB TTL,
+-- partial unique and geospatial indexes have no implicit equivalent in this DDL.
+-- Compare exact current collection names, paths, required flags and index
+-- predicates in ParaGO_schema_reference.json (generated from src/models).
+-- In particular, ReportMetadata uses the MongoDB collection reportmetadatas;
+-- the report_metadata table below is its intentionally renamed SQL projection.
 
 CREATE TABLE users (
     user_id             VARCHAR2(24 CHAR) NOT NULL,

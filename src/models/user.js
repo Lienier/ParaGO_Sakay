@@ -4,6 +4,7 @@ const { Schema } = mongoose;
 
 const userSchema = new Schema(
   {
+    authVersion: { type: Number, default: 0, select: false },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     passwordHash: { type: String, select: false },
     fullName: { type: String, required: true, trim: true },

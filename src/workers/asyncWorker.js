@@ -1,3 +1,4 @@
+const { pauseInactiveTrips } = require('../services/tripLifecycle.service');
 const Jeepney = require('../models/jeepney');
 const {
   workerAutomationPollIntervalMs,
@@ -109,6 +110,7 @@ class AsyncWorker {
       processAutomaticOffboardingForTrip,
       checkAndReassignPassedRequests,
       reconcileAnnouncementStatuses,
+      pauseInactiveTrips,
       acquireRedisLock,
       releaseRedisLock,
       drainLocationWork,
@@ -290,6 +292,7 @@ class AsyncWorker {
       if (nowMs - this.lastAnnouncementReconcileAtMs >= 30000) {
         announcements =
           await this.dependencies.reconcileAnnouncementStatuses();
+        await this.dependencies.pauseInactiveTrips();
         this.lastAnnouncementReconcileAtMs = nowMs;
       }
       return { skipped: false, announcements };

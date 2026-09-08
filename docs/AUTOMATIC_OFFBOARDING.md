@@ -15,16 +15,15 @@ An onboard ride can auto-complete when:
 - The passenger has a recent location ping.
 - The driver/jeepney has a recent location ping.
 - Passenger-to-jeepney distance is at least `AUTO_OFFBOARDING_DISTANCE_METERS`.
-- The separation is confirmed for enough checks or enough sustained time.
+- The separation is confirmed by 3 consecutive valid outside checks.
 
 Defaults:
 
 ```env
 AUTO_OFFBOARDING_DISTANCE_METERS=120
 AUTO_OFFBOARDING_CONSECUTIVE_OUTSIDE_CHECKS=3
-AUTO_OFFBOARDING_SUSTAINED_SEPARATION_SECONDS=60
-AUTO_OFFBOARDING_PASSENGER_LOCATION_MAX_AGE_SECONDS=45
-AUTO_OFFBOARDING_DRIVER_LOCATION_MAX_AGE_SECONDS=20
+AUTO_OFFBOARDING_PASSENGER_LOCATION_MAX_AGE_SECONDS=15
+AUTO_OFFBOARDING_DRIVER_LOCATION_MAX_AGE_SECONDS=15
 ```
 
 ## Location Inputs
@@ -53,7 +52,7 @@ When the separation rule passes:
 
 ## Network/GPS Fallback
 
-Automatic offboarding pauses when either location is stale or missing. It does not complete the ride from old GPS data. If GPS or internet prevents automatic completion, the passenger can still press `I unloaded`.
+Automatic offboarding pauses when either location is missing, invalid, or more than 15 seconds old. It does not complete the ride from old GPS data. If GPS or internet prevents automatic completion, the passenger can still press `I unloaded`.
 
 The passenger app also keeps the existing separation prompt, so the user sees a manual fallback message if they are far from the jeepney but automation has not completed the ride yet.
 
