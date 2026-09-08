@@ -334,13 +334,6 @@ String _dispatchTripLabel(dynamic value) {
   return parts.isEmpty ? 'Trip ${map['_id'] ?? '-'}' : parts.join(' · ');
 }
 
-String _dispatchTripMode(dynamic value) {
-  final map = _readDynamicMap(value);
-  return map['operatingMode']?.toString() == 'terminal_queue'
-      ? 'Terminal queue mode'
-      : 'Route mode';
-}
-
 String _dispatchTerminalLabel(dynamic value) {
   final map = _readDynamicMap(value);
   final terminal = map['terminalStopRef']?.toString();
@@ -389,51 +382,6 @@ List<Widget> _terminalQueueActions(
         onPressed: loading ? () => onStatusChanged(tripId, 'departed') : null,
         child: const Text('Depart terminal')),
   ];
-}
-
-class _HybridDispatchColumn extends StatelessWidget {
-  const _HybridDispatchColumn({
-    required this.title,
-    required this.accent,
-    required this.emptyMessage,
-    required this.children,
-  });
-
-  final String title;
-  final Color accent;
-  final String emptyMessage;
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceSubtle,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color: accent,
-                ),
-          ),
-          const SizedBox(height: 12),
-          if (children.isEmpty)
-            Text(emptyMessage)
-          else
-            ...children
-                .expand((child) => [child, const SizedBox(height: 10)])
-                .toList()
-              ..removeLast(),
-        ],
-      ),
-    );
-  }
 }
 
 class _HybridDispatchTile extends StatelessWidget {
@@ -685,13 +633,11 @@ class _PassengerFlowStatTile extends StatelessWidget {
     required this.label,
     required this.value,
     required this.accent,
-    this.caption,
   });
 
   final String label;
   final String value;
   final Color accent;
-  final String? caption;
 
   @override
   Widget build(BuildContext context) {
@@ -719,10 +665,6 @@ class _PassengerFlowStatTile extends StatelessWidget {
                   fontWeight: FontWeight.w800,
                 ),
           ),
-          if (caption != null) ...[
-            const SizedBox(height: 6),
-            Text(caption!),
-          ],
         ],
       ),
     );
@@ -1074,41 +1016,6 @@ class _PassengerFlowTopStopsCardState
   }
 }
 
-class _AdminInfoBanner extends StatelessWidget {
-  const _AdminInfoBanner({
-    required this.message,
-    this.isWarning = false,
-  });
-
-  final String message;
-  final bool isWarning;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final backgroundColor =
-        isWarning ? colorScheme.errorContainer : colorScheme.secondaryContainer;
-    final foregroundColor = isWarning
-        ? colorScheme.onErrorContainer
-        : colorScheme.onSecondaryContainer;
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: backgroundColor,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        message,
-        style: TextStyle(
-          color: foregroundColor,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-}
-
 class _SectionCard extends StatelessWidget {
   const _SectionCard({
     required this.title,
@@ -1174,22 +1081,6 @@ int _readCount(dynamic value) {
     return value;
   }
   return int.tryParse(value?.toString() ?? '') ?? 0;
-}
-
-_PassengerFlowLocation? _parsePassengerFlowLocation(dynamic value) {
-  final map = _readDynamicMap(value);
-  if (map.isEmpty) {
-    return null;
-  }
-  final location = _parseLatLngMap(map['location']);
-  if (location == null) {
-    return null;
-  }
-  return _PassengerFlowLocation(
-    label: map['label']?.toString() ?? 'Unknown location',
-    count: _readCount(map['count']),
-    position: location,
-  );
 }
 
 List<_PassengerFlowLocation> _parsePassengerFlowLocations(dynamic value) {

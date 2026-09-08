@@ -789,6 +789,7 @@ class _SupportThreadDetail extends StatelessWidget {
           child: OutlinedButton(
             style: OutlinedButton.styleFrom(
               minimumSize: const Size(0, 52),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
             ),
             onPressed: taking ? null : onTakeThread,
             child: const Text('Take thread'),
@@ -800,6 +801,7 @@ class _SupportThreadDetail extends StatelessWidget {
             child: FilledButton.tonal(
               style: FilledButton.styleFrom(
                 minimumSize: const Size(0, 52),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
               ),
               onPressed: onReopen,
               child: const Text('Reopen'),
@@ -811,6 +813,7 @@ class _SupportThreadDetail extends StatelessWidget {
             child: FilledButton.tonal(
               style: FilledButton.styleFrom(
                 minimumSize: const Size(0, 52),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
               ),
               onPressed: () => onResolve(status: 'resolved'),
               child: const Text('Resolve'),

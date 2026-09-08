@@ -1,5 +1,19 @@
 # Admin redesign - local review
 
+## Current status — Phase 4 local verification (2026-09-08)
+
+Phases 1–3 and the approved login colors were previously pushed as `b2d15fb` on `admin-ui-redesign-20260908`. The user redirected the merge request to Phase 4. No merge or deployment was performed. Older “local only” and “await feedback” statements below describe earlier checkpoints, not current branch status.
+
+Phase 4 fixes: consistent Inter typography for buttons/chips, readable support action labels, bounded account-menu text and single-line phone page titles, wrapping preview controls, removal of unused presentation helpers, and brace-style cleanup. Screenshot tests now load bundled Inter and Material icons. Announcement fixtures use a fixed timestamp rather than the current time. Four desktop/narrow announcement/support baselines were individually inspected and updated; they are Windows/Asia-Manila reference captures.
+
+Validation: `flutter analyze lib` reports no issues; all 26 admin tests pass, including four screenshot tests, OTP presentation, sessions, terminal retry behavior, report validation and stale-response handling. Preview JavaScript build passes. The production `lib/main.dart` entrypoint also built separately to `build/production-check`; the final subsequent edits only affect header layout and unused-code cleanup. Eight workspace screens were captured at 1440×900, 1024×768, 768×1024 and 390×844, plus desktop/phone login, with no browser JavaScript errors. Local captures are under `.tmp/phase4-*` and are not release assets.
+
+Review locally at http://127.0.0.1:8088. The login retains the approved split layout and gray-green background. Phone tables, report charts and filter strips scroll horizontally; map editing remains tablet/desktop only. The preview uses fixtures, so it does not prove real authentication or database mutations.
+
+Release gates still pending: user visual acceptance; a complete keyboard/focus and unsaved-form walkthrough; controlled staging OTP/reset/session-reconnect and terminal/ride flows. The browser automation could not select the preview's Empty dropdown option, so the full empty/loading/error screenshot sweep remains unverified; functional partial-failure/stale-data tests pass. The existing `socket_io_common` WebAssembly dry-run incompatibility remains; the JavaScript builds succeed. No claim of WebAssembly support or live SES delivery is made.
+
+Release procedure: after review, commit Phase 4 to the feature branch, run the same tests, and obtain release authorization before merging/deploying. Build `lib/main.dart` with the deployment's real configuration; never upload `build/web` from this local preview. Keep the last approved production web artifact for UI rollback. Roll back only the admin UI artifact, preserving backend session security and transactional terminal rules. This phase changes no database schema or backend configuration.
+
 ## Phase 1
 
 Implemented the neutral/teal foundation, bundled Inter font and license, text sidebar with tablet drawer, simplified login, neutral metric cards, driver table with existing edit workflow, and reduced dispatch decoration. The production entrypoint and authentication requirements are unchanged.

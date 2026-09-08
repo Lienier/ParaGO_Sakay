@@ -151,8 +151,9 @@ class ActionFeedback {
 
   static String _messageOf(Object error) {
     if (error is ApiException) {
-      if (error.statusCode >= 500)
+      if (error.statusCode >= 500) {
         return 'The service is temporarily unavailable. Please try again.';
+      }
       return [error.message, ...?error.errors]
           .where((text) => text.trim().isNotEmpty)
           .join('\n');

@@ -107,8 +107,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       setState(() => _sectionLoading.add(key));
       try {
         final data = await request();
-        if (!mounted || (key == 'dispatch' && revision != _dispatchRevision))
+        if (!mounted || (key == 'dispatch' && revision != _dispatchRevision)) {
           return;
+        }
         setState(() {
           assign(data);
           _sectionErrors.remove(key);
@@ -579,6 +580,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                       onPressed: () => Scaffold.of(context).openDrawer())),
             Expanded(
                 child: Text(_sectionLabel(_selectedSection),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleMedium)),
             TextButton(
                 onPressed: () =>
@@ -594,9 +597,16 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                       const PopupMenuItem(
                           value: 'logout', child: Text('Log out'))
                     ],
-                child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Text(session.user?.fullName ?? 'Administrator'))),
+                child: SizedBox(
+                    width: desktop ? 180 : 84,
+                    child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Text(
+                            desktop
+                                ? (session.user?.fullName ?? 'Administrator')
+                                : 'Account',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis)))),
           ])),
       Expanded(child: _buildWorkspaceContent()),
     ]);

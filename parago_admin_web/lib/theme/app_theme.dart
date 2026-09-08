@@ -72,6 +72,8 @@ class AppTheme {
             borderRadius: AppRadius.medium,
           ),
           textStyle: const TextStyle(
+            fontFamily: 'Inter',
+            fontSize: 14,
             fontWeight: FontWeight.w700,
             letterSpacing: 0.1,
           ),
@@ -83,7 +85,8 @@ class AppTheme {
           minimumSize: const Size(64, 44),
           side: BorderSide(color: Colors.black.withValues(alpha: 0.08)),
           shape: const RoundedRectangleBorder(borderRadius: AppRadius.medium),
-          textStyle: const TextStyle(fontWeight: FontWeight.w700),
+          textStyle: const TextStyle(
+              fontFamily: 'Inter', fontSize: 14, fontWeight: FontWeight.w700),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
@@ -108,7 +111,10 @@ class AppTheme {
         backgroundColor: Colors.white,
         side: const BorderSide(color: AppColors.border),
         labelStyle: const TextStyle(
-            color: AppColors.textPrimary, fontWeight: FontWeight.w600),
+            fontFamily: 'Inter',
+            fontSize: 14,
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w600),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
       ),
       appBarTheme: const AppBarTheme(

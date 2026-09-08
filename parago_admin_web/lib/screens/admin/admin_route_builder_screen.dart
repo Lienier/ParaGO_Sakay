@@ -417,13 +417,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
         : value.toStringAsFixed(2);
   }
 
-  String _fareRuleSummary() {
-    final baseAmount = _parseFareInput(_fareBaseAmountCtrl, 17);
-    final baseDistanceKm = _parseFareInput(_fareBaseDistanceCtrl, 4);
-    final additionalAmount = _parseFareInput(_fareAdditionalPerKmCtrl, 2);
-    return 'First ${_formatNumericInput(baseDistanceKm)} km = PHP ${_formatNumericInput(baseAmount)}, then PHP ${_formatNumericInput(additionalAmount)} per succeeding kilometer.';
-  }
-
   LatLng get _mapCenter {
     final bounds = _previewBounds;
     if (bounds != null) {
@@ -587,17 +580,6 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
     final hours = minutes ~/ 60;
     final remainingMinutes = (minutes % 60).round();
     return '${hours}h ${remainingMinutes}m';
-  }
-
-  String? _validateNonNegativeNumber(String? value, String label) {
-    final parsed = double.tryParse((value ?? '').trim());
-    if (parsed == null) {
-      return '$label must be a valid number.';
-    }
-    if (parsed < 0) {
-      return '$label must be 0 or higher.';
-    }
-    return null;
   }
 
   @override

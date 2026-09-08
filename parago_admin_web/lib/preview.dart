@@ -41,38 +41,43 @@ class _PreviewAppState extends State<PreviewApp> {
           Container(
               color: const Color(0xFFEFF4F3),
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(children: [
-                const Expanded(
-                    child: Text('LOCAL DESIGN PREVIEW - Sample data only',
-                        style: TextStyle(fontSize: 12))),
-                DropdownButton<String>(
-                    value: mode,
-                    items: [
-                      'Populated',
-                      'Empty',
-                      'Error',
-                      'Loading',
-                      'Dispatch error'
-                    ]
-                        .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                        .toList(),
-                    onChanged: (value) => setState(() {
-                          mode = value!;
-                          PreviewApi.mode = mode;
-                        })),
-                TextButton(
-                    onPressed: () => setState(() {
-                          otp = !otp;
-                          login = false;
-                        }),
-                    child: const Text('OTP')),
-                TextButton(
-                    onPressed: () => setState(() {
-                          login = !login;
-                          otp = false;
-                        }),
-                    child: Text(login ? 'View workspace' : 'View login')),
-              ])),
+              child: Wrap(
+                  spacing: 12,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    const SizedBox(
+                        width: 240,
+                        child: Text('LOCAL DESIGN PREVIEW - Sample data only',
+                            style: TextStyle(fontSize: 12))),
+                    DropdownButton<String>(
+                        value: mode,
+                        items: [
+                          'Populated',
+                          'Empty',
+                          'Error',
+                          'Loading',
+                          'Dispatch error'
+                        ]
+                            .map((s) =>
+                                DropdownMenuItem(value: s, child: Text(s)))
+                            .toList(),
+                        onChanged: (value) => setState(() {
+                              mode = value!;
+                              PreviewApi.mode = mode;
+                            })),
+                    TextButton(
+                        onPressed: () => setState(() {
+                              otp = !otp;
+                              login = false;
+                            }),
+                        child: const Text('OTP')),
+                    TextButton(
+                        onPressed: () => setState(() {
+                              login = !login;
+                              otp = false;
+                            }),
+                        child: Text(login ? 'View workspace' : 'View login')),
+                  ])),
           Expanded(
               child: otp
                   ? AdminEmailOtpScreen(
@@ -103,8 +108,9 @@ class PreviewApi extends ApiClient {
       dynamic body,
       bool useCache = true,
       Duration? cacheTtl}) async {
-    if (path.endsWith('/read'))
+    if (path.endsWith('/read')) {
       return {'success': true, 'data': <String, dynamic>{}};
+    }
     if (method != 'GET') throw Exception('Preview only. Changes are disabled.');
     if (mode == 'Loading') {
       await Future<void>.delayed(const Duration(minutes: 10));
@@ -220,7 +226,7 @@ class PreviewApi extends ApiClient {
         'topUnloadLocations': []
       };
     }
-    if (path == '/routes')
+    if (path == '/routes') {
       data = empty
           ? []
           : [
@@ -243,8 +249,9 @@ class PreviewApi extends ApiClient {
                   }
                 }
             ];
+    }
     if (path == '/jeepneys') data = [];
-    if (path == '/announcements/admin')
+    if (path == '/announcements/admin') {
       data = {
         'items': empty
             ? []
@@ -276,6 +283,7 @@ class PreviewApi extends ApiClient {
           'totalPages': 1
         }
       };
+    }
     final thread = {
       '_id': 'sample-support',
       'subject': 'Help with a pickup request',
@@ -287,7 +295,7 @@ class PreviewApi extends ApiClient {
       'unreadAdminCount': 1
     };
     if (path == '/support/admin/threads') data = empty ? [] : [thread];
-    if (path == '/support/threads/sample-support/messages')
+    if (path == '/support/threads/sample-support/messages') {
       data = {
         'thread': thread,
         'messages': [
@@ -299,6 +307,7 @@ class PreviewApi extends ApiClient {
           }
         ]
       };
+    }
     return {'success': true, 'data': data};
   }
 }

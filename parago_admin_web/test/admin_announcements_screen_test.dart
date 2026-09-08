@@ -342,7 +342,7 @@ Map<String, dynamic> _announcementJson({
   String body = 'Normal service announcement body.',
   String status = 'published',
 }) {
-  final now = DateTime.now().toUtc();
+  final now = DateTime.utc(2026, 7, 28, 6);
   return {
     'id': id,
     'title': title,

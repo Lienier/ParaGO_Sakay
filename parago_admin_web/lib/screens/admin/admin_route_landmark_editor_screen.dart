@@ -6,7 +6,6 @@ import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/utils/action_feedback.dart';
-import '../../core/utils/parago_format.dart';
 import '../../models/transport/route_summary.dart';
 import '../../services/route_service.dart';
 import '../../services/session_controller.dart';
@@ -1076,39 +1075,6 @@ class _AdminRouteLandmarkEditorScreenState
             ),
           ],
         ],
-      ),
-    );
-  }
-}
-
-class _RouteMetaChip extends StatelessWidget {
-  const _RouteMetaChip({
-    required this.label,
-    required this.value,
-  });
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: RichText(
-        text: TextSpan(
-          style: DefaultTextStyle.of(context).style,
-          children: [
-            TextSpan(
-              text: '$label: ',
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-            TextSpan(text: value),
-          ],
-        ),
       ),
     );
   }
