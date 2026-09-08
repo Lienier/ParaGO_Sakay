@@ -236,6 +236,24 @@ resource "aws_iam_role" "github_staging_deploy" {
 
 data "aws_iam_policy_document" "github_staging_deploy" {
   statement {
+    sid       = "FindStagingDistribution"
+    actions   = ["cloudfront:ListDistributions"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "ReadDistributionOriginConfiguration"
+    actions   = ["cloudfront:GetDistributionConfig"]
+    resources = ["arn:aws:cloudfront::${data.aws_caller_identity.current.account_id}:distribution/*"]
+  }
+
+  statement {
+    sid       = "SyncStagingOriginHeader"
+    actions   = ["ssm:PutParameter"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/parago/staging/aws/v1/ORIGIN_HEADER_VALUE"]
+  }
+
+  statement {
     sid = "UploadAndPresignReleaseArchives"
     actions = [
       "s3:GetObject",

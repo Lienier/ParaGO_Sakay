@@ -55,6 +55,10 @@ test('AWS bootstrap state bucket is encrypted, versioned, and public-blocked', (
   assert.match(bootstrap, /repo:\$\{var\.github_repository\}:ref:refs\/heads\/main/);
   assert.match(bootstrap, /parago-github-staging-deploy/);
   assert.match(bootstrap, /ec2:StartInstances/);
+  assert.match(bootstrap, /cloudfront:ListDistributions/);
+  assert.match(bootstrap, /cloudfront:GetDistributionConfig/);
+  assert.match(bootstrap, /ssm:PutParameter/);
+  assert.match(bootstrap, /parameter\/parago\/staging\/aws\/v1\/ORIGIN_HEADER_VALUE/);
   assert.match(bootstrap, /resource "aws_s3_bucket" "driver_documents"/);
   assert.match(bootstrap, /prevent_destroy = true/);
   assert.match(bootstrap, /parago-driver-documents-/);
@@ -73,8 +77,8 @@ test('AWS staging GitHub Actions deploy remains scoped to main and SSM', () => {
   assert.match(deployScript, /aws ssm send-command/);
   assert.match(deployScript, /aws s3 presign/);
   assert.match(gitAttributes, /\*\.sh text eol=lf/);
-  assert.match(deployScript, /sed -i 's\/\\r\$\/\/' infra\/aws\/envs\/staging\/user-data\.sh/);
-  assert.match(deployScript, /bash infra\/aws\/envs\/staging\/user-data\.sh/);
+  assert.match(deployScript, /sed -i 's\/\\r\$\/\/' \/tmp\/parago-user-data\.sh/);
+  assert.match(deployScript, /bash \/tmp\/parago-user-data\.sh/);
   assert.match(deployScript, /command = "bash -lc "/);
   assert.match(deployScript, /cygpath -m/);
   assert.match(deployScript, /file:\/\/\$\{AWS_PARAMETERS_FILE\}/);
