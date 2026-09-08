@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-// Canonical source. Copy into the three clients with tools/sync_legal_pages.py.
+// Admin presentation. Policy text follows tools/legal/legal_pages.dart; retain this layout when syncing text.
 class LegalLinks extends StatelessWidget {
   const LegalLinks({super.key, this.foregroundColor});
 
@@ -8,21 +8,21 @@ class LegalLinks extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Wrap(
-    alignment: WrapAlignment.center,
-    spacing: 8,
-    children: [
-      for (final privacy in [false, true])
-        TextButton(
-          style: TextButton.styleFrom(foregroundColor: foregroundColor),
-          onPressed: () => Navigator.of(context).push<void>(
-            MaterialPageRoute<void>(
-              builder: (_) => LegalPolicyPage(privacy: privacy),
+        alignment: WrapAlignment.center,
+        spacing: 8,
+        children: [
+          for (final privacy in [false, true])
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: foregroundColor),
+              onPressed: () => Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => LegalPolicyPage(privacy: privacy),
+                ),
+              ),
+              child: Text(privacy ? 'Privacy Policy' : 'Terms & Conditions'),
             ),
-          ),
-          child: Text(privacy ? 'Privacy Policy' : 'Terms & Conditions'),
-        ),
-    ],
-  );
+        ],
+      );
 }
 
 class LegalPolicyPage extends StatelessWidget {
@@ -136,14 +136,14 @@ class LegalPolicyPage extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'SakayGaray',
-                      style: Theme.of(context).textTheme.headlineSmall,
+                      privacy ? 'Privacy Policy' : 'Terms & Conditions',
+                      style: Theme.of(context).textTheme.headlineMedium,
                     ),
                     const SizedBox(height: 8),
                     const Text(
                       'Draft for review — not yet an effective policy.',
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 32),
                     for (final section in sections) ...[
                       Text(
                         section.$1,
@@ -154,9 +154,9 @@ class LegalPolicyPage extends StatelessWidget {
                         section.$2,
                         style: Theme.of(
                           context,
-                        ).textTheme.bodyMedium?.copyWith(height: 1.5),
+                        ).textTheme.bodyMedium?.copyWith(height: 1.7),
                       ),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 32),
                     ],
                   ],
                 ),

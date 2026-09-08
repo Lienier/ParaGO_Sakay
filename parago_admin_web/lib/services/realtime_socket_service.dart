@@ -92,6 +92,7 @@ class RealtimeSocketService {
       _retryTimer = null;
       _networkFailureReported = false;
       debugPrint('Realtime socket connected.');
+      _operationsController.add({'notificationType': 'connection_restored'});
     });
     socket.onDisconnect((reason) {
       debugPrint('Realtime socket disconnected: $reason');

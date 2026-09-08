@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../exceptions/api_exception.dart';
 
 import 'package:flutter/material.dart';
 
@@ -149,6 +150,13 @@ class ActionFeedback {
   static String messageOf(Object error) => _messageOf(error);
 
   static String _messageOf(Object error) {
+    if (error is ApiException) {
+      if (error.statusCode >= 500)
+        return 'The service is temporarily unavailable. Please try again.';
+      return [error.message, ...?error.errors]
+          .where((text) => text.trim().isNotEmpty)
+          .join('\n');
+    }
     final text = error.toString().trim();
     if (text.startsWith('Exception: ')) {
       return text.substring(11).trim();

@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:latlong2/latlong.dart';
 
-import '../core/exceptions/api_exception.dart';
 import '../core/network/api_client.dart';
 import '../models/transport/route_summary.dart';
 
@@ -42,36 +41,20 @@ class AdminService {
 
   final ApiClient _client;
 
-  Future<Map<String, dynamic>> dashboard() async {
+  Future<Map<String, dynamic>> dashboard({bool useCache = true}) async {
     final response = await _client.request(
       method: 'GET',
       path: '/admin/dashboard',
-      useCache: true,
+      useCache: useCache,
     );
     return response['data'] as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> hybridDispatchBoard() async {
-    try {
-      final response = await _client.request(
-        method: 'GET',
-        path: '/admin/hybrid-dispatch',
-        useCache: true,
-      );
-      return response['data'] as Map<String, dynamic>;
-    } on ApiException catch (error) {
-      final normalizedMessage = error.message.toLowerCase();
-      final routeMissing = error.statusCode == 404 &&
-          normalizedMessage.contains('/admin/hybrid-dispatch');
-      if (routeMissing) {
-        return const <String, dynamic>{
-          'terminalQueue': <dynamic>[],
-          'waitingTerminalPassengers': <dynamic>[],
-          'routeDrivers': <dynamic>[],
-        };
-      }
-      rethrow;
-    }
+  Future<Map<String, dynamic>> hybridDispatchBoard(
+      {bool useCache = true}) async {
+    final response = await _client.request(
+        method: 'GET', path: '/admin/hybrid-dispatch', useCache: useCache);
+    return response['data'] as Map<String, dynamic>;
   }
 
   static final Map<String, String> _terminalActionIds = {};
@@ -366,6 +349,7 @@ class AdminService {
     required String fromIso,
     required String toIso,
     String? routeId,
+    bool useCache = true,
   }) async {
     _validateReportRange(fromIso, toIso);
     final response = await _client.request(
@@ -376,7 +360,7 @@ class AdminService {
         'to': toIso,
         if (routeId != null) 'routeId': routeId,
       },
-      useCache: true,
+      useCache: useCache,
     );
     return response['data'] as Map<String, dynamic>;
   }

@@ -454,32 +454,6 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
   }
 }
 
-class _Badge extends StatelessWidget {
-  const _Badge({required this.label, required this.color});
-
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(999),
-        color: color.withValues(alpha: 0.12),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: color,
-          fontWeight: FontWeight.w700,
-          fontSize: 12,
-        ),
-      ),
-    );
-  }
-}
-
 class _LicenseImageField extends StatelessWidget {
   const _LicenseImageField({
     required this.label,
@@ -516,10 +490,9 @@ class _LicenseImageField extends StatelessWidget {
               Text(label, style: Theme.of(context).textTheme.labelLarge),
               const SizedBox(height: 10),
               if (image == null)
-                OutlinedButton.icon(
+                OutlinedButton(
                   onPressed: onSelect,
-                  icon: const Icon(Icons.upload_file),
-                  label: const Text('Choose image'),
+                  child: const Text('Choose image'),
                 )
               else ...[
                 ClipRRect(
@@ -541,10 +514,9 @@ class _LicenseImageField extends StatelessWidget {
                 Wrap(
                   spacing: 8,
                   children: [
-                    OutlinedButton.icon(
+                    OutlinedButton(
                       onPressed: onSelect,
-                      icon: const Icon(Icons.swap_horiz),
-                      label: const Text('Replace'),
+                      child: const Text('Replace'),
                     ),
                     IconButton(
                       tooltip: 'Remove image',

@@ -235,23 +235,6 @@ class _AdminDriverManagementScreenState
     return 'offline';
   }
 
-  Color _accountStatusColor(String status) {
-    switch (status) {
-      case 'active':
-        return Colors.green;
-      case 'suspended':
-        return Colors.orange;
-      case 'deactivated':
-        return Colors.red;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  Color _presenceStatusColor(String status) {
-    return status == 'online' ? Colors.blue : Colors.grey;
-  }
-
   void _startPresenceRefreshLoop() {
     _presenceRefreshTimer?.cancel();
     _presenceRefreshTimer = Timer.periodic(_presenceRefreshInterval, (_) {
@@ -285,7 +268,7 @@ class _AdminDriverManagementScreenState
       });
     } catch (error) {
       if (!mounted) return;
-      setState(() => _error = error.toString());
+      setState(() => _error = ActionFeedback.messageOf(error));
     } finally {
       if (mounted && !silent) {
         setState(() => _loading = false);
@@ -425,105 +408,6 @@ class _AdminDriverManagementScreenState
     }
   }
 
-  int _driverGridColumns(double maxWidth) {
-    final columns = (maxWidth / 320).floor();
-    return columns.clamp(1, 5);
-  }
-
-  Widget _buildDriverCard(Map<String, dynamic> driver) {
-    final userName = _driverDisplayName(driver);
-    final userEmail = _driverEmail(driver);
-    final accountStatus = _accountStatusOf(driver);
-    final presenceStatus = _presenceStatusOf(driver);
-    final license = _textOf(driver['licenseNumber']);
-    final employee = _textOf(driver['employeeNumber']);
-    final phone = _textOf(driver['phone']);
-    final routeData = _driverRoute(driver);
-    final routeText = routeData.isEmpty
-        ? 'Unassigned route'
-        : '${routeData['code'] ?? ''} ${routeData['name']}'.trim();
-    final jeepney = driver['assignedJeepneyId'] as Map<String, dynamic>?;
-    final jeepneyPlate =
-        jeepney?['plateNumber']?.toString() ?? 'No jeepney assigned';
-    final jeepneyCapacity = jeepney?['capacity']?.toString() ?? '';
-    final compactTextButtonStyle = TextButton.styleFrom(
-      minimumSize: const Size(0, 40),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      visualDensity: VisualDensity.compact,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
-
-    Widget infoLine(String label, String value, {TextStyle? style}) {
-      return Text(
-        '$label: $value',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: style,
-      );
-    }
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              userName.isEmpty ? 'Driver account' : userName,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            if (userEmail.isNotEmpty)
-              Text(
-                userEmail,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13),
-              ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _Badge(
-                  label: 'account: ${_statusLabel(accountStatus)}',
-                  color: _accountStatusColor(accountStatus),
-                ),
-                _Badge(
-                  label: 'presence: ${_statusLabel(presenceStatus)}',
-                  color: _presenceStatusColor(presenceStatus),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            if (license.isNotEmpty) infoLine('License', license),
-            if (employee.isNotEmpty) infoLine('Employee', employee),
-            if (phone.isNotEmpty) infoLine('Phone', phone),
-            infoLine('Route', routeText),
-            infoLine('Jeepney plate', jeepneyPlate),
-            if (jeepneyCapacity.isNotEmpty)
-              infoLine('Capacity', jeepneyCapacity),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                TextButton.icon(
-                  onPressed: () => _openEditSheet(driver),
-                  style: compactTextButtonStyle,
-                  icon: const Icon(Icons.edit_outlined),
-                  label: const Text('Edit driver'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final searchQuery = _searchCtrl.text.trim().toLowerCase();
@@ -553,10 +437,9 @@ class _AdminDriverManagementScreenState
           if (widget.embedded) ...[
             Align(
               alignment: Alignment.centerRight,
-              child: FilledButton.icon(
+              child: FilledButton(
                 onPressed: _loading ? null : _openCreateSheet,
-                icon: const Icon(Icons.person_add_alt_1),
-                label: const Text('Create driver'),
+                child: const Text('Create driver'),
               ),
             ),
             const SizedBox(height: 12),
@@ -666,7 +549,7 @@ class _AdminDriverManagementScreenState
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: Theme.of(context).colorScheme.errorContainer,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
                 _error!,
@@ -681,7 +564,7 @@ class _AdminDriverManagementScreenState
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
               children: [
@@ -701,10 +584,6 @@ class _AdminDriverManagementScreenState
                     ],
                   ),
                 ),
-                Icon(
-                  Icons.badge_outlined,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
               ],
             ),
           ),
@@ -718,7 +597,7 @@ class _AdminDriverManagementScreenState
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Theme.of(context).dividerColor),
               ),
               child: Text(
@@ -728,28 +607,45 @@ class _AdminDriverManagementScreenState
               ),
             )
           else
-            LayoutBuilder(
-              builder: (context, constraints) {
-                const spacing = 12.0;
-                final columns = _driverGridColumns(constraints.maxWidth);
-                final cardWidth = columns == 1
-                    ? constraints.maxWidth
-                    : (constraints.maxWidth - (spacing * (columns - 1))) /
-                        columns;
-
-                return Wrap(
-                  spacing: spacing,
-                  runSpacing: spacing,
-                  children: [
-                    for (final driver in drivers)
-                      SizedBox(
-                        width: cardWidth,
-                        child: _buildDriverCard(driver),
-                      ),
-                  ],
-                );
-              },
-            ),
+            LayoutBuilder(builder: (context, constraints) {
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: ConstrainedBox(
+                    constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                    child: DataTable(
+                      headingRowHeight: 44,
+                      dataRowMinHeight: 56,
+                      dataRowMaxHeight: 64,
+                      columnSpacing: 28,
+                      horizontalMargin: 16,
+                      columns: const [
+                        DataColumn(label: Text('Driver')),
+                        DataColumn(label: Text('Route')),
+                        DataColumn(label: Text('Jeepney')),
+                        DataColumn(label: Text('Account')),
+                        DataColumn(label: Text('Actions'))
+                      ],
+                      rows: [
+                        for (final driver in drivers)
+                          DataRow(cells: [
+                            DataCell(Text(_driverDisplayName(driver))),
+                            DataCell(Text(
+                                _driverRoute(driver)['name']?.toString() ??
+                                    'Unassigned')),
+                            DataCell(Text((driver['assignedJeepneyId'] as Map<
+                                        String, dynamic>?)?['plateNumber']
+                                    ?.toString() ??
+                                'Unassigned')),
+                            DataCell(
+                                Text(_statusLabel(_accountStatusOf(driver)))),
+                            DataCell(TextButton(
+                                onPressed: () => _openEditSheet(driver),
+                                child: const Text('View details'))),
+                          ])
+                      ],
+                    )),
+              );
+            }),
         ],
       ),
     );
@@ -804,8 +700,8 @@ class _DriverMetricChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(18),
+        color: const Color(0xFFF5F6F7),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: RichText(
         text: TextSpan(

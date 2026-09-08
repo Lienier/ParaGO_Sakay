@@ -58,6 +58,30 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('tablet opens detail when viewport is wide but inbox is narrow',
+      (tester) async {
+    tester.view.physicalSize = const Size(1100, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final realtime = RealtimeSocketService();
+    addTearDown(realtime.dispose);
+    final repository = _FakeSupportRepository([_thread(0)]);
+    await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light(),
+        home: Scaffold(
+            body: Row(children: [
+          const SizedBox(width: 224),
+          Expanded(
+              child: AdminSupportInboxScreen(
+                  realtimeSocketService: realtime, repository: repository)),
+        ]))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Thread 0'));
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('desktop support workspace review image', (tester) async {
     tester.view.physicalSize = const Size(1400, 900);
     tester.view.devicePixelRatio = 1;

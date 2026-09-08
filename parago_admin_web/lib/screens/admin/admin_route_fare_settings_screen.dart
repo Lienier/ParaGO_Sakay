@@ -292,7 +292,7 @@ class _AdminRouteFareSettingsScreenState
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: const Color(0xFF102725).withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
                       _fareRuleSummary(),
@@ -305,10 +305,9 @@ class _AdminRouteFareSettingsScreenState
                   if (_saving)
                     const LinearProgressIndicator()
                   else
-                    FilledButton.icon(
+                    FilledButton(
                       onPressed: _saveFareSettings,
-                      icon: const Icon(Icons.save_outlined),
-                      label: const Text('Save Fare Settings'),
+                      child: const Text('Save Fare Settings'),
                     ),
                 ],
               ),
@@ -320,7 +319,7 @@ class _AdminRouteFareSettingsScreenState
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 color: const Color(0xFF102725).withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
                 _message!,

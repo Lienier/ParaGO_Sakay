@@ -32,19 +32,12 @@ class MetricCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.14),
-              borderRadius: AppRadius.medium,
-            ),
-            child: Icon(icon, color: accent),
-          ),
-          const SizedBox(height: AppSpacing.lg),
           Text(
             value,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: AppColors.textPrimary),
+            style: Theme.of(context)
+                .textTheme
+                .headlineSmall
+                ?.copyWith(color: AppColors.textPrimary),
           ),
           const SizedBox(height: 6),
           Text(

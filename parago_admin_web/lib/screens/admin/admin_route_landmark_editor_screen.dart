@@ -546,6 +546,13 @@ class _AdminRouteLandmarkEditorScreenState
 
   @override
   Widget build(BuildContext context) {
+    if (MediaQuery.sizeOf(context).width < 720) {
+      return const Center(
+          child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text('Use a tablet or desktop to edit route maps.')));
+    }
+
     final theme = Theme.of(context);
     final selectedLandmark = _selectedLandmark;
     final filteredLandmarks = _filteredLandmarks();
@@ -562,7 +569,8 @@ class _AdminRouteLandmarkEditorScreenState
         ? 0
         : math.min(filteredLandmarks.length, pageStart + pagedLandmarks.length);
     final selectedHiddenBySearch = selectedLandmark != null &&
-        filteredLandmarks.every((landmark) => landmark.id != selectedLandmark.id);
+        filteredLandmarks
+            .every((landmark) => landmark.id != selectedLandmark.id);
 
     return Scaffold(
       appBar: AppBar(
@@ -582,167 +590,144 @@ class _AdminRouteLandmarkEditorScreenState
                     stacked ? VerticalDirection.up : VerticalDirection.down,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-              Flexible(
-                flex: 5,
-                fit: FlexFit.loose,
-                child: Column(
-                  children: [
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Placement tools',
-                                style: theme.textTheme.titleLarge),
-                            const SizedBox(height: 12),
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 10,
+                  Flexible(
+                    flex: 5,
+                    fit: FlexFit.loose,
+                    child: Column(
+                      children: [
+                        Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                ChoiceChip(
-                                  label: const Text('Add landmark'),
-                                  selected: !_moveMode,
-                                  onSelected: (_) {
-                                    setState(() {
-                                      _moveMode = false;
-                                    });
-                                  },
+                                Text('Placement tools',
+                                    style: theme.textTheme.titleLarge),
+                                const SizedBox(height: 12),
+                                Wrap(
+                                  spacing: 10,
+                                  runSpacing: 10,
+                                  children: [
+                                    ChoiceChip(
+                                      label: const Text('Add landmark'),
+                                      selected: !_moveMode,
+                                      onSelected: (_) {
+                                        setState(() {
+                                          _moveMode = false;
+                                        });
+                                      },
+                                    ),
+                                    ChoiceChip(
+                                      label: const Text('Move selected'),
+                                      selected: _moveMode,
+                                      onSelected: (_) {
+                                        setState(() {
+                                          _moveMode = true;
+                                        });
+                                      },
+                                    ),
+                                    OutlinedButton.icon(
+                                      onPressed: selectedLandmark == null
+                                          ? null
+                                          : () =>
+                                              _editLandmark(selectedLandmark),
+                                      icon: const Icon(
+                                          Icons.edit_location_alt_outlined),
+                                      label: const Text('Edit selected'),
+                                    ),
+                                  ],
                                 ),
-                                ChoiceChip(
-                                  label: const Text('Move selected'),
-                                  selected: _moveMode,
-                                  onSelected: (_) {
-                                    setState(() {
-                                      _moveMode = true;
-                                    });
-                                  },
-                                ),
-                                OutlinedButton.icon(
-                                  onPressed: selectedLandmark == null
-                                      ? null
-                                      : () => _editLandmark(selectedLandmark),
-                                  icon: const Icon(
-                                      Icons.edit_location_alt_outlined),
-                                  label: const Text('Edit selected'),
+                                const SizedBox(height: 14),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF0F6A5F)
+                                        .withValues(alpha: 0.08),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    selectedLandmark == null
+                                        ? 'No landmark selected yet.'
+                                        : 'Selected: ${selectedLandmark.name} | ${_formatFare(_landmarkFare(selectedLandmark))}',
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 14),
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF0F6A5F)
-                                    .withValues(alpha: 0.08),
-                                borderRadius: BorderRadius.circular(18),
-                              ),
-                              child: Text(
-                                selectedLandmark == null
-                                    ? 'No landmark selected yet.'
-                                    : 'Selected: ${selectedLandmark.name} | ${_formatFare(_landmarkFare(selectedLandmark))}',
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Landmarks',
-                                style: theme.textTheme.titleLarge),
-                            const SizedBox(height: 12),
-                            TextField(
-                              controller: _landmarkSearchCtrl,
-                              onChanged: (_) {
-                                setState(() {
-                                  _landmarkPage = 0;
-                                });
-                              },
-                              decoration: InputDecoration(
-                                labelText:
-                                    'Search landmark name, code, or coordinates',
-                                prefixIcon: const Icon(Icons.search),
-                                suffixIcon: _landmarkSearchCtrl.text
-                                        .trim()
-                                        .isEmpty
-                                    ? null
-                                    : IconButton(
-                                        tooltip: 'Clear search',
-                                        onPressed: () {
-                                          _landmarkSearchCtrl.clear();
-                                          setState(() {
-                                            _landmarkPage = 0;
-                                          });
-                                        },
-                                        icon: const Icon(Icons.clear),
-                                      ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 12,
-                              ),
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.surfaceContainerHighest,
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: Text(
-                                '${filteredLandmarks.length} match${filteredLandmarks.length == 1 ? '' : 'es'}',
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
+                        const SizedBox(height: 16),
+                        Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Landmarks',
+                                    style: theme.textTheme.titleLarge),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _landmarkSearchCtrl,
+                                  onChanged: (_) {
+                                    setState(() {
+                                      _landmarkPage = 0;
+                                    });
+                                  },
+                                  decoration: InputDecoration(
+                                    labelText:
+                                        'Search landmark name, code, or coordinates',
+                                    prefixIcon: const Icon(Icons.search),
+                                    suffixIcon:
+                                        _landmarkSearchCtrl.text.trim().isEmpty
+                                            ? null
+                                            : IconButton(
+                                                tooltip: 'Clear search',
+                                                onPressed: () {
+                                                  _landmarkSearchCtrl.clear();
+                                                  setState(() {
+                                                    _landmarkPage = 0;
+                                                  });
+                                                },
+                                                icon: const Icon(Icons.clear),
+                                              ),
+                                  ),
                                 ),
-                              ),
-                            ),
-                            if (selectedHiddenBySearch) ...[
-                              const SizedBox(height: 12),
-                              Text(
-                                'The selected landmark is hidden by the current search.',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.primary,
-                                  fontWeight: FontWeight.w600,
+                                const SizedBox(height: 12),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 12,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: theme
+                                        .colorScheme.surfaceContainerHighest,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    '${filteredLandmarks.length} match${filteredLandmarks.length == 1 ? '' : 'es'}',
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
                                 ),
-                              ),
-                            ],
-                            const SizedBox(height: 12),
-                            ConstrainedBox(
-                              constraints: const BoxConstraints(minHeight: 160),
-                              child: _landmarks.isEmpty
-                                  ? Container(
-                                      width: double.infinity,
-                                      padding: const EdgeInsets.all(16),
-                                      decoration: BoxDecoration(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .surfaceContainerHighest
-                                            .withValues(alpha: 0.45),
-                                        borderRadius: BorderRadius.circular(18),
-                                        border: Border.all(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .outlineVariant
-                                              .withValues(alpha: 0.6),
-                                        ),
-                                      ),
-                                      child: Align(
-                                        alignment: Alignment.topLeft,
-                                        child: Text(
-                                          'No drop-off landmarks yet. Tap the route map to add one.',
-                                          style: theme.textTheme.bodyMedium,
-                                        ),
-                                      ),
-                                    )
-                                  : filteredLandmarks.isEmpty
+                                if (selectedHiddenBySearch) ...[
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    'The selected landmark is hidden by the current search.',
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.primary,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 12),
+                                ConstrainedBox(
+                                  constraints:
+                                      const BoxConstraints(minHeight: 160),
+                                  child: _landmarks.isEmpty
                                       ? Container(
                                           width: double.infinity,
                                           padding: const EdgeInsets.all(16),
@@ -752,7 +737,7 @@ class _AdminRouteLandmarkEditorScreenState
                                                 .surfaceContainerHighest
                                                 .withValues(alpha: 0.45),
                                             borderRadius:
-                                                BorderRadius.circular(18),
+                                                BorderRadius.circular(8),
                                             border: Border.all(
                                               color: Theme.of(context)
                                                   .colorScheme
@@ -763,250 +748,313 @@ class _AdminRouteLandmarkEditorScreenState
                                           child: Align(
                                             alignment: Alignment.topLeft,
                                             child: Text(
-                                              'No landmarks match the current search.',
+                                              'No drop-off landmarks yet. Tap the route map to add one.',
                                               style: theme.textTheme.bodyMedium,
                                             ),
                                           ),
                                         )
-                                  : Column(
-                                      children: [
-                                        for (var index = 0;
-                                            index < pagedLandmarks.length;
-                                            index += 1)
-                                          _LandmarkListTile(
-                                            order: pageStart + index + 1,
-                                            landmark: pagedLandmarks[index],
-                                            fareLabel: _formatFare(
-                                                _landmarkFare(
-                                                    pagedLandmarks[index])),
-                                            selected:
-                                                pagedLandmarks[index].id ==
-                                                _selectedLandmarkId,
-                                            coordinateLabel: _formatCoordinate(
-                                                pagedLandmarks[index].position),
-                                            onTap: () {
-                                              setState(() {
-                                                _selectedLandmarkId =
-                                                    pagedLandmarks[index].id;
-                                                _syncLandmarkPage(
-                                                  preferredLandmarkId:
-                                                      pagedLandmarks[index].id,
-                                                );
-                                                _message =
-                                                    '${pagedLandmarks[index].name} selected.';
-                                              });
-                                            },
-                                            onEdit: () => _editLandmark(
-                                                pagedLandmarks[index]),
-                                            onDelete: () => _deleteLandmark(
-                                                pagedLandmarks[index]),
-                                          ),
-                                        const SizedBox(height: 14),
-                                        Container(
-                                          width: double.infinity,
-                                          padding: const EdgeInsets.all(14),
-                                          decoration: BoxDecoration(
-                                            color: theme.colorScheme
-                                                .surfaceContainerHighest
-                                                .withValues(alpha: 0.4),
-                                            borderRadius:
-                                                BorderRadius.circular(18),
-                                          ),
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                'Showing ${pageStart + 1}-$pageEnd of ${filteredLandmarks.length} landmarks',
-                                                style: theme.textTheme.bodyMedium
-                                                    ?.copyWith(
-                                                  fontWeight: FontWeight.w600,
+                                      : filteredLandmarks.isEmpty
+                                          ? Container(
+                                              width: double.infinity,
+                                              padding: const EdgeInsets.all(16),
+                                              decoration: BoxDecoration(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .surfaceContainerHighest
+                                                    .withValues(alpha: 0.45),
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                border: Border.all(
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .outlineVariant
+                                                      .withValues(alpha: 0.6),
                                                 ),
                                               ),
-                                              const SizedBox(height: 12),
-                                              Text(
-                                                'Page ${currentPage + 1} of $totalPages',
-                                                style:
-                                                    theme.textTheme.bodyMedium,
+                                              child: Align(
+                                                alignment: Alignment.topLeft,
+                                                child: Text(
+                                                  'No landmarks match the current search.',
+                                                  style: theme
+                                                      .textTheme.bodyMedium,
+                                                ),
                                               ),
-                                              const SizedBox(height: 12),
-                                              Row(
-                                                children: [
-                                                  Expanded(
-                                                    child: OutlinedButton.icon(
-                                                      onPressed:
-                                                          currentPage == 0
-                                                              ? null
-                                                              : () {
-                                                                  setState(() {
-                                                                    _landmarkPage =
-                                                                        currentPage -
-                                                                            1;
-                                                                  });
-                                                                },
-                                                      icon: const Icon(
-                                                          Icons.chevron_left),
-                                                      label: const Text(
-                                                          'Previous'),
-                                                    ),
+                                            )
+                                          : Column(
+                                              children: [
+                                                for (var index = 0;
+                                                    index <
+                                                        pagedLandmarks.length;
+                                                    index += 1)
+                                                  _LandmarkListTile(
+                                                    order:
+                                                        pageStart + index + 1,
+                                                    landmark:
+                                                        pagedLandmarks[index],
+                                                    fareLabel: _formatFare(
+                                                        _landmarkFare(
+                                                            pagedLandmarks[
+                                                                index])),
+                                                    selected:
+                                                        pagedLandmarks[index]
+                                                                .id ==
+                                                            _selectedLandmarkId,
+                                                    coordinateLabel:
+                                                        _formatCoordinate(
+                                                            pagedLandmarks[
+                                                                    index]
+                                                                .position),
+                                                    onTap: () {
+                                                      setState(() {
+                                                        _selectedLandmarkId =
+                                                            pagedLandmarks[
+                                                                    index]
+                                                                .id;
+                                                        _syncLandmarkPage(
+                                                          preferredLandmarkId:
+                                                              pagedLandmarks[
+                                                                      index]
+                                                                  .id,
+                                                        );
+                                                        _message =
+                                                            '${pagedLandmarks[index].name} selected.';
+                                                      });
+                                                    },
+                                                    onEdit: () => _editLandmark(
+                                                        pagedLandmarks[index]),
+                                                    onDelete: () =>
+                                                        _deleteLandmark(
+                                                            pagedLandmarks[
+                                                                index]),
                                                   ),
-                                                  const SizedBox(width: 8),
-                                                  Expanded(
-                                                    child: OutlinedButton.icon(
-                                                      onPressed:
-                                                          currentPage >=
-                                                                  totalPages -
-                                                                      1
-                                                              ? null
-                                                              : () {
-                                                                  setState(() {
-                                                                    _landmarkPage =
-                                                                        currentPage +
-                                                                            1;
-                                                                  });
-                                                                },
-                                                      icon: const Icon(
-                                                          Icons.chevron_right),
-                                                      label:
-                                                          const Text('Next'),
-                                                    ),
+                                                const SizedBox(height: 14),
+                                                Container(
+                                                  width: double.infinity,
+                                                  padding:
+                                                      const EdgeInsets.all(14),
+                                                  decoration: BoxDecoration(
+                                                    color: theme.colorScheme
+                                                        .surfaceContainerHighest
+                                                        .withValues(alpha: 0.4),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            8),
                                                   ),
-                                                ],
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        onPressed: _saving ? null : _saveLandmarks,
-                        icon: _saving
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2.4,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : const Icon(Icons.save_outlined),
-                        label: Text(
-                          _saving ? 'Saving...' : 'Save Landmark Updates',
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(
-                width: stacked ? 0 : 16,
-                height: stacked ? 16 : 0,
-              ),
-              Flexible(
-                flex: 7,
-                fit: FlexFit.loose,
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Route map', style: theme.textTheme.titleLarge),
-                        const SizedBox(height: 8),
-                        const SizedBox(height: 16),
-                        if (_saving) ...[
-                          const LinearProgressIndicator(),
-                          const SizedBox(height: 14),
-                        ],
-                        AspectRatio(
-                          aspectRatio: 1.32,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(28),
-                            child: FlutterMap(
-                              options: MapOptions(
-                                initialCenter: _mapCenter,
-                                initialZoom: _mapZoom,
-                                interactionOptions: const InteractionOptions(
-                                  flags: InteractiveFlag.all,
-                                ),
-                                onTap: (_, point) => _handleMapTap(point),
-                              ),
-                              children: [
-                                TileLayer(
-                                  urlTemplate:
-                                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                                  userAgentPackageName: 'com.parago.mobile',
-                                ),
-                                if (_routePoints.length >= 2)
-                                  PolylineLayer(
-                                    polylines: [
-                                      Polyline(
-                                        points: _routePoints,
-                                        strokeWidth: 6,
-                                        color: const Color(0xFF0F6A5F),
-                                      ),
-                                    ],
-                                  ),
-                                MarkerLayer(
-                                  markers: [
-                                    for (var index = 0;
-                                        index < _landmarks.length;
-                                        index += 1)
-                                      Marker(
-                                        point: _landmarks[index].position,
-                                        width: _landmarks[index].id == _selectedLandmarkId ? 214 : 48,
-                                        height: _landmarks[index].id == _selectedLandmarkId ? 118 : 58,
-                                        alignment: Alignment.bottomCenter,
-                                        child: GestureDetector(
-                                          onTap: () {
-                                            setState(() {
-                                              _selectedLandmarkId =
-                                                  _landmarks[index].id;
-                                              _syncLandmarkPage(
-                                                preferredLandmarkId:
-                                                    _landmarks[index].id,
-                                              );
-                                              _message =
-                                                  '${_landmarks[index].name} selected.';
-                                            });
-                                          },
-                                          child: _LandmarkMarker(
-                                            order: index + 1,
-                                            name: _landmarks[index].name,
-                                            fareLabel: _formatFare(
-                                                _landmarkFare(
-                                                    _landmarks[index])),
-                                            selected: _landmarks[index].id ==
-                                                _selectedLandmarkId,
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                const RichAttributionWidget(
-                                  attributions: [
-                                    TextSourceAttribution(
-                                        'OpenStreetMap contributors'),
-                                  ],
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Text(
+                                                        'Showing ${pageStart + 1}-$pageEnd of ${filteredLandmarks.length} landmarks',
+                                                        style: theme.textTheme
+                                                            .bodyMedium
+                                                            ?.copyWith(
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(
+                                                          height: 12),
+                                                      Text(
+                                                        'Page ${currentPage + 1} of $totalPages',
+                                                        style: theme.textTheme
+                                                            .bodyMedium,
+                                                      ),
+                                                      const SizedBox(
+                                                          height: 12),
+                                                      Row(
+                                                        children: [
+                                                          Expanded(
+                                                            child:
+                                                                OutlinedButton
+                                                                    .icon(
+                                                              onPressed:
+                                                                  currentPage ==
+                                                                          0
+                                                                      ? null
+                                                                      : () {
+                                                                          setState(
+                                                                              () {
+                                                                            _landmarkPage =
+                                                                                currentPage - 1;
+                                                                          });
+                                                                        },
+                                                              icon: const Icon(Icons
+                                                                  .chevron_left),
+                                                              label: const Text(
+                                                                  'Previous'),
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                              width: 8),
+                                                          Expanded(
+                                                            child:
+                                                                OutlinedButton
+                                                                    .icon(
+                                                              onPressed:
+                                                                  currentPage >=
+                                                                          totalPages -
+                                                                              1
+                                                                      ? null
+                                                                      : () {
+                                                                          setState(
+                                                                              () {
+                                                                            _landmarkPage =
+                                                                                currentPage + 1;
+                                                                          });
+                                                                        },
+                                                              icon: const Icon(Icons
+                                                                  .chevron_right),
+                                                              label: const Text(
+                                                                  'Next'),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
                                 ),
                               ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: _saving ? null : _saveLandmarks,
+                            icon: _saving
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.4,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Icon(Icons.save_outlined),
+                            label: Text(
+                              _saving ? 'Saving...' : 'Save Landmark Updates',
+                              textAlign: TextAlign.center,
                             ),
                           ),
                         ),
                       ],
                     ),
                   ),
-                ),
-              ),
+                  SizedBox(
+                    width: stacked ? 0 : 16,
+                    height: stacked ? 16 : 0,
+                  ),
+                  Flexible(
+                    flex: 7,
+                    fit: FlexFit.loose,
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Route map',
+                                style: theme.textTheme.titleLarge),
+                            const SizedBox(height: 8),
+                            const SizedBox(height: 16),
+                            if (_saving) ...[
+                              const LinearProgressIndicator(),
+                              const SizedBox(height: 14),
+                            ],
+                            AspectRatio(
+                              aspectRatio: 1.32,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: FlutterMap(
+                                  options: MapOptions(
+                                    initialCenter: _mapCenter,
+                                    initialZoom: _mapZoom,
+                                    interactionOptions:
+                                        const InteractionOptions(
+                                      flags: InteractiveFlag.all,
+                                    ),
+                                    onTap: (_, point) => _handleMapTap(point),
+                                  ),
+                                  children: [
+                                    TileLayer(
+                                      urlTemplate:
+                                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                      userAgentPackageName: 'com.parago.mobile',
+                                    ),
+                                    if (_routePoints.length >= 2)
+                                      PolylineLayer(
+                                        polylines: [
+                                          Polyline(
+                                            points: _routePoints,
+                                            strokeWidth: 6,
+                                            color: const Color(0xFF0F6A5F),
+                                          ),
+                                        ],
+                                      ),
+                                    MarkerLayer(
+                                      markers: [
+                                        for (var index = 0;
+                                            index < _landmarks.length;
+                                            index += 1)
+                                          Marker(
+                                            point: _landmarks[index].position,
+                                            width: _landmarks[index].id ==
+                                                    _selectedLandmarkId
+                                                ? 214
+                                                : 48,
+                                            height: _landmarks[index].id ==
+                                                    _selectedLandmarkId
+                                                ? 118
+                                                : 58,
+                                            alignment: Alignment.bottomCenter,
+                                            child: GestureDetector(
+                                              onTap: () {
+                                                setState(() {
+                                                  _selectedLandmarkId =
+                                                      _landmarks[index].id;
+                                                  _syncLandmarkPage(
+                                                    preferredLandmarkId:
+                                                        _landmarks[index].id,
+                                                  );
+                                                  _message =
+                                                      '${_landmarks[index].name} selected.';
+                                                });
+                                              },
+                                              child: _LandmarkMarker(
+                                                order: index + 1,
+                                                name: _landmarks[index].name,
+                                                fareLabel: _formatFare(
+                                                    _landmarkFare(
+                                                        _landmarks[index])),
+                                                selected:
+                                                    _landmarks[index].id ==
+                                                        _selectedLandmarkId,
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                    const RichAttributionWidget(
+                                      attributions: [
+                                        TextSourceAttribution(
+                                            'OpenStreetMap contributors'),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               );
             },
@@ -1017,7 +1065,7 @@ class _AdminRouteLandmarkEditorScreenState
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 color: const Color(0xFF102725).withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
                 _message!,
@@ -1048,7 +1096,7 @@ class _RouteMetaChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: RichText(
         text: TextSpan(
@@ -1123,7 +1171,7 @@ class _LandmarkMarker extends StatelessWidget {
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(8),
             border: Border.all(color: accent, width: selected ? 2 : 1),
             boxShadow: [
               BoxShadow(
@@ -1218,9 +1266,9 @@ class _LandmarkListTile extends StatelessWidget {
         color: selected
             ? const Color(0xFF0F6A5F).withValues(alpha: 0.08)
             : Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(8),
         child: InkWell(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(8),
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.all(14),

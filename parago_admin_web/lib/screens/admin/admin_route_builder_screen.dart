@@ -602,6 +602,13 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (MediaQuery.sizeOf(context).width < 720) {
+      return const Center(
+          child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text('Use a tablet or desktop to edit route maps.')));
+    }
+
     final theme = Theme.of(context);
     final existing = _resolvedExistingRoute;
     final isEditing = existing != null;
@@ -655,7 +662,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 color: const Color(0xFF102725).withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
                 _message!,
@@ -709,7 +716,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
                   color: const Color(0xFF0F6A5F).withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
                   'Editing existing route: ${existing.label}',
@@ -979,7 +986,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
                   color: const Color(0xFF0F6A5F).withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
                   children: [
@@ -1076,7 +1083,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
         return SizedBox(
           height: height,
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(28),
+            borderRadius: BorderRadius.circular(8),
             child: Stack(
               children: [
                 Positioned.fill(
@@ -1193,7 +1200,7 @@ class _AdminRouteBuilderScreenState extends State<AdminRouteBuilderScreen> {
                   child: DecoratedBox(
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.92),
-                      borderRadius: BorderRadius.circular(18),
+                      borderRadius: BorderRadius.circular(8),
                     ),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
@@ -1237,7 +1244,7 @@ class _PinInfoTile extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: theme.colorScheme.primary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1284,14 +1291,14 @@ class _PinActionTile extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(8),
         child: Ink(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: selected
                 ? accent.withValues(alpha: 0.14)
                 : Colors.white.withValues(alpha: 0.72),
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: selected
                   ? accent.withValues(alpha: 0.35)
@@ -1360,7 +1367,7 @@ class _GuidePointsTile extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: theme.colorScheme.primary.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: theme.dividerColor,
         ),
@@ -1400,7 +1407,7 @@ class _GuidePointsTile extends StatelessWidget {
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.78),
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
                   children: [
@@ -1471,7 +1478,7 @@ class _CoordinateRow extends StatelessWidget {
       ),
       decoration: BoxDecoration(
         color: accent.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         children: [
@@ -1517,7 +1524,7 @@ class _MetaPill extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: RichText(
         text: TextSpan(
@@ -1553,7 +1560,7 @@ class _PinnedMarker extends StatelessWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(8),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.18),

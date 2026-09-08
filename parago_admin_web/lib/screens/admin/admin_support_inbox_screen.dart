@@ -190,10 +190,12 @@ class _AdminSupportInboxScreenState extends State<AdminSupportInboxScreen> {
     }
   }
 
+  bool _narrowLayout = true;
+
   Future<void> _selectThread(SupportThreadModel thread) async {
     setState(() => _selectedThread = thread);
     await _loadThread(thread);
-    if (!mounted || MediaQuery.sizeOf(context).width >= 980) return;
+    if (!mounted || !_narrowLayout) return;
     await _showNarrowThreadDetail();
   }
 
@@ -412,6 +414,7 @@ class _AdminSupportInboxScreenState extends State<AdminSupportInboxScreen> {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final stacked = constraints.maxWidth < 980;
+                _narrowLayout = stacked;
                 final inboxPane = _SupportInboxList(
                   threads: _threads,
                   loading: _loading,
@@ -649,18 +652,21 @@ class _InboxThreadTile extends StatelessWidget {
     final unread = thread.unreadAdminCount;
     final accent = _supportThreadAccent(thread);
     return Material(
-      color:
-          selected ? accent.withValues(alpha: 0.09) : const Color(0xFFF8FAFB),
-      borderRadius: BorderRadius.circular(18),
+      color: selected ? const Color(0xFFF0F6F5) : Colors.white,
+      borderRadius: BorderRadius.circular(8),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(8),
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             border: Border(
-              left: BorderSide(color: accent, width: 5),
+              left: BorderSide(
+                  color: selected
+                      ? Theme.of(context).colorScheme.primary
+                      : Colors.transparent,
+                  width: 2),
               top: BorderSide(color: Colors.black.withValues(alpha: 0.05)),
               right: BorderSide(color: Colors.black.withValues(alpha: 0.05)),
               bottom: BorderSide(color: Colors.black.withValues(alpha: 0.05)),
@@ -825,7 +831,7 @@ class _SupportThreadDetail extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
-          Container(height: 6, color: accent),
+          const SizedBox(height: 8),
           Padding(
             padding: const EdgeInsets.all(18),
             child: LayoutBuilder(
@@ -876,7 +882,7 @@ class _SupportThreadDetail extends StatelessWidget {
                             color: mine
                                 ? const Color(0xFFEAF5F2)
                                 : const Color(0xFFF4F5F7),
-                            borderRadius: BorderRadius.circular(18),
+                            borderRadius: BorderRadius.circular(8),
                           ),
                           child: Column(
                             crossAxisAlignment: mine
@@ -967,7 +973,7 @@ class _EmptySupportDetail extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: Colors.white,
-      borderRadius: BorderRadius.circular(24),
+      borderRadius: BorderRadius.circular(8),
       child: Center(
         child: Padding(
           padding: const EdgeInsets.all(36),
@@ -1013,7 +1019,7 @@ class _SupportNotice extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: const Color(0xFFFFF6E5),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFFF0D7A0)),
       ),
       child: Text(message),

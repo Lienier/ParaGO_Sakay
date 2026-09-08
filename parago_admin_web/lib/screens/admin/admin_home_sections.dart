@@ -1,382 +1,322 @@
 part of 'admin_home_screen.dart';
 
-class _AdminCompactNav extends StatelessWidget {
-  const _AdminCompactNav({
-    required this.selectedSection,
-    required this.onSelect,
-  });
+List<dynamic> _readDynamicList(dynamic value) =>
+    value is List ? value : const [];
 
-  final _AdminWorkspaceSection selectedSection;
-  final ValueChanged<_AdminWorkspaceSection> onSelect;
+class _AdminOperationsPage extends StatelessWidget {
+  const _AdminOperationsPage(
+      {required this.section,
+      required this.dashboard,
+      required this.board,
+      required this.report,
+      required this.errors,
+      required this.times,
+      required this.loading,
+      required this.onRetry,
+      required this.onSelect,
+      required this.route,
+      required this.onRoute,
+      required this.reportRange,
+      required this.onReportRange,
+      required this.onReorder,
+      required this.onSkip,
+      required this.onDepart});
+  final _AdminWorkspaceSection section;
+  final Map<String, dynamic>? dashboard, board, report;
+  final Map<String, String> errors;
+  final Map<String, DateTime> times;
+  final Set<String> loading;
+  final Future<void> Function(String) onRetry;
+  final void Function(_AdminWorkspaceSection) onSelect;
+  final String? route;
+  final void Function(String?) onRoute;
+  final DateTimeRange reportRange;
+  final VoidCallback onReportRange;
+  final Future<void> Function(String, String) onReorder, onDepart;
+  final Future<void> Function(String, bool) onSkip;
 
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          for (final section in _AdminWorkspaceSection.values) ...[
+  Widget _state(String key) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (loading.contains(key)) const LinearProgressIndicator(minHeight: 2),
+        if (errors.containsKey(key))
+          Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
+            Text(
+                times.containsKey(key)
+                    ? 'Refresh failed. Showing previous data.'
+                    : 'This section is unavailable.',
+                style: const TextStyle(color: AppColors.warning)),
+            TextButton(
+                onPressed: () => onRetry(key), child: const Text('Retry')),
+          ]),
+        if (times[key] != null)
+          Text(
+              'Last successful update: ${times[key]!.toLocal().toString().split('.')[0]}',
+              style: const TextStyle(
+                  fontSize: 12, color: AppColors.textSecondary)),
+      ]));
+
+  List<dynamic> get _queue => _readDynamicList(board?['terminalQueue']);
+  String _routeKey(dynamic trip) {
+    final r = _readDynamicMap(_readDynamicMap(trip)['routeId']);
+    return r['_id']?.toString() ?? r['name']?.toString() ?? 'unassigned';
+  }
+
+  Widget _metrics(BuildContext context) =>
+      LayoutBuilder(builder: (context, box) {
+        final columns = box.maxWidth >= 900
+            ? 4
+            : box.maxWidth >= 500
+                ? 2
+                : 1;
+        final entries = {
+          'Active trips': 'activeTrips',
+          'Pending pickups': 'pendingRequests',
+          'Onboard passengers': 'onboardRides',
+          'Terminal trips': 'terminalQueueTrips'
+        };
+        return Wrap(spacing: 12, runSpacing: 12, children: [
+          for (final entry in entries.entries)
+            SizedBox(
+                width: (box.maxWidth - 12 * (columns - 1)) / columns,
+                child: MetricCard(
+                    label: entry.key,
+                    value: dashboard?[entry.value]?.toString() ??
+                        (loading.contains('activity')
+                            ? 'Loading'
+                            : 'Unavailable'),
+                    icon: Icons.circle,
+                    accent: AppColors.primary))
+        ]);
+      });
+
+  Widget _overview(BuildContext context) {
+    final warnings = _queue
+        .where((t) =>
+            _readDynamicMap(
+                _readDynamicMap(t)['terminalSummary'])['gpsWarning'] ==
+            true)
+        .length;
+    final pending = dashboard?['pendingRequests'];
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _SectionCard(
+          title: 'Needs attention',
+          subtitle:
+              'Review outstanding pickups and terminal location warnings.',
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (pending == null)
+              const Text('Pickup status is not available yet.')
+            else
+              Text('$pending pickup requests awaiting resolution'),
+            if (board == null)
+              const Text('Terminal location status is not available yet.')
+            else
+              Text('$warnings terminal jeeps with old or missing GPS'),
+            const SizedBox(height: 12),
+            TextButton(
+                onPressed: () => onSelect(_AdminWorkspaceSection.dispatch),
+                child: const Text('Review dispatch')),
+          ])),
+      const SizedBox(height: 24),
+      Text('Current activity', style: Theme.of(context).textTheme.titleLarge),
+      _state('activity'),
+      _metrics(context),
+      const SizedBox(height: 24),
+      Row(children: [
+        Expanded(
+            child: Text('Terminal activity',
+                style: Theme.of(context).textTheme.titleLarge)),
+        TextButton(
+            onPressed: () => onSelect(_AdminWorkspaceSection.dispatch),
+            child: const Text('Open dispatch'))
+      ]),
+      _state('dispatch'),
+      if (board != null) ...[
+        if (_queue.isEmpty)
+          const AppEmptyState(
+              title: 'No terminal trips',
+              message: 'Checked successfully. The queue is empty.'),
+        for (final trip in _queue.take(3))
+          ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(_dispatchTripLabel(trip)),
+              subtitle: Text(
+                  'Position ${trip['terminalQueueNumber'] ?? '-'} - ${trip['terminalQueueStatus'] ?? 'Unknown'}'),
+              trailing: TextButton(
+                  onPressed: () => onSelect(_AdminWorkspaceSection.dispatch),
+                  child: const Text('View'))),
+      ],
+    ]);
+  }
+
+  Widget _dispatch(BuildContext context) {
+    final allTrips = [..._queue, ..._readDynamicList(board?['routeDrivers'])];
+    final routes = <String, String>{
+      for (final t in allTrips)
+        _routeKey(t): _readDynamicMap(_readDynamicMap(t)['routeId'])['name']
+                ?.toString() ??
+            'Unassigned route'
+    };
+    final selected = routes.containsKey(route) ? route : null;
+    final trips = _queue
+        .where((t) => selected == null || _routeKey(t) == selected)
+        .toList();
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      DropdownButtonFormField<String>(
+          key: ValueKey(selected),
+          initialValue: selected ?? '',
+          decoration: const InputDecoration(labelText: 'Route / direction'),
+          items: [
+            const DropdownMenuItem(value: '', child: Text('All routes')),
+            for (final r in routes.entries)
+              DropdownMenuItem(value: r.key, child: Text(r.value))
+          ],
+          onChanged: (value) => onRoute(value == '' ? null : value)),
+      _state('dispatch'),
+      if (board != null) ...[
+        for (final status in ['loading', 'waiting', 'skipped']) ...[
+          const SizedBox(height: 20),
+          Text(ParagoFormat.statusLabel(status),
+              style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 8),
+          if (!trips.any((t) => t['terminalQueueStatus'] == status))
+            Text('No $status jeeps.'),
+          for (final trip
+              in trips.where((t) => t['terminalQueueStatus'] == status))
             Padding(
-              padding: const EdgeInsets.only(right: 10),
-              child: ChoiceChip(
-                avatar: Icon(_sectionIcon(section), size: 18),
-                label: Text(_sectionLabel(section)),
-                selected: selectedSection == section,
-                onSelected: (_) => onSelect(section),
-              ),
-            ),
-          ],
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _HybridDispatchTile(
+                  title:
+                      '${trip['terminalQueueNumber'] ?? '-'} - ${_dispatchTripLabel(trip)}',
+                  subtitle:
+                      '${_readDynamicMap(_readDynamicMap(trip['driverId'])['userId'])['fullName'] ?? 'Driver'} - ${_dispatchTerminalLabel(trip)}',
+                  caption:
+                      '${trip['occupancyCount'] ?? 'Unavailable'} onboard / ${trip['terminalSummary']?['reservedSeats'] ?? 'Unavailable'} reserved / ${trip['terminalSummary']?['availableSeats'] ?? 'Unavailable'} free / GPS: ${trip['terminalSummary']?['gpsWarning'] == true ? 'old or missing - advisory only' : trip['terminalSummary'] == null ? 'unavailable' : 'recent'}',
+                  actions: errors.containsKey('dispatch') ||
+                          loading.contains('dispatch')
+                      ? const []
+                      : _terminalQueueActions(trip,
+                          index: trips
+                              .where((t) =>
+                                  t['terminalQueueStatus'] == 'waiting' &&
+                                  _routeKey(t) == _routeKey(trip))
+                              .toList()
+                              .indexOf(trip),
+                          total: trips
+                              .where((t) =>
+                                  t['terminalQueueStatus'] == 'waiting' &&
+                                  _routeKey(t) == _routeKey(trip))
+                              .length,
+                          onReorder: onReorder,
+                          onSkippedChanged: onSkip,
+                          onStatusChanged: onDepart),
+                )),
         ],
-      ),
-    );
+        const SizedBox(height: 28),
+        Text('Waiting terminal passengers',
+            style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 8),
+        for (final request
+            in _readDynamicList(board?['waitingTerminalPassengers']).where(
+                (r) =>
+                    selected == null ||
+                    allTrips.any((t) =>
+                        _routeKey(t) == selected &&
+                        (t['_id']?.toString() ==
+                            r['tripSessionId']?.toString()))))
+          ListTile(
+              title: Text(
+                  '${request['terminalStopRef'] ?? request['stopRef'] ?? 'Terminal'} to ${request['destinationStopRef'] ?? 'Destination pending'}'),
+              subtitle: Text(request['status']?.toString() ?? 'Pending')),
+        if (_readDynamicList(board?['waitingTerminalPassengers']).isEmpty)
+          const Text('No terminal passengers waiting.'),
+        const SizedBox(height: 28),
+        Text('On the road', style: Theme.of(context).textTheme.titleLarge),
+        for (final trip in _readDynamicList(board?['routeDrivers'])
+            .where((t) => selected == null || _routeKey(t) == selected))
+          ListTile(
+              title: Text(_dispatchTripLabel(trip)),
+              subtitle: Text('${trip['occupancyCount'] ?? '-'} onboard')),
+      ],
+    ]);
   }
-}
 
-class _AdminOverviewPage extends StatelessWidget {
-  const _AdminOverviewPage({
-    required this.loading,
-    required this.error,
-    required this.dashboard,
-    required this.passengerFlowReport,
-    required this.hybridDispatchBoard,
-    required this.lastSyncedAt,
-    required this.showingCachedSnapshot,
-    required this.onRefresh,
-    required this.onReorderTerminalTrip,
-    required this.onSetTerminalTripSkipped,
-    required this.onSetTerminalTripStatus,
-  });
-
-  final bool loading;
-  final String? error;
-  final Map<String, dynamic>? dashboard;
-  final Map<String, dynamic>? passengerFlowReport;
-  final Map<String, dynamic>? hybridDispatchBoard;
-  final DateTime? lastSyncedAt;
-  final bool showingCachedSnapshot;
-  final Future<void> Function({bool silent}) onRefresh;
-  final Future<void> Function(String tripId, String direction)
-      onReorderTerminalTrip;
-  final Future<void> Function(String tripId, bool skipped)
-      onSetTerminalTripSkipped;
-  final Future<void> Function(String tripId, String terminalQueueStatus)
-      onSetTerminalTripStatus;
+  Widget _reports(BuildContext context) {
+    final summary = _readDynamicMap(report?['summary']);
+    final daily = _parsePassengerFlowSeries(report?['daily']);
+    final boarding =
+        _parsePassengerFlowLocations(report?['topBoardingLocations']);
+    final unloading =
+        _parsePassengerFlowLocations(report?['topUnloadLocations']);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 16,
+          children: [
+            Text(
+                '${reportRange.start.toString().split(' ')[0]} to ${reportRange.end.toString().split(' ')[0]}'),
+            OutlinedButton(
+                onPressed: onReportRange, child: const Text('Change dates')),
+            const Text('Maximum 366 days'),
+          ]),
+      _state('reports'),
+      if (report != null) ...[
+        Wrap(spacing: 24, runSpacing: 12, children: [
+          _PassengerFlowStatTile(
+              label: 'Total boarded',
+              value: summary['totalBoarded']?.toString() ?? 'Unavailable',
+              accent: AppColors.primary),
+          _PassengerFlowStatTile(
+              label: 'Total unloaded',
+              value: summary['totalUnloaded']?.toString() ?? 'Unavailable',
+              accent: AppColors.textSecondary),
+        ]),
+        const SizedBox(height: 24),
+        if (daily.isEmpty)
+          const Text('No passenger movement recorded in this period.')
+        else
+          _PassengerFlowChart(series: daily),
+        const SizedBox(height: 24),
+        if (boarding.isNotEmpty || unloading.isNotEmpty)
+          _PassengerFlowHotspotMap(
+              boardingLocations: boarding, unloadLocations: unloading),
+        const SizedBox(height: 24),
+        _PassengerFlowTopStopsCard(
+            title: 'Most boarded locations',
+            emptyLabel: 'No boarding locations in this period.',
+            stops: boarding,
+            accent: AppColors.primary),
+        const SizedBox(height: 16),
+        _PassengerFlowTopStopsCard(
+            title: 'Most unloaded locations',
+            emptyLabel: 'No unload locations in this period.',
+            stops: unloading,
+            accent: AppColors.textSecondary),
+      ],
+    ]);
+  }
 
   @override
-  Widget build(BuildContext context) {
-    final metrics = dashboard ?? const <String, dynamic>{};
-    final passengerFlow = passengerFlowReport ?? const <String, dynamic>{};
-    final hybridDispatch = hybridDispatchBoard ?? const <String, dynamic>{};
-    final terminalQueue = _readDynamicList(hybridDispatch['terminalQueue']);
-    final waitingTerminalPassengers = _readDynamicList(
-      hybridDispatch['waitingTerminalPassengers'],
-    );
-    final routeDrivers = _readDynamicList(hybridDispatch['routeDrivers']);
-    final summary = _readDynamicMap(passengerFlow['summary']);
-    final dailyFlow = _parsePassengerFlowSeries(passengerFlow['daily']);
-    final topBoardingLocations = _parsePassengerFlowLocations(
-      passengerFlow['topBoardingLocations'],
-    );
-    final topUnloadLocations = _parsePassengerFlowLocations(
-      passengerFlow['topUnloadLocations'],
-    );
-    final topBoardingLocation = _parsePassengerFlowLocation(
-      summary['topBoardingLocation'],
-    );
-    final topUnloadLocation = _parsePassengerFlowLocation(
-      summary['topUnloadLocation'],
-    );
-
-    return RefreshIndicator(
-      onRefresh: () => onRefresh(silent: false),
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(
-            AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, AppSpacing.xxl),
-        children: [
-          const AppPageHeader(
-            title: 'Operations overview',
-            subtitle:
-                'Monitor active trips, dispatch queues, and passenger movement.',
-          ),
-          if (loading) ...[
-            const Padding(
-              padding: EdgeInsets.only(top: AppSpacing.md),
-              child: LinearProgressIndicator(minHeight: 2),
-            ),
-          ],
-          if (error != null) ...[
-            const SizedBox(height: 16),
-            AppInfoBanner(message: error!, warning: true),
-          ],
-          if (lastSyncedAt != null) ...[
-            const SizedBox(height: 16),
-            AppInfoBanner(
-              message: showingCachedSnapshot
-                  ? 'Showing the latest saved dashboard data from ${ParagoFormat.relative(lastSyncedAt!.toIso8601String())}.'
-                  : 'Last synced ${ParagoFormat.relative(lastSyncedAt!.toIso8601String())}.',
-            ),
-          ],
-          const SizedBox(height: 18),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              SizedBox(
-                width: 260,
-                child: MetricCard(
-                  label: 'Active trips',
-                  value: metrics['activeTrips']?.toString() ?? '0',
-                  icon: Icons.route_outlined,
-                  accent: AppColors.primary,
-                  caption: 'Trips currently operating across the system',
-                ),
-              ),
-              SizedBox(
-                width: 260,
-                child: MetricCard(
-                  label: 'Pending pickups',
-                  value: metrics['pendingRequests']?.toString() ?? '0',
-                  icon: Icons.near_me_outlined,
-                  accent: AppColors.warning,
-                  caption: 'Pickup requests still waiting for resolution',
-                ),
-              ),
-              SizedBox(
-                width: 260,
-                child: MetricCard(
-                  label: 'Onboard rides',
-                  value: metrics['onboardRides']?.toString() ?? '0',
-                  icon: Icons.groups_2_outlined,
-                  accent: AppColors.info,
-                  caption: 'Passengers currently onboard active trips',
-                ),
-              ),
-              SizedBox(
-                width: 260,
-                child: MetricCard(
-                  label: 'Terminal queue trips',
-                  value: metrics['terminalQueueTrips']?.toString() ?? '0',
-                  icon: Icons.queue_outlined,
-                  accent: AppColors.purple,
-                  caption: 'Active trips currently operating from the terminal',
-                ),
-              ),
-              SizedBox(
-                width: 260,
-                child: MetricCard(
-                  label: 'Route-mode trips',
-                  value: metrics['routeModeTrips']?.toString() ?? '0',
-                  icon: Icons.alt_route_outlined,
-                  accent: AppColors.success,
-                  caption: 'Active trips already running on the route',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 18),
-          _SectionCard(
-            title: 'Terminal dispatch board',
-            subtitle:
-                'Shows the jeepney queue at the terminal, waiting terminal passengers, and route-mode drivers.',
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final stacked = constraints.maxWidth < 1050;
-                final terminalCard = _HybridDispatchColumn(
-                  title: 'Terminal queue',
-                  accent: AppColors.purple,
-                  emptyMessage: 'No active terminal queue trips yet.',
-                  children: [
-                    for (final trip in terminalQueue)
-                      _HybridDispatchTile(
-                        actions: _terminalQueueActions(
-                          trip,
-                          index: terminalQueue.indexOf(trip),
-                          total: terminalQueue.length,
-                          onReorder: onReorderTerminalTrip,
-                          onSkippedChanged: onSetTerminalTripSkipped,
-                          onStatusChanged: onSetTerminalTripStatus,
-                        ),
-                        title:
-                            '#${trip['terminalQueueNumber'] ?? '-'} ${_dispatchTripLabel(trip)}',
-                        subtitle:
-                            '${_dispatchTripMode(trip)} · ${_dispatchTerminalLabel(trip)}',
-                        caption:
-                            '${trip['terminalSummary']?["reservedSeats"] ?? 0} reserved / ${trip['terminalSummary']?["availableSeats"] ?? 0} free / GPS ${trip['terminalSummary']?["gpsWarning"] == true ? "old or missing" : "recent"} / ${trip['occupancyCount'] ?? 0} onboard · ${ParagoFormat.statusLabel(trip['terminalQueueStatus']?.toString() ?? 'waiting')}',
-                      ),
-                  ],
-                );
-                final waitingCard = _HybridDispatchColumn(
-                  title: 'Waiting terminal passengers',
-                  accent: AppColors.warning,
-                  emptyMessage: 'No terminal passengers waiting right now.',
-                  children: [
-                    if (waitingTerminalPassengers.isEmpty)
-                      const AppEmptyState(
-                        icon: Icons.people_outline,
-                        title: 'No passengers waiting',
-                        message: 'New terminal passengers will appear here.',
-                      )
-                    else
-                      for (final request in waitingTerminalPassengers)
-                        _HybridDispatchTile(
-                          title:
-                              '${request['terminalStopRef'] ?? request['stopRef'] ?? 'Terminal passenger'} to ${request['destinationStopRef'] ?? 'Destination pending'}',
-                          subtitle:
-                              'Trip ${request['tripSessionId'] ?? '-'} · ${ParagoFormat.statusLabel(request['status']?.toString() ?? 'pending')}',
-                          caption: request['sourceNote']?.toString() ??
-                              'Passenger is waiting at the terminal.',
-                        ),
-                  ],
-                );
-                final routeCard = _HybridDispatchColumn(
-                  title: 'Route-mode drivers',
-                  accent: AppColors.info,
-                  emptyMessage: 'No active route-mode trips yet.',
-                  children: [
-                    if (routeDrivers.isEmpty)
-                      const AppEmptyState(
-                        icon: Icons.alt_route_outlined,
-                        title: 'No route-mode drivers',
-                        message: 'Active route-mode trips will appear here.',
-                      )
-                    else
-                      for (final trip in routeDrivers)
-                        _HybridDispatchTile(
-                          title: _dispatchTripLabel(trip),
-                          subtitle: _dispatchTripMode(trip),
-                          caption:
-                              '${trip['terminalSummary']?["reservedSeats"] ?? 0} reserved / ${trip['terminalSummary']?["availableSeats"] ?? 0} free / GPS ${trip['terminalSummary']?["gpsWarning"] == true ? "old or missing" : "recent"} / ${trip['occupancyCount'] ?? 0} onboard · ${ParagoFormat.statusLabel(trip['status']?.toString() ?? 'active')}',
-                        ),
-                  ],
-                );
-
-                if (stacked) {
-                  return Column(
-                    children: [
-                      terminalCard,
-                      const SizedBox(height: 12),
-                      waitingCard,
-                      const SizedBox(height: 12),
-                      routeCard,
-                    ],
-                  );
-                }
-
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: terminalCard),
-                    const SizedBox(width: 12),
-                    Expanded(child: waitingCard),
-                    const SizedBox(width: 12),
-                    Expanded(child: routeCard),
-                  ],
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 18),
-          _SectionCard(
-            title: 'Passenger boarding and unload report',
-            subtitle:
-                'Shows the locations where passengers most often board and unload, with a separate 7-day trend underneath.',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    _PassengerFlowStatTile(
-                      label: 'Total boarded',
-                      value: _readCount(summary['totalBoarded']).toString(),
-                      accent: AppColors.primary,
-                    ),
-                    _PassengerFlowStatTile(
-                      label: 'Total unloaded',
-                      value: _readCount(summary['totalUnloaded']).toString(),
-                      accent: AppColors.warning,
-                    ),
-                    _PassengerFlowStatTile(
-                      label: 'Top boarding location',
-                      value: topBoardingLocation?.label ?? 'No data yet',
-                      caption: topBoardingLocation == null
-                          ? null
-                          : '${topBoardingLocation.count} passengers',
-                      accent: AppColors.info,
-                    ),
-                    _PassengerFlowStatTile(
-                      label: 'Top unload location',
-                      value: topUnloadLocation?.label ?? 'No data yet',
-                      caption: topUnloadLocation == null
-                          ? null
-                          : '${topUnloadLocation.count} passengers',
-                      accent: AppColors.purple,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                if (topBoardingLocations.isNotEmpty ||
-                    topUnloadLocations.isNotEmpty)
-                  _PassengerFlowHotspotMap(
-                    boardingLocations: topBoardingLocations,
-                    unloadLocations: topUnloadLocations,
-                  )
-                else
-                  const Text('No location-based boarding and unload data yet.'),
-                const SizedBox(height: 18),
-                if (dailyFlow.isEmpty)
-                  const Text('No passenger flow trend data available yet.')
-                else
-                  _PassengerFlowChart(series: dailyFlow),
-                const SizedBox(height: 18),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final stacked = constraints.maxWidth < 900;
-                    final boardingCard = _PassengerFlowTopStopsCard(
-                      title: 'Most boarded locations',
-                      emptyLabel: 'No boarding-location data yet.',
-                      stops: topBoardingLocations,
-                      accent: AppColors.primary,
-                    );
-                    final unloadCard = _PassengerFlowTopStopsCard(
-                      title: 'Most unloaded locations',
-                      emptyLabel: 'No unload-location data yet.',
-                      stops: topUnloadLocations,
-                      accent: AppColors.warning,
-                    );
-
-                    if (stacked) {
-                      return Column(
-                        children: [
-                          boardingCard,
-                          const SizedBox(height: 12),
-                          unloadCard,
-                        ],
-                      );
-                    }
-
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(child: boardingCard),
-                        const SizedBox(width: 12),
-                        Expanded(child: unloadCard),
-                      ],
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-List<dynamic> _readDynamicList(dynamic value) {
-  return value is List<dynamic> ? value : const <dynamic>[];
+  Widget build(BuildContext context) =>
+      ListView(padding: const EdgeInsets.all(24), children: [
+        AppPageHeader(
+            title: section == _AdminWorkspaceSection.overview
+                ? 'Operations overview'
+                : _sectionLabel(section),
+            subtitle: section == _AdminWorkspaceSection.overview
+                ? 'What needs your attention today.'
+                : section == _AdminWorkspaceSection.dispatch
+                    ? 'Manage loading, queue order, and departures.'
+                    : 'Passenger movement over your selected period.'),
+        const SizedBox(height: 24),
+        if (section == _AdminWorkspaceSection.overview)
+          _overview(context)
+        else if (section == _AdminWorkspaceSection.dispatch)
+          _dispatch(context)
+        else
+          _reports(context),
+      ]);
 }
 
 String _dispatchTripLabel(dynamic value) {
@@ -442,16 +382,12 @@ List<Widget> _terminalQueueActions(
       tooltip: 'Move down',
       icon: const Icon(Icons.keyboard_arrow_down),
     ),
-    IconButton.filledTonal(
-      onPressed: () => onSkippedChanged(tripId, !skipped),
-      tooltip: skipped ? 'Restore to queue' : 'Skip this jeepney',
-      icon: Icon(skipped ? Icons.undo : Icons.skip_next),
-    ),
-    IconButton.filledTonal(
-      onPressed: loading ? () => onStatusChanged(tripId, 'departed') : null,
-      tooltip: 'Depart terminal',
-      icon: const Icon(Icons.departure_board_outlined),
-    ),
+    TextButton(
+        onPressed: () => onSkippedChanged(tripId, !skipped),
+        child: Text(skipped ? 'Restore' : 'Skip')),
+    TextButton(
+        onPressed: loading ? () => onStatusChanged(tripId, 'departed') : null,
+        child: const Text('Depart terminal')),
   ];
 }
 
@@ -473,8 +409,8 @@ class _HybridDispatchColumn extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: accent.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(20),
+        color: AppColors.surfaceSubtle,
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -520,7 +456,7 @@ class _HybridDispatchTile extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -612,7 +548,7 @@ class _PassengerFlowHotspotMap extends StatelessWidget {
           SizedBox(
             height: 360,
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(8),
               child: FlutterMap(
                 options: MapOptions(
                   initialCenter: center,
@@ -692,7 +628,7 @@ class _HotspotMarker extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.95),
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(8),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.08),
@@ -763,8 +699,8 @@ class _PassengerFlowStatTile extends StatelessWidget {
       width: 220,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: accent.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(20),
+        color: AppColors.surfaceSubtle,
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1027,7 +963,7 @@ class _PassengerFlowTopStopsCardState
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.03),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1160,7 +1096,7 @@ class _AdminInfoBanner extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: backgroundColor,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
         message,
@@ -1200,29 +1136,14 @@ class _SectionCard extends StatelessWidget {
   }
 }
 
-IconData _sectionIcon(_AdminWorkspaceSection section) {
-  switch (section) {
-    case _AdminWorkspaceSection.overview:
-      return Icons.space_dashboard_outlined;
-    case _AdminWorkspaceSection.drivers:
-      return Icons.manage_accounts_outlined;
-    case _AdminWorkspaceSection.routeBuilder:
-      return Icons.alt_route_outlined;
-    case _AdminWorkspaceSection.routes:
-      return Icons.place_outlined;
-    case _AdminWorkspaceSection.fareSettings:
-      return Icons.payments_outlined;
-    case _AdminWorkspaceSection.announcements:
-      return Icons.campaign_outlined;
-    case _AdminWorkspaceSection.support:
-      return Icons.support_agent_rounded;
-  }
-}
-
 String _sectionLabel(_AdminWorkspaceSection section) {
   switch (section) {
     case _AdminWorkspaceSection.overview:
       return 'Overview';
+    case _AdminWorkspaceSection.dispatch:
+      return 'Terminal dispatch';
+    case _AdminWorkspaceSection.reports:
+      return 'Reports';
     case _AdminWorkspaceSection.drivers:
       return 'Drivers';
     case _AdminWorkspaceSection.routeBuilder:

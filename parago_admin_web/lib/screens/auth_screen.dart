@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../core/config/app_config.dart';
 import '../models/auth/auth_models.dart';
+import '../core/theme/app_colors.dart';
 import '../core/utils/action_feedback.dart';
 import '../services/auth_service.dart';
 import '../services/session_controller.dart';
@@ -85,19 +86,13 @@ class _AuthScreenState extends State<AuthScreen> {
     final scheme = Theme.of(context).colorScheme;
     final screenWidth = MediaQuery.sizeOf(context).width;
     final wide = screenWidth >= 980;
-    final panelBase = Color.alphaBlend(
-      Colors.black.withValues(alpha: 0.36),
-      scheme.primary,
-    );
-    final panelAccent = Color.alphaBlend(
-      scheme.secondary.withValues(alpha: 0.12),
-      panelBase,
-    );
-    final actionColor = scheme.secondary;
-    const fieldSurface = Color(0xFFF7FAFA);
-    const fieldText = Color(0xFF19363A);
-    const fieldHint = Color(0xFF8B989C);
-    final floatingLabelColor = Colors.white.withValues(alpha: 0.96);
+    const panelBase = AppColors.surface;
+    const panelAccent = AppColors.surface;
+    const actionColor = AppColors.primary;
+    const fieldSurface = AppColors.surface;
+    const fieldText = AppColors.textPrimary;
+    const fieldHint = AppColors.textSecondary;
+    const floatingLabelColor = AppColors.textSecondary;
 
     final loginForm = Column(
       mainAxisSize: MainAxisSize.min,
@@ -124,9 +119,9 @@ class _AuthScreenState extends State<AuthScreen> {
               width: double.infinity,
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.16),
+                color: AppColors.surfaceSubtle,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                border: Border.all(color: AppColors.border),
               ),
               child: Text(
                 'Troubleshooting:\n'
@@ -135,7 +130,7 @@ class _AuthScreenState extends State<AuthScreen> {
                 '3. If you are using the deployed backend, verify that the API server is reachable and the admin account is active.',
                 style: Theme.of(
                   context,
-                ).textTheme.bodyMedium?.copyWith(color: Colors.white),
+                ).textTheme.bodyMedium?.copyWith(color: AppColors.textPrimary),
               ),
             ),
             const SizedBox(height: 14),
@@ -173,11 +168,11 @@ class _AuthScreenState extends State<AuthScreen> {
             ),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(6),
-              borderSide: BorderSide.none,
+              borderSide: const BorderSide(color: AppColors.border),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(6),
-              borderSide: BorderSide.none,
+              borderSide: const BorderSide(color: AppColors.border),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(6),
@@ -222,11 +217,11 @@ class _AuthScreenState extends State<AuthScreen> {
             ),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(6),
-              borderSide: BorderSide.none,
+              borderSide: const BorderSide(color: AppColors.border),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(6),
-              borderSide: BorderSide.none,
+              borderSide: const BorderSide(color: AppColors.border),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(6),
@@ -250,7 +245,7 @@ class _AuthScreenState extends State<AuthScreen> {
           onPressed: _loading ? null : _submit,
           style: FilledButton.styleFrom(
             backgroundColor: actionColor,
-            foregroundColor: scheme.onSecondary,
+            foregroundColor: Colors.white,
             padding: const EdgeInsets.symmetric(vertical: 18),
             textStyle: const TextStyle(
               fontWeight: FontWeight.w700,
@@ -268,7 +263,7 @@ class _AuthScreenState extends State<AuthScreen> {
           'Authorized admin access only',
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: Colors.white.withValues(alpha: 0.82),
+                color: AppColors.textSecondary,
                 letterSpacing: 1.4,
               ),
         ),
@@ -279,7 +274,7 @@ class _AuthScreenState extends State<AuthScreen> {
             child: LinearProgressIndicator(
               minHeight: 7,
               color: actionColor,
-              backgroundColor: Color(0x40FFFFFF),
+              backgroundColor: AppColors.border,
             ),
           ),
         ],
@@ -288,17 +283,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
     return Scaffold(
       body: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              const Color(0xFFF4F1E8),
-              scheme.primary.withValues(alpha: 0.08),
-              scheme.secondary.withValues(alpha: 0.12),
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
+        decoration: const BoxDecoration(color: Color(0xFFD5E0DD)),
         child: SafeArea(
           child: Center(
             child: ConstrainedBox(
@@ -319,7 +304,7 @@ class _AuthScreenState extends State<AuthScreen> {
                               height: 460,
                               margin:
                                   const EdgeInsets.symmetric(horizontal: 48),
-                              color: Colors.white.withValues(alpha: 0.48),
+                              color: AppColors.border,
                             ),
                             Expanded(
                               child: _LoginPane(child: loginForm),
@@ -341,7 +326,7 @@ class _AuthScreenState extends State<AuthScreen> {
                               height: 1,
                               margin:
                                   const EdgeInsets.symmetric(horizontal: 12),
-                              color: Colors.white.withValues(alpha: 0.34),
+                              color: AppColors.border,
                             ),
                             const SizedBox(height: 28),
                             _LoginPane(child: loginForm),
@@ -373,19 +358,13 @@ class _SplitAuthShell extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 46, vertical: 42),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            panelBase,
-            panelAccent,
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        color: panelBase,
+        border: Border.all(color: AppColors.border),
         borderRadius: BorderRadius.circular(32),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.12),
-            blurRadius: 36,
+            color: const Color(0xFF193D35).withValues(alpha: 0.14),
+            blurRadius: 48,
             offset: const Offset(0, 22),
           ),
         ],
@@ -399,7 +378,7 @@ class _SplitAuthShell extends StatelessWidget {
               width: 140,
               height: 140,
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.04),
+                color: Colors.transparent,
                 shape: BoxShape.circle,
               ),
             ),
@@ -411,7 +390,7 @@ class _SplitAuthShell extends StatelessWidget {
               width: 120,
               height: 120,
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.05),
+                color: Colors.transparent,
                 shape: BoxShape.circle,
               ),
             ),
@@ -444,7 +423,7 @@ class _BrandPane extends StatelessWidget {
           'SAKAY Admin',
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                color: Colors.white,
+                color: AppColors.textPrimary,
                 fontSize: compact ? 30 : 40,
                 fontWeight: FontWeight.w400,
                 letterSpacing: 0.8,
@@ -455,7 +434,7 @@ class _BrandPane extends StatelessWidget {
           'Operations dashboard for route setup, fare updates, and dispatch management.',
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: Colors.white.withValues(alpha: 0.72),
+                color: AppColors.textSecondary,
                 letterSpacing: 0.4,
                 height: 1.6,
               ),
@@ -483,7 +462,7 @@ class _LoginPane extends StatelessWidget {
             Text(
               'Welcome',
               style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                    color: Colors.white,
+                    color: AppColors.textPrimary,
                     fontWeight: FontWeight.w400,
                     letterSpacing: 0.8,
                   ),
@@ -492,15 +471,15 @@ class _LoginPane extends StatelessWidget {
             Text(
               'PLEASE LOGIN TO ADMIN DASHBOARD.',
               style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: Colors.white.withValues(alpha: 0.86),
+                    color: AppColors.textSecondary,
                     letterSpacing: 1.8,
                     fontWeight: FontWeight.w500,
                   ),
             ),
             const SizedBox(height: 40),
             child,
-            const ForgotPasswordLink(foregroundColor: Colors.white),
-            const LegalLinks(foregroundColor: Colors.white),
+            const ForgotPasswordLink(foregroundColor: AppColors.primary),
+            const LegalLinks(foregroundColor: AppColors.primary),
           ],
         ),
       ),

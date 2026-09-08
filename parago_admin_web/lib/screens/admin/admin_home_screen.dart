@@ -8,7 +8,6 @@ import 'package:provider/provider.dart';
 
 import '../../core/config/app_config.dart';
 import '../../core/theme/app_colors.dart';
-import '../../core/theme/app_breakpoints.dart';
 import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../widgets/app_card.dart';
@@ -28,6 +27,8 @@ part 'admin_home_sections.dart';
 
 enum _AdminWorkspaceSection {
   overview,
+  dispatch,
+  reports,
   drivers,
   routeBuilder,
   routes,
@@ -48,9 +49,17 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   Map<String, dynamic>? _passengerFlowReport;
   Map<String, dynamic>? _hybridDispatchBoard;
   bool _loading = false;
-  String? _error;
-  DateTime? _lastSyncedAt;
-  bool _showingCachedSnapshot = false;
+  bool _reloadRequested = false;
+  int _dispatchRevision = 0;
+  final Map<String, String> _sectionErrors = {};
+  final Map<String, DateTime> _sectionTimes = {};
+  final Set<String> _sectionLoading = {};
+  DateTimeRange _reportRange = DateTimeRange(
+      start: DateTime.now().subtract(const Duration(days: 7)),
+      end: DateTime.now());
+  int _reportGeneration = 0;
+  String? _dispatchRoute;
+
   Timer? _pollingTimer;
   StreamSubscription<Map<String, dynamic>>? _operationsSubscription;
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
@@ -82,99 +91,114 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     }
   }
 
-  Future<void> _showMoreNavigation() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.sm,
-            AppSpacing.lg,
-            AppSpacing.lg,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('More workspace tools',
-                  style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: AppSpacing.sm),
-              for (final section in const [
-                _AdminWorkspaceSection.routeBuilder,
-                _AdminWorkspaceSection.fareSettings,
-                _AdminWorkspaceSection.announcements,
-                _AdminWorkspaceSection.support,
-              ])
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(_sectionIcon(section)),
-                  title: Text(_sectionLabel(section)),
-                  selected: _selectedSection == section,
-                  selectedTileColor: AppColors.primaryContainer,
-                  shape: const RoundedRectangleBorder(
-                      borderRadius: AppRadius.medium),
-                  onTap: () {
-                    Navigator.of(sheetContext).pop();
-                    setState(() => _selectedSection = section);
-                  },
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Future<void> _load({bool silent = false}) async {
-    final session = context.read<SessionController>();
-    final admin = AdminService(session.apiClient);
-    final requestStartedAt = DateTime.now();
-
-    if (!silent) {
-      setState(() => _loading = true);
+    if (!mounted) return;
+    if (_loading) {
+      _reloadRequested = true;
+      return;
     }
-
-    try {
-      final now = DateTime.now().toUtc();
-      final from = now.subtract(const Duration(days: 7));
-      final results = await Future.wait<dynamic>([
-        admin.dashboard(),
-        admin.reportPassengerFlow(
-          fromIso: from.toIso8601String(),
-          toIso: now.toIso8601String(),
-        ),
-        admin.hybridDispatchBoard(),
-      ]);
-
-      final usedStaleCache = session.apiClient.recentTelemetry.any(
-        (entry) =>
-            entry.occurredAt.isAfter(requestStartedAt) && entry.usedStaleCache,
-      );
-
-      if (!mounted) return;
-      setState(() {
-        _dashboard = results[0] as Map<String, dynamic>;
-        _passengerFlowReport = results[1] as Map<String, dynamic>;
-        _hybridDispatchBoard = results[2] as Map<String, dynamic>;
-        _error = null;
-        _lastSyncedAt = DateTime.now();
-        _showingCachedSnapshot = usedStaleCache;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _error = _dashboard == null ? error.toString() : null;
-        if (_dashboard != null) {
-          _showingCachedSnapshot = true;
+    setState(() => _loading = true);
+    final admin = AdminService(context.read<SessionController>().apiClient);
+    Future<void> fetch(
+        String key,
+        Future<Map<String, dynamic>> Function() request,
+        void Function(Map<String, dynamic>) assign) async {
+      final revision = _dispatchRevision;
+      setState(() => _sectionLoading.add(key));
+      try {
+        final data = await request();
+        if (!mounted || (key == 'dispatch' && revision != _dispatchRevision))
+          return;
+        setState(() {
+          assign(data);
+          _sectionErrors.remove(key);
+          _sectionTimes[key] = DateTime.now();
+        });
+      } catch (_) {
+        if (mounted) {
+          setState(() => _sectionErrors[key] =
+              'Unable to refresh this section. Please retry.');
         }
-      });
-    } finally {
-      if (mounted && !silent) {
-        setState(() => _loading = false);
+      } finally {
+        if (mounted) setState(() => _sectionLoading.remove(key));
       }
     }
+
+    await Future.wait([
+      fetch('activity', () => admin.dashboard(useCache: false),
+          (data) => _dashboard = data),
+      fetch('dispatch', () => admin.hybridDispatchBoard(useCache: false),
+          (data) => _hybridDispatchBoard = data),
+    ]);
+    if (mounted) {
+      setState(() => _loading = false);
+      if (_reloadRequested) {
+        _reloadRequested = false;
+        unawaited(_load(silent: true));
+      }
+    }
+  }
+
+  Future<void> _loadReport() async {
+    final generation = ++_reportGeneration;
+    final range = _reportRange;
+    setState(() => _sectionLoading.add('reports'));
+    try {
+      final data =
+          await AdminService(context.read<SessionController>().apiClient)
+              .reportPassengerFlow(
+                  fromIso: range.start.toUtc().toIso8601String(),
+                  toIso: range.end.toUtc().toIso8601String(),
+                  useCache: false);
+      if (!mounted || generation != _reportGeneration) return;
+      setState(() {
+        _passengerFlowReport = data;
+        _sectionErrors.remove('reports');
+        _sectionTimes['reports'] = DateTime.now();
+      });
+    } catch (_) {
+      if (mounted && generation == _reportGeneration) {
+        setState(() => _sectionErrors['reports'] =
+            'Unable to refresh this report. Please retry.');
+      }
+    } finally {
+      if (mounted && generation == _reportGeneration) {
+        setState(() => _sectionLoading.remove('reports'));
+      }
+    }
+  }
+
+  void _selectSection(_AdminWorkspaceSection section) {
+    setState(() => _selectedSection = section);
+    if (section == _AdminWorkspaceSection.reports &&
+        _passengerFlowReport == null &&
+        !_sectionLoading.contains('reports')) {
+      _loadReport();
+    }
+  }
+
+  Future<void> _pickReportRange() async {
+    final selected = await showDateRangePicker(
+        context: context,
+        initialDateRange: _reportRange,
+        firstDate: DateTime(2020),
+        lastDate: DateTime.now());
+    if (selected == null || !mounted) return;
+    final inclusiveEnd = selected.end
+        .add(const Duration(days: 1))
+        .subtract(const Duration(milliseconds: 1));
+    if (inclusiveEnd.difference(selected.start) > const Duration(days: 366)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Choose a date range of no more than 366 days.')));
+      return;
+    }
+    setState(() {
+      _reportRange = DateTimeRange(start: selected.start, end: inclusiveEnd);
+      _passengerFlowReport = null;
+      _sectionTimes.remove('reports');
+      _sectionErrors.remove('reports');
+    });
+    await _loadReport();
   }
 
   @override
@@ -265,70 +289,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       return;
     }
 
-    final payload = _normalizeRealtimePayload(event['payload']);
-
-    setState(() {
-      _dashboard = _applyDashboardRealtimeEvent(
-        _dashboard,
-        notificationType: notificationType,
-        payload: payload,
-      );
-    });
-  }
-
-  Map<String, dynamic> _applyDashboardRealtimeEvent(
-    Map<String, dynamic>? current, {
-    required String notificationType,
-    required Map<String, dynamic> payload,
-  }) {
-    final next = <String, dynamic>{
-      'activeTrips': _readIntMetric(current?['activeTrips']),
-      'pendingRequests': _readIntMetric(current?['pendingRequests']),
-      'onboardRides': _readIntMetric(current?['onboardRides']),
-      'activeAlerts': _readIntMetric(current?['activeAlerts']),
-      'terminalQueueTrips': _readIntMetric(current?['terminalQueueTrips']),
-      'routeModeTrips': _readIntMetric(current?['routeModeTrips']),
-      'terminalRequests': _readIntMetric(current?['terminalRequests']),
-    };
-
-    switch (notificationType) {
-      case 'pickup_request_created':
-        next['pendingRequests'] = _readIntMetric(next['pendingRequests']) + 1;
-        break;
-      case 'pickup_request_acknowledged':
-      case 'pickup_request_completed':
-        final previousStatus = payload['previousStatus']?.toString() ?? '';
-        if (previousStatus == 'pending') {
-          next['pendingRequests'] =
-              (_readIntMetric(next['pendingRequests']) - 1).clamp(0, 1 << 30);
-        }
-        final ridePreviousStatus =
-            payload['ridePreviousStatus']?.toString() ?? '';
-        if (ridePreviousStatus == 'onboard') {
-          next['onboardRides'] =
-              (_readIntMetric(next['onboardRides']) - 1).clamp(0, 1 << 30);
-        }
-        break;
-      case 'stop_alert_created':
-        next['activeAlerts'] = _readIntMetric(next['activeAlerts']) + 1;
-        break;
-      case 'stop_alert_acknowledged':
-        final previousStatus = payload['previousStatus']?.toString() ?? '';
-        if (previousStatus == 'sent' || previousStatus == 'seen') {
-          next['activeAlerts'] =
-              (_readIntMetric(next['activeAlerts']) - 1).clamp(0, 1 << 30);
-        }
-        break;
-      case 'ride_completed':
-        final previousStatus = payload['previousStatus']?.toString() ?? '';
-        if (previousStatus == 'onboard') {
-          next['onboardRides'] =
-              (_readIntMetric(next['onboardRides']) - 1).clamp(0, 1 << 30);
-        }
-        break;
-    }
-
-    return next;
+    unawaited(_load(silent: true));
   }
 
   Future<String?> _terminalReason() async {
@@ -371,8 +332,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
               tripId: tripId, direction: direction, reason: reason);
       if (!mounted) return;
       setState(() {
+        _dispatchRevision++;
         _hybridDispatchBoard = board;
-        _lastSyncedAt = DateTime.now();
+        _sectionTimes['dispatch'] = DateTime.now();
+        _sectionErrors.remove('dispatch');
       });
     } catch (error) {
       if (!mounted) return;
@@ -395,8 +358,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
               tripId: tripId, skipped: skipped, reason: reason);
       if (!mounted) return;
       setState(() {
+        _dispatchRevision++;
         _hybridDispatchBoard = board;
-        _lastSyncedAt = DateTime.now();
+        _sectionTimes['dispatch'] = DateTime.now();
+        _sectionErrors.remove('dispatch');
       });
     } catch (error) {
       if (!mounted) return;
@@ -406,38 +371,28 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     }
   }
 
-  int _readIntMetric(dynamic value) {
-    if (value is int) {
-      return value;
-    }
-    return int.tryParse(value?.toString() ?? '') ?? 0;
-  }
-
-  Map<String, dynamic> _normalizeRealtimePayload(dynamic value) {
-    if (value is Map<String, dynamic>) {
-      return value;
-    }
-    if (value is Map) {
-      return value.map((key, item) => MapEntry(key.toString(), item));
-    }
-    return const <String, dynamic>{};
-  }
-
   Widget _buildWorkspaceContent() {
     switch (_selectedSection) {
       case _AdminWorkspaceSection.overview:
-        return _AdminOverviewPage(
-          loading: _loading,
-          error: _error,
+      case _AdminWorkspaceSection.dispatch:
+      case _AdminWorkspaceSection.reports:
+        return _AdminOperationsPage(
+          section: _selectedSection,
           dashboard: _dashboard,
-          passengerFlowReport: _passengerFlowReport,
-          hybridDispatchBoard: _hybridDispatchBoard,
-          lastSyncedAt: _lastSyncedAt,
-          showingCachedSnapshot: _showingCachedSnapshot,
-          onRefresh: _load,
-          onReorderTerminalTrip: _reorderTerminalQueueTrip,
-          onSetTerminalTripSkipped: _setTerminalQueueSkipped,
-          onSetTerminalTripStatus: _setTerminalQueueStatus,
+          board: _hybridDispatchBoard,
+          report: _passengerFlowReport,
+          errors: _sectionErrors,
+          times: _sectionTimes,
+          loading: _sectionLoading,
+          onRetry: (key) => key == 'reports' ? _loadReport() : _load(),
+          onSelect: _selectSection,
+          route: _dispatchRoute,
+          onRoute: (value) => setState(() => _dispatchRoute = value),
+          reportRange: _reportRange,
+          onReportRange: _pickReportRange,
+          onReorder: _reorderTerminalQueueTrip,
+          onSkip: _setTerminalQueueSkipped,
+          onDepart: _setTerminalQueueStatus,
         );
       case _AdminWorkspaceSection.drivers:
         return AdminDriverManagementScreen(
@@ -450,10 +405,21 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           onSaved: () => _load(silent: true),
         );
       case _AdminWorkspaceSection.routes:
-        return AdminRouteManagementScreen(
-          embedded: true,
-          onChanged: () => _load(silent: true),
-        );
+        return Column(children: [
+          Align(
+              alignment: Alignment.centerRight,
+              child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: FilledButton(
+                      onPressed: () =>
+                          _selectSection(_AdminWorkspaceSection.routeBuilder),
+                      child: const Text('Create route')))),
+          Expanded(
+              child: AdminRouteManagementScreen(
+            embedded: true,
+            onChanged: () => _load(silent: true),
+          ))
+        ]);
       case _AdminWorkspaceSection.fareSettings:
         return AdminRouteFareSettingsScreen(
           embedded: true,
@@ -473,6 +439,25 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     String tripId,
     String terminalQueueStatus,
   ) async {
+    final matches = _readDynamicList(_hybridDispatchBoard?['terminalQueue'])
+        .where((t) => t['_id']?.toString() == tripId);
+    if (matches.isEmpty) return;
+    final trip = matches.first;
+    final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: const Text('Depart terminal?'),
+                content: Text(
+                    '${trip['occupancyCount'] ?? 0} onboard passengers stay on this trip. ${trip['terminalSummary']?['reservedSeats'] ?? 0} unboarded reserved seats will be released and affected bookings offered a transfer. This does not end the trip.'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Continue'))
+                ]));
+    if (confirmed != true || !mounted) return;
     final reason = await _terminalReason();
     if (reason == null || !mounted) return;
     try {
@@ -485,8 +470,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       );
       if (!mounted) return;
       setState(() {
+        _dispatchRevision++;
         _hybridDispatchBoard = board;
-        _lastSyncedAt = DateTime.now();
+        _sectionTimes['dispatch'] = DateTime.now();
+        _sectionErrors.remove('dispatch');
       });
     } catch (error) {
       if (!mounted) return;
@@ -496,261 +483,132 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     }
   }
 
+  Widget _navigation({bool drawer = false}) => Container(
+        width: 224,
+        color: AppColors.surface,
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const Padding(
+              padding: EdgeInsets.fromLTRB(24, 28, 24, 32),
+              child: Text('SakayGaray',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700))),
+          const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24),
+              child: Text('WORKSPACE',
+                  style: TextStyle(
+                      fontSize: 11,
+                      letterSpacing: 1.2,
+                      color: AppColors.textSecondary))),
+          const SizedBox(height: 12),
+          Expanded(
+              child: ListView(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  children: [
+                for (final section in const [
+                  _AdminWorkspaceSection.overview,
+                  _AdminWorkspaceSection.dispatch,
+                  _AdminWorkspaceSection.drivers,
+                  _AdminWorkspaceSection.routes,
+                  _AdminWorkspaceSection.fareSettings,
+                  _AdminWorkspaceSection.announcements,
+                  _AdminWorkspaceSection.support,
+                  _AdminWorkspaceSection.reports
+                ]) ...[
+                  if ([
+                    _AdminWorkspaceSection.overview,
+                    _AdminWorkspaceSection.drivers,
+                    _AdminWorkspaceSection.announcements,
+                    _AdminWorkspaceSection.reports
+                  ].contains(section))
+                    Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 20, 16, 6),
+                        child: Text(
+                            section == _AdminWorkspaceSection.overview
+                                ? 'Operations'
+                                : section == _AdminWorkspaceSection.drivers
+                                    ? 'Management'
+                                    : section ==
+                                            _AdminWorkspaceSection.announcements
+                                        ? 'Communication'
+                                        : 'Reporting',
+                            style: const TextStyle(
+                                fontSize: 11, color: AppColors.textSecondary))),
+                  Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: ListTile(
+                        dense: true,
+                        minTileHeight: 44,
+                        shape: const RoundedRectangleBorder(
+                            borderRadius: AppRadius.medium),
+                        selected: _selectedSection == section,
+                        selectedColor: AppColors.primaryDark,
+                        selectedTileColor: const Color(0xFFF0F6F5),
+                        title: Text(_sectionLabel(section)),
+                        onTap: () {
+                          _selectSection(section);
+                          if (drawer) Navigator.pop(context);
+                        },
+                      )),
+                ],
+              ])),
+          const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text('Administration',
+                  style:
+                      TextStyle(color: AppColors.textSecondary, fontSize: 12))),
+        ]),
+      );
+
   @override
   Widget build(BuildContext context) {
-    final session = context.read<SessionController>();
-    final userName = session.user?.fullName ?? 'Administrator';
-    final compactHeader = MediaQuery.sizeOf(context).width < 900;
-    final mobile = MediaQuery.sizeOf(context).width < AppBreakpoints.compact;
-
-    return Scaffold(
-      backgroundColor: AppColors.pageBackground,
-      appBar: AppBar(
-        toolbarHeight: 68,
-        titleSpacing: 18,
-        backgroundColor: AppColors.surface,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        shape: const Border(bottom: BorderSide(color: AppColors.border)),
-        title: _AdminHeaderBrand(userName: userName, compact: mobile),
-        actions: [
-          if (!compactHeader) ...[
-            TextButton.icon(
-              onPressed: _loading
-                  ? null
-                  : () async {
-                      await session.apiClient.clearCache();
-                      await _load();
-                    },
-              icon: const Icon(Icons.refresh),
-              label: const Text('Refresh'),
-            ),
-            const SizedBox(width: 8),
-          ],
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: compactHeader
-                ? IconButton.filledTonal(
-                    onPressed: () => _confirmAdminLogout(session),
-                    tooltip: 'Log out',
-                    icon: const Icon(Icons.logout),
-                  )
-                : TextButton.icon(
-                    onPressed: () => _confirmAdminLogout(session),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 10,
-                      ),
-                      foregroundColor: Theme.of(context).colorScheme.primary,
-                    ),
-                    icon: const Icon(Icons.logout),
-                    label: const Text('Log out'),
-                  ),
-          ),
-          if (compactHeader)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: IconButton(
-                onPressed: _loading
-                    ? null
-                    : () async {
-                        await session.apiClient.clearCache();
-                        await _load();
-                      },
-                tooltip: 'Refresh',
-                icon: const Icon(Icons.refresh),
-              ),
-            ),
-        ],
-      ),
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final desktop = constraints.maxWidth >= 980;
-            final content = _buildWorkspaceContent();
-
-            if (desktop) {
-              return Row(
-                children: [
-                  NavigationRail(
-                    backgroundColor: AppColors.surface,
-                    minWidth: 224,
-                    groupAlignment: -0.85,
-                    useIndicator: true,
-                    indicatorColor: AppColors.primaryContainer,
-                    selectedIconTheme:
-                        const IconThemeData(color: AppColors.primaryDark),
-                    selectedLabelTextStyle: const TextStyle(
-                      color: AppColors.primaryDark,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    unselectedIconTheme:
-                        const IconThemeData(color: AppColors.textSecondary),
-                    unselectedLabelTextStyle:
-                        const TextStyle(color: AppColors.textSecondary),
-                    selectedIndex: _AdminWorkspaceSection.values.indexOf(
-                      _selectedSection,
-                    ),
-                    onDestinationSelected: (index) {
-                      setState(
-                        () => _selectedSection =
-                            _AdminWorkspaceSection.values[index],
-                      );
-                    },
-                    labelType: NavigationRailLabelType.all,
-                    destinations: [
-                      for (final section in _AdminWorkspaceSection.values)
-                        NavigationRailDestination(
-                          icon: Icon(_sectionIcon(section)),
-                          label: Text(_sectionLabel(section)),
-                        ),
+    final session = context.watch<SessionController>();
+    final desktop = MediaQuery.sizeOf(context).width >= 1100;
+    final workspace = Column(children: [
+      Container(
+          height: 64,
+          decoration: const BoxDecoration(
+              color: AppColors.surface,
+              border: Border(bottom: BorderSide(color: AppColors.border))),
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(children: [
+            if (!desktop)
+              Builder(
+                  builder: (context) => IconButton(
+                      tooltip: 'Open navigation',
+                      icon: const Icon(Icons.menu),
+                      onPressed: () => Scaffold.of(context).openDrawer())),
+            Expanded(
+                child: Text(_sectionLabel(_selectedSection),
+                    style: Theme.of(context).textTheme.titleMedium)),
+            TextButton(
+                onPressed: () =>
+                    _selectedSection == _AdminWorkspaceSection.reports
+                        ? _loadReport()
+                        : _load(),
+                child: const Text('Refresh')),
+            const SizedBox(width: 12),
+            PopupMenuButton<String>(
+                tooltip: 'Account menu',
+                onSelected: (_) => _confirmAdminLogout(session),
+                itemBuilder: (_) => [
+                      const PopupMenuItem(
+                          value: 'logout', child: Text('Log out'))
                     ],
-                  ),
-                  const VerticalDivider(width: 1, color: AppColors.border),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(
-                          AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, 0),
-                      child: content,
-                    ),
-                  ),
-                ],
-              );
-            }
-
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.lg,
-                AppSpacing.md,
-                AppSpacing.lg,
-                AppSpacing.lg,
-              ),
-              child: mobile
-                  ? content
-                  : Column(
-                      children: [
-                        _AdminCompactNav(
-                          selectedSection: _selectedSection,
-                          onSelect: (section) =>
-                              setState(() => _selectedSection = section),
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        Expanded(child: content),
-                      ],
-                    ),
-            );
-          },
-        ),
-      ),
-      bottomNavigationBar: mobile
-          ? SafeArea(
-              top: false,
-              child: NavigationBar(
-                selectedIndex: _mobileNavigationIndex,
-                onDestinationSelected: (index) {
-                  if (index == 3) {
-                    _showMoreNavigation();
-                    return;
-                  }
-                  setState(() {
-                    _selectedSection = const [
-                      _AdminWorkspaceSection.overview,
-                      _AdminWorkspaceSection.drivers,
-                      _AdminWorkspaceSection.routes,
-                    ][index];
-                  });
-                },
-                destinations: const [
-                  NavigationDestination(
-                      icon: Icon(Icons.space_dashboard_outlined),
-                      selectedIcon: Icon(Icons.space_dashboard),
-                      label: 'Overview'),
-                  NavigationDestination(
-                      icon: Icon(Icons.manage_accounts_outlined),
-                      selectedIcon: Icon(Icons.manage_accounts),
-                      label: 'Drivers'),
-                  NavigationDestination(
-                      icon: Icon(Icons.place_outlined),
-                      selectedIcon: Icon(Icons.place),
-                      label: 'Routes'),
-                  NavigationDestination(
-                      icon: Icon(Icons.more_horiz), label: 'More'),
-                ],
-              ),
-            )
-          : null,
-    );
-  }
-
-  int get _mobileNavigationIndex {
-    switch (_selectedSection) {
-      case _AdminWorkspaceSection.overview:
-        return 0;
-      case _AdminWorkspaceSection.drivers:
-        return 1;
-      case _AdminWorkspaceSection.routes:
-        return 2;
-      default:
-        return 3;
-    }
-  }
-}
-
-class _AdminHeaderBrand extends StatelessWidget {
-  const _AdminHeaderBrand({required this.userName, this.compact = false});
-
-  final String userName;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        ClipRRect(
-          borderRadius: AppRadius.medium,
-          child: Image.asset(
-            'assets/images/SakayLogo.png',
-            width: compact ? 34 : 40,
-            height: compact ? 34 : 40,
-            fit: BoxFit.contain,
-            errorBuilder: (_, __, ___) => Container(
-              width: compact ? 34 : 40,
-              height: compact ? 34 : 40,
-              color: AppColors.primaryContainer,
-              child: const Icon(Icons.admin_panel_settings_outlined,
-                  color: AppColors.primary),
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                compact ? 'SAKAY!' : 'SAKAY! Admin',
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
-              ),
-              if (!compact) ...[
-                const SizedBox(height: 2),
-                Text(
-                  'Signed in as $userName',
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.outline,
-                      ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
+                child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(session.user?.fullName ?? 'Administrator'))),
+          ])),
+      Expanded(child: _buildWorkspaceContent()),
+    ]);
+    return Scaffold(
+      drawer: desktop
+          ? null
+          : Drawer(child: SafeArea(child: _navigation(drawer: true))),
+      body: SafeArea(
+          child: Row(children: [
+        if (desktop) ...[_navigation(), const VerticalDivider(width: 1)],
+        Expanded(child: workspace),
+      ])),
     );
   }
 }

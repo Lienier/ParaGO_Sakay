@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import '../core/utils/action_feedback.dart';
 import '../models/auth/auth_models.dart';
 import '../services/auth_service.dart';
 
@@ -62,7 +64,7 @@ class _AdminEmailOtpScreenState extends State<AdminEmailOtpScreen> {
         if (mounted) Navigator.of(context).pop(session);
       }
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) setState(() => _error = ActionFeedback.messageOf(error));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -70,20 +72,33 @@ class _AdminEmailOtpScreenState extends State<AdminEmailOtpScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Verify admin sign-in')),
+        appBar: AppBar(
+            title: const Text('SakayGaray'),
+            backgroundColor: Theme.of(context).scaffoldBackgroundColor),
         body: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.fromLTRB(24, 64, 24, 24),
             child: Center(
               child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
+                  constraints: const BoxConstraints(maxWidth: 400),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      Text('Check your email',
+                          style: Theme.of(context).textTheme.headlineMedium),
+                      const SizedBox(height: 16),
                       Text(
                           'Enter the six-digit code sent to ${_challenge.maskedEmail}. It expires in five minutes.'),
                       const SizedBox(height: 20),
                       TextField(
                           controller: _code,
+                          enabled: !_busy,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly
+                          ],
+                          textInputAction: TextInputAction.done,
+                          onSubmitted: (_) {
+                            if (!_busy) _submit();
+                          },
                           keyboardType: TextInputType.number,
                           maxLength: 6,
                           autofillHints: const [AutofillHints.oneTimeCode],

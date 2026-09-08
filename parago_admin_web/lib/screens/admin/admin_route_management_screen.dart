@@ -382,7 +382,7 @@ class _AdminRouteManagementScreenState
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(18),
+                borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
                 _routes.isEmpty
@@ -455,11 +455,6 @@ class _RouteSection extends StatelessWidget {
   final ValueChanged<RouteSummaryModel>? onDeactivate;
   final ValueChanged<RouteSummaryModel>? onActivate;
 
-  int _gridColumns(double maxWidth) {
-    final columns = (maxWidth / 300).floor();
-    return columns.clamp(1, 5);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -474,35 +469,105 @@ class _RouteSection extends StatelessWidget {
               Text(emptyMessage)
             else
               LayoutBuilder(
-                builder: (context, constraints) {
-                  const spacing = 12.0;
-                  final columns = _gridColumns(constraints.maxWidth);
-                  final cardWidth = columns == 1
-                      ? constraints.maxWidth
-                      : (constraints.maxWidth - (spacing * (columns - 1))) /
-                          columns;
-
-                  return Wrap(
-                    spacing: spacing,
-                    runSpacing: spacing,
-                    children: [
-                      for (final route in routes)
-                        SizedBox(
-                          width: cardWidth,
-                          child: _RouteRow(
-                            route: route,
-                            busy: busyRouteId == route.id,
-                            onEditRoute: onEditRoute,
-                            onEditLandmarks: onEditLandmarks,
-                            onEditTerminal: onEditTerminal,
-                            onDeactivate: onDeactivate,
-                            onActivate: onActivate,
-                          ),
-                        ),
-                    ],
-                  );
-                },
-              ),
+                  builder: (context, constraints) => SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: ConstrainedBox(
+                            constraints:
+                                BoxConstraints(minWidth: constraints.maxWidth),
+                            child: DataTable(
+                              headingRowHeight: 44,
+                              dataRowMinHeight: 56,
+                              dataRowMaxHeight: 64,
+                              horizontalMargin: 12,
+                              columnSpacing: 24,
+                              columns: const [
+                                DataColumn(label: Text('Code')),
+                                DataColumn(label: Text('Route')),
+                                DataColumn(label: Text('Direction')),
+                                DataColumn(label: Text('Stops'), numeric: true),
+                                DataColumn(label: Text('Actions'))
+                              ],
+                              rows: [
+                                for (final route in routes)
+                                  DataRow(cells: [
+                                    DataCell(Text(route.code)),
+                                    DataCell(Text(route.name)),
+                                    DataCell(Text(route.direction)),
+                                    DataCell(Text('${route.stopsCount}')),
+                                    DataCell(TextButton(
+                                        onPressed: busyRouteId == route.id
+                                            ? null
+                                            : () => showDialog<void>(
+                                                context: context,
+                                                builder: (ctx) => AlertDialog(
+                                                        title: const Text(
+                                                            'Route details'),
+                                                        content: SizedBox(
+                                                            width: 560,
+                                                            child: SingleChildScrollView(
+                                                                child: _RouteRow(
+                                                              route: route,
+                                                              busy:
+                                                                  busyRouteId ==
+                                                                      route.id,
+                                                              onEditRoute:
+                                                                  onEditRoute ==
+                                                                          null
+                                                                      ? null
+                                                                      : (r) {
+                                                                          Navigator.pop(
+                                                                              ctx);
+                                                                          onEditRoute!(
+                                                                              r);
+                                                                        },
+                                                              onEditLandmarks:
+                                                                  (r) {
+                                                                Navigator.pop(
+                                                                    ctx);
+                                                                onEditLandmarks(
+                                                                    r);
+                                                              },
+                                                              onEditTerminal:
+                                                                  (r) {
+                                                                Navigator.pop(
+                                                                    ctx);
+                                                                onEditTerminal(
+                                                                    r);
+                                                              },
+                                                              onDeactivate:
+                                                                  onDeactivate ==
+                                                                          null
+                                                                      ? null
+                                                                      : (r) {
+                                                                          Navigator.pop(
+                                                                              ctx);
+                                                                          onDeactivate!(
+                                                                              r);
+                                                                        },
+                                                              onActivate:
+                                                                  onActivate ==
+                                                                          null
+                                                                      ? null
+                                                                      : (r) {
+                                                                          Navigator.pop(
+                                                                              ctx);
+                                                                          onActivate!(
+                                                                              r);
+                                                                        },
+                                                            ))),
+                                                        actions: [
+                                                          TextButton(
+                                                              onPressed: () =>
+                                                                  Navigator.pop(
+                                                                      ctx),
+                                                              child: const Text(
+                                                                  'Close'))
+                                                        ])),
+                                        child: const Text('View details'))),
+                                  ])
+                              ],
+                            )),
+                      )),
           ],
         ),
       ),
@@ -549,7 +614,7 @@ class _RouteRow extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
           color: color,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(8),
         ),
         child: Text(
           label,
@@ -574,7 +639,7 @@ class _RouteRow extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Theme.of(context).dividerColor),
       ),
       child: Column(
@@ -611,7 +676,7 @@ class _RouteRow extends StatelessWidget {
                   .colorScheme
                   .secondary
                   .withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
               _formatFareRule(route.fareConfig),
@@ -630,7 +695,7 @@ class _RouteRow extends StatelessWidget {
                   .colorScheme
                   .tertiary
                   .withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
               children: [
@@ -698,23 +763,20 @@ class _RouteRow extends StatelessWidget {
             runSpacing: 8,
             children: [
               if (onEditRoute != null)
-                FilledButton.icon(
+                FilledButton(
                   onPressed: () => onEditRoute!(route),
                   style: compactFilledStyle,
-                  icon: const Icon(Icons.edit_road_outlined),
-                  label: const Text('Edit route'),
+                  child: const Text('Edit route'),
                 ),
-              OutlinedButton.icon(
+              OutlinedButton(
                 onPressed: () => onEditLandmarks(route),
                 style: compactOutlinedStyle,
-                icon: const Icon(Icons.place_outlined),
-                label: const Text('Edit landmarks'),
+                child: const Text('Edit landmarks'),
               ),
-              OutlinedButton.icon(
+              OutlinedButton(
                 onPressed: busy ? null : () => onEditTerminal(route),
                 style: compactOutlinedStyle,
-                icon: const Icon(Icons.storefront_outlined),
-                label: const Text('Terminal'),
+                child: const Text('Terminal'),
               ),
               if (onDeactivate != null)
                 FilledButton.tonal(
@@ -984,7 +1046,7 @@ class _TerminalSettingsDialogState extends State<_TerminalSettingsDialog> {
               SizedBox(
                 height: 360,
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(8),
                   child: FlutterMap(
                     options: MapOptions(
                       initialCenter: _mapCenter,
@@ -1091,10 +1153,9 @@ class _TerminalSettingsDialogState extends State<_TerminalSettingsDialog> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
-        FilledButton.icon(
+        FilledButton(
           onPressed: _save,
-          icon: const Icon(Icons.save_outlined),
-          label: const Text('Save terminal'),
+          child: const Text('Save terminal'),
         ),
       ],
     );
@@ -1120,7 +1181,7 @@ class _TerminalMapMarker extends StatelessWidget {
         DecoratedBox(
           decoration: BoxDecoration(
             color: Colors.white.withValues(alpha: 0.94),
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(8),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.14),
@@ -1188,7 +1249,7 @@ class _RouteMetricChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: RichText(
         text: TextSpan(

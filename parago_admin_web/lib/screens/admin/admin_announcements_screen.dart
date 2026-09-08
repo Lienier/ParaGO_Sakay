@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../../core/utils/action_feedback.dart';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -129,7 +130,7 @@ class _AdminAnnouncementsScreenState extends State<AdminAnnouncementsScreen> {
       });
     } catch (error) {
       if (!mounted || generation != _loadGeneration) return;
-      setState(() => _error = error.toString());
+      setState(() => _error = ActionFeedback.messageOf(error));
     } finally {
       if (mounted && generation == _loadGeneration) {
         setState(() {
@@ -232,7 +233,7 @@ class _AdminAnnouncementsScreenState extends State<AdminAnnouncementsScreen> {
       _showMessage('Announcement archived.');
       await _load(silent: true);
     } catch (error) {
-      if (mounted) _showMessage(error.toString());
+      if (mounted) _showMessage(ActionFeedback.messageOf(error));
     }
   }
 
@@ -341,7 +342,8 @@ class _AdminAnnouncementsScreenState extends State<AdminAnnouncementsScreen> {
         final title = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Service announcements', style: Theme.of(context).textTheme.headlineSmall),
+            Text('Service announcements',
+                style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 3),
             Text(
               'Schedule and publish updates without interrupting operations.',
@@ -351,15 +353,20 @@ class _AdminAnnouncementsScreenState extends State<AdminAnnouncementsScreen> {
         );
         final action = SizedBox(
           width: compact ? double.infinity : 178,
-          child: FilledButton.icon(
+          child: FilledButton(
             onPressed: () => _openEditor(),
-            icon: const Icon(Icons.add),
-            label: const Text('New announcement'),
+            child: const Text('New announcement'),
           ),
         );
         return compact
-            ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [title, const SizedBox(height: 12), action])
-            : Row(children: [Expanded(child: title), const SizedBox(width: 12), action]);
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [title, const SizedBox(height: 12), action])
+            : Row(children: [
+                Expanded(child: title),
+                const SizedBox(width: 12),
+                action
+              ]);
       },
     );
   }
@@ -408,13 +415,12 @@ class _AdminAnnouncementsScreenState extends State<AdminAnnouncementsScreen> {
           SizedBox(
             width: 220,
             height: 56,
-            child: OutlinedButton.icon(
+            child: OutlinedButton(
               style: OutlinedButton.styleFrom(
                 minimumSize: const Size(0, 52),
               ),
               onPressed: _pickDateRange,
-              icon: const Icon(Icons.date_range_outlined),
-              label: Text(
+              child: Text(
                 _dateFilter == null
                     ? 'Any date'
                     : '${_dateLabel(_dateFilter!.start).split(' ').first} - '
@@ -624,14 +630,18 @@ class _AnnouncementListRow extends StatelessWidget {
       color: selected
           ? color.withValues(alpha: 0.09)
           : Theme.of(context).colorScheme.surface,
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(8),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
         child: Container(
           decoration: BoxDecoration(
             border: Border(
-              left: BorderSide(color: color, width: 5),
+              left: BorderSide(
+                  color: selected
+                      ? Theme.of(context).colorScheme.primary
+                      : Colors.transparent,
+                  width: 2),
               top: BorderSide(
                 color: selected
                     ? color.withValues(alpha: 0.35)
@@ -712,7 +722,7 @@ class _AnnouncementDetail extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(height: 6, color: color),
+        const SizedBox(height: 8),
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
@@ -796,13 +806,12 @@ class _AnnouncementDetail extends StatelessWidget {
                 if (onDuplicate != null)
                   SizedBox(
                     width: 132,
-                    child: OutlinedButton.icon(
+                    child: OutlinedButton(
                       style: OutlinedButton.styleFrom(
                         minimumSize: const Size(0, 52),
                       ),
                       onPressed: onDuplicate,
-                      icon: const Icon(Icons.content_copy_outlined),
-                      label: const Text('Duplicate'),
+                      child: const Text('Duplicate'),
                     ),
                   ),
                 if (onEdit != null)
@@ -820,10 +829,9 @@ class _AnnouncementDetail extends StatelessWidget {
                 if (onArchive != null)
                   SizedBox(
                     width: 120,
-                    child: TextButton.icon(
+                    child: TextButton(
                       onPressed: onArchive,
-                      icon: const Icon(Icons.archive_outlined),
-                      label: const Text('Archive'),
+                      child: const Text('Archive'),
                     ),
                   ),
               ],
@@ -1039,7 +1047,7 @@ class _AnnouncementEditorDialogState extends State<_AnnouncementEditorDialog> {
       });
       if (mounted) Navigator.pop(context, true);
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) setState(() => _error = ActionFeedback.messageOf(error));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
