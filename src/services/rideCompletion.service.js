@@ -45,6 +45,7 @@ const completeRideSession = async ({
   actorRole = 'system',
   completionMethod = 'manual',
 }) => {
+  actorRole = String(actorRole).toLowerCase();
   if (session.status === 'completed') {
     return session;
   }
@@ -99,35 +100,13 @@ const completeRideSession = async ({
   }
   if (!changed) return completedSession;
 
-  const passenger = await Passenger.findById(session.passengerId).select('userId');
-  await publishNotification({
-    userId: passenger?.userId,
-    type: 'ride_completed',
-    title: 'Ride completed',
-    body: passengerCompletionBody({ actorRole, completionMethod }),
-    payload: {
-      rideSessionId: completedSession._id.toString(),
-      tripSessionId: completedSession.tripSessionId.toString(),
-      previousStatus,
-      completionMethod,
-      rideSession: serializeRideSession(completedSession),
-    },
-    category: 'ride',
-  });
-
-  const shouldNotifyDriver =
-    trip?.driverId &&
-    (actorRole === 'passenger' || completionMethod === 'auto_separation');
-  if (shouldNotifyDriver) {
-    const driver = await Driver.findById(trip.driverId).select('userId');
+  try {
+    const passenger = await Passenger.findById(session.passengerId).select('userId');
     await publishNotification({
-      userId: driver?.userId,
+      userId: passenger?.userId,
       type: 'ride_completed',
-      title:
-        completionMethod === 'auto_separation'
-          ? 'Passenger auto-unloaded'
-          : 'Passenger unloaded',
-      body: driverCompletionBody({ completionMethod }),
+      title: 'Ride completed',
+      body: passengerCompletionBody({ actorRole, completionMethod }),
       payload: {
         rideSessionId: completedSession._id.toString(),
         tripSessionId: completedSession.tripSessionId.toString(),
@@ -137,6 +116,37 @@ const completeRideSession = async ({
       },
       category: 'ride',
     });
+
+  } catch (_) {
+    console.error('[Ride completion] Passenger notification failed after commit');
+  }
+
+  const shouldNotifyDriver =
+    trip?.driverId &&
+    (actorRole === 'passenger' || completionMethod === 'auto_separation');
+  if (shouldNotifyDriver) {
+    try {
+      const driver = await Driver.findById(trip.driverId).select('userId');
+      await publishNotification({
+        userId: driver?.userId,
+        type: 'ride_completed',
+        title:
+          completionMethod === 'auto_separation'
+            ? 'Passenger auto-unloaded'
+            : 'Passenger unloaded',
+        body: driverCompletionBody({ completionMethod }),
+        payload: {
+          rideSessionId: completedSession._id.toString(),
+          tripSessionId: completedSession.tripSessionId.toString(),
+          previousStatus,
+          completionMethod,
+          rideSession: serializeRideSession(completedSession),
+        },
+        category: 'ride',
+      });
+    } catch (_) {
+      console.error('[Ride completion] Driver notification failed after commit');
+    }
   }
 
   return completedSession;

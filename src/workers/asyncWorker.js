@@ -218,10 +218,17 @@ class AsyncWorker {
     if (!token) return false;
     try {
       if (await this.dependencies.isJobProcessed(idempotencyKey)) return false;
-      const now = validDate(job.serverReceivedAt, this.now());
+      const now = this.now();
+      const capturedAt = validDate(job.capturedAt || job.serverReceivedAt);
+      const age = capturedAt ? now - capturedAt : Infinity;
+      if (age < 0 || age > 15000) {
+        await this.dependencies.markJobProcessed(idempotencyKey);
+        this.recordLag(job);
+        return true;
+      }
       const jeepneyLocation = {
-        type: 'Point',
-        coordinates: [Number(job.longitude), Number(job.latitude)],
+        lastKnownLocation: {type: 'Point', coordinates: [Number(job.longitude), Number(job.latitude)]},
+        lastSeenAt: capturedAt,
       };
       await this.dependencies.processDestinationApproachAlerts({
         tripSessionId: job.tripId,

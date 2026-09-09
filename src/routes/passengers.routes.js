@@ -101,8 +101,8 @@ const updatePassengerLocation = async (req, res) => {
   if (!Number.isFinite(age) || age < 0 || age > 15000) {
     throw new ApiError(409, 'Fresh passenger GPS is required. Refresh location and try again');
   }
-  const profile = await Passenger.findByIdAndUpdate(
-    passenger._id,
+  const profile = await Passenger.findOneAndUpdate(
+    { _id: passenger._id, $or: [{lastSeenAt: {$lt: capturedAt}}, {lastSeenAt: {$exists: false}}, {lastSeenAt: null}] },
     {
       $set: {
         lastKnownLocation: {
@@ -114,6 +114,9 @@ const updatePassengerLocation = async (req, res) => {
     },
     { new: true }
   );
+  if (!profile) {
+    return ok(res, { accepted: false, autoBoardedCount: 0, autoCompletedCount: 0 }, 'Older or duplicate GPS sample ignored');
+  }
   const boarded = await processAutomaticBoardingForPassenger({
     passengerId: passenger._id,
     now,

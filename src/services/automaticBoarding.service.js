@@ -42,7 +42,8 @@ const isFresh = (value, maxAgeSeconds, now) => {
   if (Number.isNaN(time.getTime())) {
     return false;
   }
-  return now.getTime() - time.getTime() <= Number(maxAgeSeconds || 0) * 1000;
+  const age = now.getTime() - time.getTime();
+  return age >= 0 && age <= Number(maxAgeSeconds || 0) * 1000;
 };
 
 const clearAutoBoardingWindow = async (pickupRequest, now) => {

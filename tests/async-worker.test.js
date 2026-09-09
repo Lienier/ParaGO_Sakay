@@ -253,7 +253,7 @@ test('two workers cannot process automation for one trip concurrently', async ()
   };
   const first = new AsyncWorker({ dependencies });
   const second = new AsyncWorker({ dependencies });
-  const job = baseJob({ kind: 'automation' });
+  const job = baseJob({ kind: 'automation', capturedAt: new Date().toISOString(), serverReceivedAt: new Date().toISOString() });
 
   const results = await Promise.all([
     first.processAutomationJob(job),
@@ -387,4 +387,21 @@ test('worker drain waits for active work and flushes pending locations', async (
   const result = await worker.drain({ timeoutMs: 500, pollIntervalMs: 5 });
   assert.equal(result.persisted, 0);
   assert.equal(locationDrains, 1);
+});
+
+test('GPS review: expired automation jobs never evaluate historical boarding or unloading', async () => {
+ let calls=0;
+ const worker=new AsyncWorker({now:()=>new Date('2026-07-30T10:01:00Z'),dependencies:{
+ processDestinationApproachAlerts:async()=>{calls++;},processAutomaticBoardingForTrip:async()=>{calls++;},processAutomaticOffboardingForTrip:async()=>{calls++;}
+ }});
+ await worker.processAutomationJob(baseJob({kind:'automation'}));
+ assert.equal(calls,0);
+});
+
+test('GPS review: fresh worker job uses processing time and preserves capture timestamp',async()=>{
+ const now=new Date('2026-07-30T10:00:04Z');const seen=[];
+ const worker=new AsyncWorker({now:()=>now,dependencies:{processDestinationApproachAlerts:async()=>{},processAutomaticBoardingForTrip:async(args)=>seen.push(args),processAutomaticOffboardingForTrip:async(args)=>seen.push(args)}});
+ const job=baseJob({kind:'automation'});await worker.processAutomationJob(job);
+ assert.equal(seen.length,2);
+ for(const args of seen){assert.equal(args.now,now);assert.equal(args.jeepneyLocation.lastSeenAt.toISOString(),new Date(job.capturedAt||job.serverReceivedAt).toISOString());}
 });

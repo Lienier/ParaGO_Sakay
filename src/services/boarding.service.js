@@ -153,6 +153,29 @@ const completeBoardingForPickupRequest = async ({
       if (!freshTrip) {
         throw new ApiError(409, 'Trip session is not active');
       }
+      const checkedAt = new Date();
+      if (freshPickup.expiresAt && checkedAt >= freshPickup.expiresAt) {
+        throw new ApiError(409, 'Pickup request expired');
+      }
+      if (boardingMethod === 'manual' && boardingWindowMinutes &&
+          checkedAt - freshPickup.createdAt > boardingWindowMinutes * 60000) {
+        throw new ApiError(409, 'Boarding attempt outside allowed time window');
+      }
+      if (boardingMethod === 'manual' && pickupType !== 'terminal') {
+        const passenger = await require('../models/passenger').findById(passengerId).session(session);
+        const vehicle = await Jeepney.findById(freshTrip.jeepneyId).session(session);
+        const age = (date) => date ? checkedAt - new Date(date) : Infinity;
+        const p = passenger?.lastKnownLocation?.coordinates;
+        const v = vehicle?.lastKnownLocation?.coordinates;
+        if (age(passenger?.lastSeenAt) < 0 || age(passenger?.lastSeenAt) > autoBoardingPassengerLocationMaxAgeSeconds * 1000 ||
+            age(vehicle?.lastSeenAt) < 0 || age(vehicle?.lastSeenAt) > autoBoardingDriverLocationMaxAgeSeconds * 1000 ||
+            p?.length !== 2 || v?.length !== 2) {
+          throw new ApiError(409, 'Fresh passenger and driver GPS are required. Refresh location and try again');
+        }
+        if (haversineMeters(p[1], p[0], v[1], v[0]) > autoBoardingProximityMeters) {
+          throw new ApiError(409, 'Move near your assigned jeep before confirming boarding');
+        }
+      }
       if (pickupType === 'terminal') {
         if (boardingMethod !== 'manual' || freshTrip.operatingMode !== 'terminal_queue' || freshTrip.terminalQueueStatus !== 'loading')
           throw new ApiError(409, 'Only the assigned loading jeep accepts terminal boarding');
@@ -273,6 +296,18 @@ const validateBoardingAttempt = async ({
   if (!pickupRequest) {
     throw new ApiError(404, 'No matching pickup request found');
   }
+  if (destinationStopRef || destinationLat != null || destinationLng != null) {
+    const saved = pickupRequest.destinationLocation?.coordinates || [];
+    if ((destinationStopRef && String(destinationStopRef).trim() !== pickupRequest.destinationStopRef) ||
+        (destinationLat != null && Number(destinationLat) !== Number(saved[1])) ||
+        (destinationLng != null && Number(destinationLng) !== Number(saved[0]))) {
+      throw new ApiError(409, 'Boarding must use the booked destination and fare');
+    }
+  }
+
+  // A lost response or GPS-triggered boarding must be safe to confirm again.
+  const existingRide = await RideSession.findOne({ pickupRequestId, passengerId, tripSessionId });
+  if (existingRide) return existingRide;
   const pickupType = pickupRequest.pickupType || 'roadside';
   if (!canPassengerBoardPickupRequest(pickupRequest.status, { pickupType })) {
     throw new ApiError(
@@ -328,14 +363,6 @@ const validateBoardingAttempt = async ({
     throw new ApiError(409, 'Boarding request too far from pickup area');
   }
 
-  if (destinationStopRef || destinationLat != null || destinationLng != null) {
-    const saved = pickupRequest.destinationLocation?.coordinates || [];
-    if ((destinationStopRef && String(destinationStopRef).trim() !== pickupRequest.destinationStopRef) ||
-        (destinationLat != null && Number(destinationLat) !== Number(saved[1])) ||
-        (destinationLng != null && Number(destinationLng) !== Number(saved[0]))) {
-      throw new ApiError(409, 'Boarding must use the booked destination and fare');
-    }
-  }
 
   return completeBoardingForPickupRequest({
     passengerId,

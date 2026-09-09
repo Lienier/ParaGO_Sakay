@@ -1793,3 +1793,52 @@ test('ride repair: stale captured passenger GPS is rejected without refreshing l
   assert.equal(response.status, 409, response.text);
   assert.equal(String((await Passenger.findById(fixture.passenger._id)).lastSeenAt), String(previous.lastSeenAt));
 });
+
+test('boarding review: retry returns the existing ride without increasing occupancy', async () => {
+  const { fixture, ride } = await createOnboardRepairFixture();
+  const response = await request(app).post('/api/v1/boarding/validate').set(auth(fixture.tokens.passenger))
+    .send({ tripSessionId: fixture.trip._id.toString(), pickupRequestId: ride.pickupRequestId.toString(), lat: routePath[0][1], lng: routePath[0][0] });
+  assert.equal(response.status, 200, response.text);
+  assert.equal(await RideSession.countDocuments({ pickupRequestId: ride.pickupRequestId }), 1);
+  assert.equal((await TripSession.findById(fixture.trip._id)).occupancyCount, 1);
+});
+
+test('boarding review: roadside passenger near pickup cannot board a distant jeep', async () => {
+  const fixture = await seedCoreFixture(); const pickup = await createPickupRequest({ fixture });
+  await Jeepney.findByIdAndUpdate(fixture.jeepney._id, {$set:{lastKnownLocation:point(121.5,15.1),lastSeenAt:new Date()}});
+  const response = await request(app).post('/api/v1/boarding/validate').set(auth(fixture.tokens.passenger))
+    .send({tripSessionId:fixture.trip._id.toString(),pickupRequestId:pickup._id.toString(),lat:routePath[0][1],lng:routePath[0][0]});
+  assert.equal(response.status,409,response.text);
+  assert.equal(await RideSession.countDocuments({pickupRequestId:pickup._id}),0);
+});
+
+test('boarding review: transaction rejects a booking that expired after initial validation', async () => {
+  const fixture = await seedCoreFixture(); const pickup = await createPickupRequest({fixture});
+  await PickupRequest.findByIdAndUpdate(pickup._id,{$set:{expiresAt:new Date(Date.now()-1)}});
+  const {completeBoardingForPickupRequest}=require('../src/services/boarding.service');
+  await assert.rejects(completeBoardingForPickupRequest({pickupRequest:pickup,trip:fixture.trip,passengerId:fixture.passenger._id}),/expired/);
+  assert.equal(await RideSession.countDocuments({pickupRequestId:pickup._id}),0);
+});
+
+test('unloading review: notification failure cannot report committed unloading as failed', async () => {
+  const {fixture,ride}=await createOnboardRepairFixture();
+  const Notification=require('../src/models/notification'); const original=Notification.create; let attempts=0;
+  Notification.create=async()=>{attempts++;throw new Error('injected notification failure');};
+  try {
+    const response=await request(app).patch(`/api/v1/ride-sessions/${ride._id}/complete`).set(auth(fixture.tokens.passenger)).send({});
+    assert.equal(response.status,200,response.text);
+    assert.equal((await RideSession.findById(ride._id)).status,'completed');
+    assert.equal((await TripSession.findById(fixture.trip._id)).occupancyCount,0);
+    assert.equal(attempts,2);
+  } finally {Notification.create=original;}
+});
+
+test('GPS review: older and duplicate samples do not overwrite passenger position', async () => {
+ const fixture=await seedCoreFixture(); const timestamp=new Date();
+ await Passenger.findByIdAndUpdate(fixture.passenger._id,{$set:{lastSeenAt:timestamp,lastKnownLocation:point(121.1,15.1)}});
+ for(const time of [timestamp,new Date(timestamp.getTime()-1000)]) {
+  const response=await request(app).post('/api/v1/passengers/me/location').set(auth(fixture.tokens.passenger)).send({lat:15.2,lng:121.2,capturedAt:time.toISOString()});
+  assert.equal(response.status,200,response.text);assert.equal(response.body.data.accepted,false);
+ }
+ assert.deepEqual((await Passenger.findById(fixture.passenger._id)).lastKnownLocation.coordinates,[121.1,15.1]);
+});
