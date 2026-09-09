@@ -48,17 +48,8 @@ const isFresh = (value, maxAgeSeconds, now) => {
   const maxAgeSecondsAtMost15 = Number.isFinite(configuredMaxAge)
     ? Math.min(configuredMaxAge, MAX_AUTOMATION_LOCATION_AGE_SECONDS)
     : MAX_AUTOMATION_LOCATION_AGE_SECONDS;
-  return now.getTime() - time.getTime() <= maxAgeSecondsAtMost15 * 1000;
-};
-
-const resetAutoOffboardingWindow = async (ride, now) => {
-  ride.autoOffboarding = {
-    separationStartedAt: undefined,
-    lastCheckedAt: now,
-    lastDistanceMeters: undefined,
-    outsideCount: 0,
-  };
-  await ride.save();
+  const age = now.getTime() - time.getTime();
+  return age >= 0 && age <= maxAgeSecondsAtMost15 * 1000;
 };
 
 const processAutomaticOffboardingForRide = async ({
@@ -91,40 +82,36 @@ const processAutomaticOffboardingForRide = async ({
     return null;
   }
 
+  // One passenger GPS observation counts at most once, even when both
+  // passenger and driver requests evaluate the ride concurrently.
+  const sampleAt = new Date(passenger.lastSeenAt);
   const distanceMeters = haversineMeters(
-    passengerCoordinates.latitude,
-    passengerCoordinates.longitude,
-    jeepneyCoordinates.latitude,
-    jeepneyCoordinates.longitude
+    passengerCoordinates.latitude, passengerCoordinates.longitude,
+    jeepneyCoordinates.latitude, jeepneyCoordinates.longitude
   );
+  const previous = ride.autoOffboarding || {};
+  if (previous.lastPassengerSampleAt && sampleAt <= new Date(previous.lastPassengerSampleAt)) return null;
+  const interrupted = previous.lastCheckedAt && now - new Date(previous.lastCheckedAt) > 15000;
   const evaluation = evaluateAutoOffboardingSeparation({
     distanceMeters,
-    separationStartedAt: ride.autoOffboarding?.separationStartedAt,
-    outsideCount: ride.autoOffboarding?.outsideCount,
-    now,
-    separationMeters: autoOffboardingDistanceMeters,
+    separationStartedAt: interrupted ? null : previous.separationStartedAt,
+    outsideCount: interrupted ? 0 : previous.outsideCount,
+    now, separationMeters: autoOffboardingDistanceMeters,
     consecutiveOutsideChecks: autoOffboardingConsecutiveOutsideChecks,
   });
-
-  if (!evaluation.outside) {
-    await resetAutoOffboardingWindow(ride, now);
-    return null;
-  }
-
-  ride.autoOffboarding = {
+  const updated = await RideSession.findOneAndUpdate({
+    _id: ride._id, status: 'onboard',
+    'autoOffboarding.lastPassengerSampleAt': previous.lastPassengerSampleAt || { $exists: false },
+  }, { $set: { autoOffboarding: {
+    lastPassengerSampleAt: sampleAt,
     separationStartedAt: evaluation.separationStartedAt || undefined,
-    lastCheckedAt: now,
-    lastDistanceMeters: Number(distanceMeters.toFixed(2)),
+    lastCheckedAt: now, lastDistanceMeters: Number(distanceMeters.toFixed(2)),
     outsideCount: evaluation.outsideCount,
-  };
-
-  if (!evaluation.shouldOffboard) {
-    await ride.save();
-    return null;
-  }
+  } } }, { new: true });
+  if (!updated || !evaluation.shouldOffboard) return null;
 
   return completeRideSession({
-    session: ride,
+    session: updated,
     trip,
     actorRole: 'system',
     completionMethod: 'auto_separation',

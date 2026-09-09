@@ -135,6 +135,7 @@ class PassengerService {
   Future<PassengerLocationAutomationResult> updateLocationForRideAutomation({
     required double lat,
     required double lng,
+    DateTime? capturedAt,
   }) async {
     final response = await _client.request(
       method: 'POST',
@@ -142,6 +143,7 @@ class PassengerService {
       body: {
         'lat': lat,
         'lng': lng,
+        if (capturedAt != null) 'capturedAt': capturedAt.toUtc().toIso8601String(),
       },
       useCache: false,
     );

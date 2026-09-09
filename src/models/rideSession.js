@@ -60,6 +60,7 @@ const rideSessionSchema = new Schema(
       enum: ['manual', 'auto_separation', 'trip_ended'],
     },
     autoOffboarding: {
+      lastPassengerSampleAt: { type: Date },
       separationStartedAt: { type: Date },
       lastCheckedAt: { type: Date },
       lastDistanceMeters: { type: Number, min: 0 },

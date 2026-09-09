@@ -1735,3 +1735,61 @@ test('terminal end-trip audits closure and promotes the next jeep', async () => 
  assert.equal((await TripSession.findById(next._id)).terminalQueueStatus, 'loading');
  assert.ok(await require('../src/models/terminalQueueAction').exists({ tripId: first._id, action: 'end_trip', actorId: f.users.driver._id }));
 });
+const createOnboardRepairFixture = async () => {
+  const fixture = await seedCoreFixture();
+  const pickup = await createPickupRequest({ fixture });
+  const response = await request(app).post('/api/v1/boarding/validate')
+    .set(auth(fixture.tokens.passenger)).send({
+      tripSessionId: fixture.trip._id.toString(), pickupRequestId: pickup._id.toString(),
+      lat: routePath[0][1], lng: routePath[0][0],
+    });
+  assert.equal(response.status, 200, response.text);
+  return { fixture, ride: await RideSession.findOne({ pickupRequestId: pickup._id }) };
+};
+
+test('ride repair: concurrent completion decrements occupancy only once', async () => {
+  const { fixture, ride } = await createOnboardRepairFixture();
+  const { completeRideSession } = require('../src/services/rideCompletion.service');
+  await Promise.all(Array.from({ length: 3 }, () => completeRideSession({ session: ride, trip: fixture.trip })));
+  assert.equal((await RideSession.findById(ride._id)).status, 'completed');
+  assert.equal((await TripSession.findById(fixture.trip._id)).occupancyCount, 0);
+});
+
+test('ride repair: failed alert write rolls back ride and occupancy', async () => {
+  const { fixture, ride } = await createOnboardRepairFixture();
+  const { completeRideSession } = require('../src/services/rideCompletion.service');
+  const original = StopAlert.updateMany;
+  StopAlert.updateMany = async () => { throw new Error('injected alert failure'); };
+  try {
+    await assert.rejects(completeRideSession({ session: ride, trip: fixture.trip }), /injected/);
+  } finally { StopAlert.updateMany = original; }
+  assert.equal((await RideSession.findById(ride._id)).status, 'onboard');
+  assert.equal((await TripSession.findById(fixture.trip._id)).occupancyCount, 1);
+});
+
+test('ride repair: duplicate GPS sample cannot count three times', async () => {
+  const { fixture, ride } = await createOnboardRepairFixture();
+  const { processAutomaticOffboardingForPassenger } = require('../src/services/automaticOffboarding.service');
+  const now = new Date();
+  await Passenger.findByIdAndUpdate(fixture.passenger._id, { $set: { lastSeenAt: now, lastKnownLocation: point(121.5, 15.1) } });
+  await Jeepney.findByIdAndUpdate(fixture.jeepney._id, { $set: { lastSeenAt: now, lastKnownLocation: point(routePath[0][0], routePath[0][1]) } });
+  await Promise.all(Array.from({ length: 3 }, () => processAutomaticOffboardingForPassenger({ passengerId: fixture.passenger._id, now })));
+  let result = await RideSession.findById(ride._id);
+  assert.equal(result.status, 'onboard'); assert.equal(result.autoOffboarding.outsideCount, 1);
+  for (let i = 1; i <= 2; i++) {
+    const sample = new Date(now.getTime() + i * 1000);
+    await Passenger.findByIdAndUpdate(fixture.passenger._id, { $set: { lastSeenAt: sample } });
+    await processAutomaticOffboardingForPassenger({ passengerId: fixture.passenger._id, now: sample });
+  }
+  result = await RideSession.findById(ride._id);
+  assert.equal(result.status, 'completed');
+});
+
+test('ride repair: stale captured passenger GPS is rejected without refreshing lastSeenAt', async () => {
+  const fixture = await seedCoreFixture();
+  const previous = await Passenger.findById(fixture.passenger._id);
+  const response = await request(app).post('/api/v1/passengers/me/location').set(auth(fixture.tokens.passenger))
+    .send({lat: 15.1, lng: 121.5, capturedAt: new Date(Date.now() - 60000).toISOString()});
+  assert.equal(response.status, 409, response.text);
+  assert.equal(String((await Passenger.findById(fixture.passenger._id)).lastSeenAt), String(previous.lastSeenAt));
+});

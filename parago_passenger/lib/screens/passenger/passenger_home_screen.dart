@@ -1,3 +1,4 @@
+import '../../core/utils/automation_location.dart';
 import '../../widgets/legal_pages.dart';
 import 'dart:async';
 import '../../widgets/terminal_loading_clock.dart';
@@ -66,7 +67,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   static const Duration _tripMarkerAnimationMaxDuration =
       Duration(milliseconds: 1400);
   static const Duration _tripRealtimeStaleAfter = Duration(seconds: 8);
-  static const Duration _liveRefreshInterval = Duration(seconds: 10);
+  static const Duration _liveRefreshInterval = Duration(seconds: 5);
   static const Duration _backgroundLocationRefreshInterval =
       Duration(seconds: 10);
   static const Duration _passengerLocationReportInterval = Duration(seconds: 5);
@@ -441,7 +442,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         final locationTimestamp = _currentPassengerLocationAt;
         final shouldRefreshPassengerLocation = locationTimestamp == null ||
             DateTime.now().difference(locationTimestamp) >=
-                _backgroundLocationRefreshInterval;
+                (_shouldReportPassengerLocationForRideAutomation
+                    ? _passengerLocationReportInterval
+                    : _backgroundLocationRefreshInterval);
         if (shouldRefreshPassengerLocation) {
           await _ensureCurrentPassengerLocation(
             silent: true,
@@ -1081,7 +1084,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       action: () async {
         if (currentLocation != null) {
           await passengerService.updateLocationForRideAutomation(
-              lat: currentLocation.latitude, lng: currentLocation.longitude);
+              lat: currentLocation.latitude, lng: currentLocation.longitude,
+              capturedAt: _currentPassengerLocationAt);
         }
         return passengerService.validateBoarding(
           tripSessionId: request.tripSessionId,
@@ -1331,9 +1335,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           .updateLocationForRideAutomation(
         lat: location.latitude,
         lng: location.longitude,
+        capturedAt: _currentPassengerLocationAt,
       );
       _lastPassengerLocationReportedAt = now;
       _lastPassengerLocationReported = location;
+      if (mounted && (_syncMessage?.startsWith('Location upload failed.') == true ||
+          _syncMessage?.startsWith('Fresh, accurate GPS is unavailable.') == true)) {
+        setState(() => _syncMessage = 'Location reporting restored.');
+      }
       final boardedRide = result.autoBoardedRide;
       final completedRide = result.autoCompletedRide;
       if (!mounted || (boardedRide == null && completedRide == null)) {
@@ -1358,7 +1367,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       );
       unawaited(_refreshPassengerMetadata(silent: true));
     } catch (_) {
-      // Manual boarding remains available when location reporting fails.
+      if (mounted) {
+        setState(() => _syncMessage = 'Location upload failed. Automatic boarding and unloading may be unavailable. Check your connection or sign in again.');
+      }
     } finally {
       _passengerLocationReportInFlight = false;
     }
@@ -1985,12 +1996,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         existingLocation != null &&
         existingTimestamp != null &&
         DateTime.now().difference(existingTimestamp) <
-            const Duration(seconds: 20)) {
+            (_shouldReportPassengerLocationForRideAutomation
+                ? const Duration(seconds: 5)
+                : const Duration(seconds: 20))) {
       return existingLocation;
     }
 
     if (!mounted) {
-      return existingLocation;
+      return forceRefresh ? null : existingLocation;
     }
     Future<LatLng?> awaitLocationRequest(Future<LatLng?> request) async {
       final shouldShowProgress = !silent && mounted && !_locatingPassenger;
@@ -2021,7 +2034,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                   'Turn on device location to place your pickup pin.';
             });
           }
-          return existingLocation;
+          return forceRefresh ? null : existingLocation;
         }
 
         var permission = await Geolocator.checkPermission();
@@ -2036,7 +2049,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                   'Location permission is needed so pickup stays within 50 meters of you.';
             });
           }
-          return existingLocation;
+          return forceRefresh ? null : existingLocation;
         }
 
         Position? position;
@@ -2044,7 +2057,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           position = await Geolocator.getCurrentPosition(
             locationSettings: LocationSettings(
               accuracy:
-                  silent ? LocationAccuracy.medium : LocationAccuracy.best,
+                  LocationAccuracy.best,
             ),
           ).timeout(const Duration(seconds: 12));
         } on TimeoutException {
@@ -2052,6 +2065,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           if (position == null) {
             rethrow;
           }
+        }
+
+        final capturedAt = position.timestamp;
+        if (!isUsableAutomationLocation(capturedAt: capturedAt, now: DateTime.now(),
+            accuracyMeters: position.accuracy)) {
+          if (mounted && _shouldReportPassengerLocationForRideAutomation) {
+            setState(() => _syncMessage = 'Fresh, accurate GPS is unavailable. Keep location enabled; use manual unload after getting off.');
+          }
+          return null;
         }
 
         final previousLocation = _currentPassengerLocation;
@@ -2079,7 +2101,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         }
         setState(() {
           _currentPassengerLocation = next;
-          _currentPassengerLocationAt = DateTime.now();
+          _currentPassengerLocationAt = capturedAt;
         });
         if (recenterMap || (!silent && previousLocation == null)) {
           _syncPassengerMapCamera(next, preferredZoom: 16, force: true);
@@ -2102,7 +2124,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                 'Unable to read your current location right now. Try again in an open area.';
           });
         }
-        return existingLocation;
+        return forceRefresh ? null : existingLocation;
       }
     }();
 
@@ -6554,7 +6576,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                 borderRadius: BorderRadius.circular(18),
               ),
               child: Text(
-                'Passenger to saved destination: ${_compactDistanceLabel(passengerToDestinationMeters)}. Auto para and auto unload are armed when the jeepney nears your saved stop and you separate from the vehicle.',
+                'Passenger to saved destination: ${_compactDistanceLabel(passengerToDestinationMeters)}. Auto para uses your saved stop. Automatic unload requires repeated fresh GPS readings at least 120 meters from the jeepney.',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: const Color(0xFF55615D),
                     ),

@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Driver = require('../models/driver');
 const Passenger = require('../models/passenger');
 const RideSession = require('../models/rideSession');
@@ -65,46 +66,38 @@ const completeRideSession = async ({
     update.$unset = { destinationLocation: 1 };
   }
 
-  let completedSession = await RideSession.findOneAndUpdate(
-    {
-      _id: session._id,
-      status: 'onboard',
-    },
-    update,
-    { new: true }
-  );
-  if (!completedSession) {
-    const latestSession = await RideSession.findById(session._id);
-    if (latestSession?.status === 'completed') {
-      return latestSession;
-    }
-    if (latestSession?.status !== 'onboard') {
-      throw new ApiError(409, 'Only onboard ride sessions can be completed');
-    }
-    throw new ApiError(409, 'Ride session completion is already in progress');
+  let completedSession;
+  let changed = false;
+  const transaction = await mongoose.startSession();
+  try {
+    await transaction.withTransaction(async () => {
+      changed = false;
+      completedSession = await RideSession.findOneAndUpdate(
+        { _id: session._id, status: 'onboard' }, update,
+        { new: true, session: transaction }
+      );
+      if (!completedSession) {
+        completedSession = await RideSession.findById(session._id).session(transaction);
+        if (completedSession?.status !== 'completed') {
+          throw new ApiError(409, 'Only onboard ride sessions can be completed');
+        }
+        return;
+      }
+      await TripSession.updateOne(
+        { _id: session.tripSessionId, occupancyCount: { $gt: 0 } },
+        { $inc: { occupancyCount: -1 } }, { session: transaction }
+      );
+      await StopAlert.updateMany(
+        { rideSessionId: session._id, status: { $in: ['sent', 'seen', 'acknowledged'] } },
+        { $set: { status: 'dismissed', acknowledgedAt: endedAt } },
+        { session: transaction }
+      );
+      changed = true;
+    });
+  } finally {
+    await transaction.endSession();
   }
-
-  await TripSession.updateOne(
-    {
-      _id: session.tripSessionId,
-      occupancyCount: { $gt: 0 },
-    },
-    {
-      $inc: { occupancyCount: -1 },
-    }
-  );
-  await StopAlert.updateMany(
-    {
-      rideSessionId: session._id,
-      status: { $in: ['sent', 'seen', 'acknowledged'] },
-    },
-    {
-      $set: {
-        status: 'dismissed',
-        acknowledgedAt: endedAt,
-      },
-    }
-  );
+  if (!changed) return completedSession;
 
   const passenger = await Passenger.findById(session.passengerId).select('userId');
   await publishNotification({

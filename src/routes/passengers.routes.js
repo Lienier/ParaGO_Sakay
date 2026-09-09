@@ -96,6 +96,11 @@ const updatePassengerLocation = async (req, res) => {
     select: '_id',
   });
   const now = new Date();
+  const capturedAt = body.capturedAt == null ? now : new Date(body.capturedAt);
+  const age = now - capturedAt;
+  if (!Number.isFinite(age) || age < 0 || age > 15000) {
+    throw new ApiError(409, 'Fresh passenger GPS is required. Refresh location and try again');
+  }
   const profile = await Passenger.findByIdAndUpdate(
     passenger._id,
     {
@@ -104,7 +109,7 @@ const updatePassengerLocation = async (req, res) => {
           type: 'Point',
           coordinates: [Number(body.lng), Number(body.lat)],
         },
-        lastSeenAt: now,
+        lastSeenAt: capturedAt,
       },
     },
     { new: true }

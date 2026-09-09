@@ -17,6 +17,7 @@ class SessionController extends ChangeNotifier {
   })  : _apiClient = apiClient,
         _storage = tokenStorage {
     _apiClient.beforeAuthenticatedRequest = ensureFreshSession;
+    _apiClient.onAuthenticationRejected = clear;
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       unawaited(ensureFreshSession().catchError((Object _) {}));
     });
@@ -46,6 +47,7 @@ class SessionController extends ChangeNotifier {
   void dispose() {
     _refreshTimer?.cancel();
     _apiClient.beforeAuthenticatedRequest = null;
+    _apiClient.onAuthenticationRejected = null;
     super.dispose();
   }
 

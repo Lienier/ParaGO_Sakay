@@ -38,6 +38,7 @@ class _ApiCachedResponse {
 
 class ApiClient {
   Future<void> Function()? beforeAuthenticatedRequest;
+  Future<void> Function()? onAuthenticationRejected;
   DateTime? _cooldownUntil;
   ApiClient({String? baseUrl})
       : _dio = Dio(
@@ -312,12 +313,6 @@ class ApiClient {
     Map<String, dynamic>? queryParameters,
     bool allowExpired = true,
   }) async {
-    if (!path.startsWith('/auth/')) await beforeAuthenticatedRequest?.call();
-    final cooldown = _cooldownUntil;
-    if (cooldown != null && DateTime.now().isBefore(cooldown)) {
-      throw ApiException(429,
-          'Please wait ${cooldown.difference(DateTime.now()).inSeconds + 1} seconds before trying again.');
-    }
     final requestPath = _normalizePathForRequest(path);
     final cacheKey = _cacheKey(requestPath, queryParameters);
     return _getCachedResponse(
@@ -438,6 +433,10 @@ class ApiClient {
 
       return payload;
     } on DioException catch (error) {
+      if (error.response?.statusCode == 401 && !path.startsWith('/auth/') &&
+          error.requestOptions.headers['Authorization'] == _dio.options.headers['Authorization']) {
+        await onAuthenticationRejected?.call();
+      }
       if (error.response?.statusCode == 429) {
         final header = error.response?.headers.value('retry-after');
         final seconds = int.tryParse(header ?? '') ?? 60;
@@ -484,6 +483,12 @@ class ApiClient {
     bool useCache = true,
     Duration? cacheTtl,
   }) async {
+    if (!path.startsWith('/auth/')) await beforeAuthenticatedRequest?.call();
+    final cooldown = _cooldownUntil;
+    if (cooldown != null && DateTime.now().isBefore(cooldown)) {
+      throw ApiException(429,
+          'Please wait ${cooldown.difference(DateTime.now()).inSeconds + 1} seconds before trying again.');
+    }
     final requestPath = _normalizePathForRequest(path);
     final upperMethod = method.toUpperCase();
     final isGet = upperMethod == 'GET';
