@@ -44,6 +44,9 @@ const tripSessionSchema = new Schema(
     },
     terminalQueueNumber: { type: Number, min: 1 },
     terminalCheckedInAt: { type: Date },
+    terminalLoadingStartedAt: { type: Date },
+    terminalLoadingWarnedAt: { type: Date },
+    terminalLoadingExpiredAt: { type: Date },
     terminalStopRef: { type: String, trim: true },
     terminalLocation: {
       type: {

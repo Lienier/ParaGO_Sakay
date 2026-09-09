@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const operatingRules = require('./operatingRules.service');
 const crypto = require('crypto');
 const Queue = require('../models/terminalQueue');
 const Action = require('../models/terminalQueueAction');
@@ -25,7 +26,10 @@ async function eligible(trip, session) {
   const driver = await Driver.findOne({ _id: trip.driverId, status: 'active' }).session(session);
   const user = driver && await User.findOne({ _id: driver.userId, status: 'active' }).session(session);
   const vehicle = await Jeepney.findOne({ _id: trip.jeepneyId, status: 'active' }).session(session);
-  return Boolean(user && vehicle && vehicle.capacity > 0);
+  if (!user || !vehicle || vehicle.capacity <= 0) return false;
+  try { await operatingRules.assertVehicleAllowed(vehicle, session); }
+  catch (error) { if (error.statusCode === 409) return false; throw error; }
+  return true;
 }
 async function sync(trip, session) {
   if (!trip.driverId) return;
@@ -42,6 +46,8 @@ async function promote(routeId, session) {
   for (const trip of waiting) {
     if (!await eligible(trip, session)) continue;
     trip.terminalQueueStatus = 'loading'; trip.acceptRequests = true;
+    trip.terminalLoadingStartedAt = new Date();
+    trip.terminalLoadingWarnedAt = undefined; trip.terminalLoadingExpiredAt = undefined;
     await trip.save({ session }); await sync(trip, session);
     await Action.create([{ routeId, tripId: trip._id, actorRole: 'SYSTEM', action: 'promote',
       requestId: crypto.randomUUID(), reason: 'First eligible waiting jeep' }], { session });
@@ -100,6 +106,7 @@ async function checkIn({ document, actor, requestId, reason, existingId }) {
     const values = { ...document, status: 'active', active: true, operatingMode: 'terminal_queue',
       startedAt: new Date(), terminalCheckedInAt: new Date(), terminalQueueStatus: 'waiting', acceptRequests: false,
       terminalQueueNumber: await nextPosition(document.routeId, session) };
+    await operatingRules.assertVehicleAllowed(await Jeepney.findById(document.jeepneyId).session(session), session);
     let trip;
     if (existingId) {
       trip = await Trip.findOneAndUpdate({ _id: existingId, status: 'scheduled' }, { $set: values }, { new: true, session });
@@ -144,6 +151,7 @@ async function change({ tripId, actor, action, requestId, reason, direction }) {
     }
     if (action === 'depart') {
       if (trip.terminalQueueStatus !== 'loading') throw new ApiError(409, 'Only the loading jeep can depart');
+      await operatingRules.assertVehicleAllowed(await Jeepney.findById(trip.jeepneyId).session(session), session);
       await offerTransfers(trip, session);
       trip.operatingMode = 'route'; trip.terminalQueueStatus = 'departed'; trip.resumedAt = new Date();
       trip.inactivityPausedAt = undefined;
@@ -174,6 +182,8 @@ async function change({ tripId, actor, action, requestId, reason, direction }) {
   });
 }
 async function reserve(trip, session) {
+  if (operatingRules.loadingTiming(trip).departureRequired)
+    throw new ApiError(409, 'The 10-minute loading period has ended. Wait for departure and the next loading jeep.');
   if (trip.operatingMode !== 'terminal_queue' || trip.terminalQueueStatus !== 'loading' || !trip.acceptRequests || !await eligible(trip, session))
     throw new ApiError(409, 'This jeep is not loading terminal passengers');
   const vehicle = await Jeepney.findById(trip.jeepneyId).session(session);
@@ -205,6 +215,26 @@ async function transfer({ requestId, passengerId, offerId, accept }) {
   });
 }
 async function reconcile() {
+  const loadingTrips = await Trip.find({ ...activeQueue, terminalQueueStatus: 'loading' }).select('_id routeId');
+  for (const entry of loadingTrips) {
+    const changed = await transaction(entry.routeId, async session => {
+      const trip = await Trip.findOne({ _id: entry._id, ...activeQueue, terminalQueueStatus: 'loading' }).session(session);
+      if (!trip) return false;
+      const timing = operatingRules.loadingTiming(trip);
+      const field = timing.departureRequired ? 'terminalLoadingExpiredAt' : timing.loadingWarning ? 'terminalLoadingWarnedAt' : null;
+      if (!field || trip[field]) return false;
+      trip[field] = new Date();
+      await trip.save({ session });
+      const driver = await Driver.findById(trip.driverId).session(session);
+      const admins = await User.find({ role: 'ADMIN', status: 'active' }).select('_id').session(session);
+      const recipients = [...new Set([driver?.userId, ...admins.map(u => u._id)].filter(Boolean).map(String))];
+      const title = timing.departureRequired ? 'Terminal departure required' : 'Terminal departure approaching';
+      const body = timing.departureRequired ? 'The loading period has ended. New terminal reservations are closed. Confirm departure when the jeep leaves.' : 'Two minutes remain in this jeep’s loading period. Prepare for departure.';
+      if (recipients.length) await require('../models/notification').create(recipients.map(userId => ({ userId, type: 'terminal_loading', title, body, category: 'trip', payload: { tripId: String(trip._id), routeId: String(trip.routeId) } })), { session });
+      return true;
+    });
+    if (changed) await publish(entry.routeId);
+  }
   const routes = await Trip.distinct('routeId', { ...activeQueue, terminalQueueStatus: 'waiting' });
   for (const routeId of routes) {
     if (await Trip.exists({ ...activeQueue, routeId, terminalQueueStatus: 'loading' })) continue;
@@ -220,6 +250,7 @@ async function describe(value) {
   const queuePosition = trip.terminalQueueStatus === 'skipped' ? null : trip.terminalQueueStatus === 'loading' ? 1 : 1 + await Trip.countDocuments({ ...activeQueue, routeId: trip.routeId?._id || trip.routeId,
     $or: [{ terminalQueueStatus: 'loading' }, { terminalQueueStatus: 'waiting', terminalQueueNumber: { $lt: trip.terminalQueueNumber } }] });
   return { ...trip, terminalSummary: { queuePosition, reservedSeats, onboardSeats: occupied,
+    ...operatingRules.loadingTiming(trip),
     availableSeats: Math.max(0, (vehicle?.capacity || 0) - occupied - reservedSeats),
     gpsWarning: !vehicle?.lastSeenAt || Date.now() - vehicle.lastSeenAt.getTime() > 300000,
     lastSeenAt: vehicle?.lastSeenAt || null } };

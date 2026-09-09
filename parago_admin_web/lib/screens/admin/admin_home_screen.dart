@@ -1,4 +1,6 @@
 import 'dart:async';
+import '../../widgets/terminal_loading_clock.dart';
+import '../../widgets/coding_holidays_dialog.dart';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';

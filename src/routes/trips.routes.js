@@ -1,4 +1,5 @@
 const terminalQueue = require('../services/terminalQueue.service');
+const { assertVehicleAllowed } = require('../services/operatingRules.service');
 const express = require('express');
 const mongoose = require('mongoose');
 const Driver = require('../models/driver');
@@ -255,6 +256,7 @@ router.post(
       ensureEnum(payload.status, 'status', ['scheduled', 'active', 'completed', 'cancelled']);
     }
     const jeepney = await Jeepney.findById(payload.jeepneyId);
+    if (payload.status === 'active') await assertVehicleAllowed(jeepney);
     if (!jeepney) {
       throw new ApiError(404, 'Jeepney not found');
     }
@@ -361,6 +363,7 @@ router.patch(
           terminalStopRef: terminal.stopRef, terminalLocation: terminal.location, routePathSnapshot: buildRoutePathSnapshot(terminalRoute) } });
       return ok(res, queued, 'Terminal check-in complete');
     }
+    await assertVehicleAllowed(await Jeepney.findById(trip.jeepneyId));
     trip.status = 'active';
     if (
       (!trip.routePathSnapshot || !Array.isArray(trip.routePathSnapshot.coordinates)) &&

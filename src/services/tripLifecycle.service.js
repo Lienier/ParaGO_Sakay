@@ -25,6 +25,7 @@ async function createTripRecord(Model, document, { accepting = false } = {}) {
         ...(accepting ? { acceptRequests: true } : {}) },
       { $inc: { lifecycleRevision: 1 } }, { new: true, session });
       if (!trip) throw new ApiError(409, 'Trip is closed or no longer accepting pickups');
+      if (accepting) await require('./operatingRules.service').assertVehicleAllowed(await Jeepney.findById(trip.jeepneyId).session(session), session);
       if (terminal) await queue.reserve(trip, session);
       [record] = await Model.create([document], { session });
     });
@@ -109,6 +110,10 @@ async function pauseInactiveTrips(now = new Date()) {
 }
 
 async function setAvailability(tripId, acceptRequests) {
+  if (acceptRequests) {
+    const existing = await Trip.findById(tripId);
+    if (existing) await require('./operatingRules.service').assertVehicleAllowed(await Jeepney.findById(existing.jeepneyId));
+  }
   const trip = await Trip.findOneAndUpdate({ _id: tripId, status: 'active', operatingMode: { $ne: 'terminal_queue' } },
     acceptRequests ? { $set: { acceptRequests: true, resumedAt: new Date() }, $unset: { inactivityPausedAt: 1 } }
       : { $set: { acceptRequests: false } }, { new: true });

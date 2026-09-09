@@ -163,6 +163,9 @@ class _AdminOperationsPage extends StatelessWidget {
         .where((t) => selected == null || _routeKey(t) == selected)
         .toList();
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Align(alignment: Alignment.centerRight, child: TextButton(
+        onPressed: () => showDialog<void>(context: context, builder: (_) => const CodingHolidaysDialog()),
+        child: const Text('Coding holidays'))),
       DropdownButtonFormField<String>(
           key: ValueKey(selected),
           initialValue: selected ?? '',
@@ -196,7 +199,7 @@ class _AdminOperationsPage extends StatelessWidget {
                   actions: errors.containsKey('dispatch') ||
                           loading.contains('dispatch')
                       ? const []
-                      : _terminalQueueActions(trip,
+                      : [TerminalLoadingClock(summary: trip['terminalSummary'] is Map ? Map<String, dynamic>.from(trip['terminalSummary']) : null), ..._terminalQueueActions(trip,
                           index: trips
                               .where((t) =>
                                   t['terminalQueueStatus'] == 'waiting' &&
@@ -210,27 +213,9 @@ class _AdminOperationsPage extends StatelessWidget {
                               .length,
                           onReorder: onReorder,
                           onSkippedChanged: onSkip,
-                          onStatusChanged: onDepart),
+                          onStatusChanged: onDepart)],
                 )),
         ],
-        const SizedBox(height: 28),
-        Text('Waiting terminal passengers',
-            style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 8),
-        for (final request
-            in _readDynamicList(board?['waitingTerminalPassengers']).where(
-                (r) =>
-                    selected == null ||
-                    allTrips.any((t) =>
-                        _routeKey(t) == selected &&
-                        (t['_id']?.toString() ==
-                            r['tripSessionId']?.toString()))))
-          ListTile(
-              title: Text(
-                  '${request['terminalStopRef'] ?? request['stopRef'] ?? 'Terminal'} to ${request['destinationStopRef'] ?? 'Destination pending'}'),
-              subtitle: Text(request['status']?.toString() ?? 'Pending')),
-        if (_readDynamicList(board?['waitingTerminalPassengers']).isEmpty)
-          const Text('No terminal passengers waiting.'),
         const SizedBox(height: 28),
         Text('On the road', style: Theme.of(context).textTheme.titleLarge),
         for (final trip in _readDynamicList(board?['routeDrivers'])

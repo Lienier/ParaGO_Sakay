@@ -1,5 +1,6 @@
 import '../../widgets/legal_pages.dart';
 import 'dart:async';
+import '../../widgets/terminal_loading_clock.dart';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -905,6 +906,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
       trip.routeId == _selectedRouteId &&
       trip.operatingMode == 'terminal_queue' &&
       trip.terminalQueueStatus == 'loading' &&
+      trip.terminalSummary?['departureRequired'] != true &&
       (trip.terminalSummary?['availableSeats'] as num? ?? 0) > 0);
   bool get _terminalBookingFull =>
       _bookingMode == _PassengerBookingMode.terminal && !_hasTerminalSeats;
@@ -6948,12 +6950,19 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                               padding: EdgeInsets.all(8),
                               child: Text(
                                   'No terminal seats available. Wait for the loading jeep to depart.'))),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Text('Terminal hours: 4:30 AM–7:30 PM (Philippine time). '
+                          'Actual first/final departures depend on available jeeps. Roadside service may continue.'),
+                    ),
                     if (_transferOffers.isNotEmpty)
                       FilledButton.icon(
                           onPressed: _loading ? null : _showTransferOffers,
                           icon: const Icon(Icons.swap_horiz),
                           label: Text(
                               'Review terminal transfers (${_transferOffers.length})')),
+                    if (selectedTrip?.operatingMode == 'terminal_queue')
+                      TerminalLoadingClock(summary: selectedTrip?.terminalSummary),
                     if (selectedTrip?.operatingMode == 'terminal_queue')
                       Material(
                           borderRadius: BorderRadius.circular(8),
@@ -7107,6 +7116,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
                   'Select a route, pin your pickup and unload points on the map, and let the nearest eligible jeep on that route receive your booking request.',
               accent: Theme.of(context).colorScheme.secondary,
               badge: session.user?.fullName ?? 'Passenger',
+            ),
+            const Padding(
+              padding: EdgeInsets.only(top: 16),
+              child: Card(child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('Terminal service hours: 4:30 AM–7:30 PM (Philippine time). '
+                    'First loading begins at 4:30 AM; final terminal loading is around 7:30 PM. '
+                    'Actual departures depend on available jeeps. Jeeps already on the road may continue serving passengers.'),
+              )),
             ),
             if (_statusMessage != null) ...[
               const SizedBox(height: 16),

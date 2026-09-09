@@ -248,6 +248,22 @@ const syncJeepneyAssignment = async (driver, newJeepneyId) => {
 
 router.use(authenticate, authorize(ADMIN));
 
+const CodingHoliday = require('../models/codingHoliday');
+router.get('/coding-holidays', asyncHandler(async (_req, res) =>
+  ok(res, await CodingHoliday.find().sort({ date: 1 }), 'Coding holidays')));
+router.put('/coding-holidays/:date', asyncHandler(async (req, res) => {
+  const { date } = req.params;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date)
+    throw new ApiError(400, 'Use a valid YYYY-MM-DD holiday date');
+  const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+  if (!name || name.length > 120) throw new ApiError(400, 'Holiday name must contain 1–120 characters');
+  return ok(res, await CodingHoliday.findOneAndUpdate({ date }, { name, updatedBy: req.user._id }, { upsert: true, new: true }), 'Holiday saved');
+}));
+router.delete('/coding-holidays/:date', asyncHandler(async (req, res) => {
+  await CodingHoliday.deleteOne({ date: req.params.date });
+  return ok(res, {}, 'Holiday removed');
+}));
+
 router.get(
   '/dashboard',
   asyncHandler(async (_req, res) => {

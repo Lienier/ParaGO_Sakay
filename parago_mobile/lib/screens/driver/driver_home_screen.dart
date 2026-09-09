@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../../widgets/terminal_loading_clock.dart';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -3815,6 +3816,8 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                             onClose: onDismissAlert,
                           ),
                         ],
+                        if (trip?.operatingMode == 'terminal_queue')
+                          TerminalLoadingClock(summary: trip?.terminalSummary),
                         if (requirementMessage != null) ...[
                           const SizedBox(height: 12),
                           Container(
