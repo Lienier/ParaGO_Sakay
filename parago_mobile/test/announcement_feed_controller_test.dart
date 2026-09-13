@@ -182,6 +182,7 @@ void main() {
     addTearDown(tester.view.reset);
     final announcement = _announcement(
       id: 'driver-review',
+      publishedAt: DateTime.now().subtract(const Duration(hours: 25)),
       severity: 'warning',
       body: 'Road maintenance is affecting the terminal entrance. Follow the '
           'temporary loading lane while trip operations continue normally.',
@@ -235,6 +236,7 @@ AnnouncementModel _announcement({
   int revision = 1,
   String body = 'Service announcement',
   String severity = 'info',
+  DateTime? publishedAt,
 }) {
   final startsAt = DateTime.utc(2026, 7, 28, 4, revision);
   return AnnouncementModel(
@@ -247,7 +249,7 @@ AnnouncementModel _announcement({
     status: 'published',
     revision: revision,
     startsAt: startsAt,
-    publishedAt: startsAt,
+    publishedAt: publishedAt ?? startsAt,
   );
 }
 

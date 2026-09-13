@@ -16,6 +16,7 @@ const authenticate = async (req, res, next) => {
     const payload = verifyAccessToken(token);
     const { user } = await require('../services/sessionSecurity.service').requireSession(payload);
     req.user = user;
+    req.authSessionId = payload.sid;
     next();
   } catch (_error) {
     next(new ApiError(401, 'Invalid or expired token'));

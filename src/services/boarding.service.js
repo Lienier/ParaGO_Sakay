@@ -237,6 +237,27 @@ const completeBoardingForPickupRequest = async ({
   }
 
   pickupRequest.status = 'completed';
+  // Notify the owner independently: driver delivery must not gate passenger state.
+  try {
+    const passenger = await require('../models/passenger').findById(passengerId).select('userId');
+    const savedRequest = await PickupRequest.findById(pickupRequest._id);
+    await publishNotification({
+      userId: passenger?.userId,
+      type: 'pickup_request_completed',
+      title: 'Boarding confirmed',
+      body: 'You are now onboard your assigned jeep.',
+      payload: {
+        requestId: pickupRequest._id.toString(),
+        tripSessionId: trip._id.toString(),
+        boardingMethod,
+        request: serializePickupRequest(savedRequest),
+        rideSession: serializeRideSession(rideSession),
+      },
+      category: 'ride',
+    });
+  } catch (_) {
+    console.error('[Boarding] Passenger notification failed after commit');
+  }
   const updatedTrip = await TripSession.findById(trip._id);
   if (updatedTrip) {
     await syncTerminalQueueAfterBoarding({

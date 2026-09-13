@@ -1,0 +1,78 @@
+const { before, after, test } = require('node:test');
+const assert = require('node:assert/strict');
+const mongoose = require('mongoose');
+const { MongoMemoryReplSet } = require('mongodb-memory-server');
+const path = require('node:path');
+const os = require('node:os');
+const crypto = require('node:crypto');
+const request = require('supertest');
+const express = require('express');
+const User = require('../src/models/user');
+const Driver = require('../src/models/driver');
+const Trip = require('../src/models/tripSession');
+const Alert = require('../src/models/stopAlert');
+const AuthSession = require('../src/models/authSession');
+const PushDevice = require('../src/models/pushDevice');
+const { signToken, verifyAccessToken } = require('../src/utils/jwt');
+const { signParaReceipt, validateParaReceipt } = require('../src/services/paraReceipt.service');
+const sends = [];
+require('../src/config/firebaseAdmin').getFirebaseMessaging = () => ({ send: async payload => sends.push(payload) });
+const { sendParaPush } = require('../src/services/paraPush.service');
+const app = express();
+app.use(express.json());
+app.use('/notifications', require('../src/routes/notifications.routes'));
+app.use((error, req, res, next) => res.status(error.statusCode || 500).json({ message: error.message }));
+let repl, user, sid, alert, token;
+before(async () => {
+  repl = await MongoMemoryReplSet.create({ binary: { downloadDir: path.join(os.tmpdir(), 'parago-mongodb-binaries') }, replSet: { count: 1 } });
+  await mongoose.connect(repl.getUri());
+  await Promise.all(Object.values(mongoose.models).map(m => m.init()));
+  user = await User.create({ email: 'push@example.test', fullName: 'Push driver', role: 'DRIVER' });
+  const driver = { _id: new mongoose.Types.ObjectId(), userId: user._id, status: 'active' };
+  await Driver.collection.insertOne(driver);
+  const trip = await Trip.create({ driverId: driver._id, routeId: new mongoose.Types.ObjectId(), jeepneyId: new mongoose.Types.ObjectId(), status: 'active' });
+  alert = await Alert.create({ passengerId: new mongoose.Types.ObjectId(), rideSessionId: new mongoose.Types.ObjectId(), routeId: trip.routeId, tripSessionId: trip._id });
+  sid = crypto.randomUUID();
+  await AuthSession.create({ _id: sid, userId: user._id, authVersion: 0, expiresAt: new Date(Date.now() + 600000) });
+  token = signToken({ sub: String(user._id), sid, role: 'DRIVER' });
+});
+after(async () => { await mongoose.disconnect(); if (repl) await repl.stop(); });
+test('receipt is restricted to sound, authenticated ownership and active session', async () => {
+  const receipt = signParaReceipt({ userId: user._id, sessionId: sid, alertId: String(alert._id) });
+  assert.equal((await validateParaReceipt(receipt)).alertId, String(alert._id));
+  assert.throws(() => verifyAccessToken(receipt));
+  await assert.rejects(validateParaReceipt(token));
+  await assert.rejects(validateParaReceipt(receipt + 'tampered'));
+  const expired = require('jsonwebtoken').sign(
+    { sub: String(user._id), sid, alertId: String(alert._id), purpose: 'para-sound' },
+    require('../src/config/env').jwtSecret,
+    { algorithm: 'HS256', issuer: 'sakaygaray', audience: 'sakaygaray-para-sound', expiresIn: -1 });
+  await assert.rejects(validateParaReceipt(expired), /expired/);
+  const other = await User.create({ email: 'other-driver@example.test', fullName: 'Other', role: 'DRIVER' });
+  const otherSid = crypto.randomUUID();
+  await AuthSession.create({ _id: otherSid, userId: other._id, authVersion: 0, expiresAt: new Date(Date.now() + 600000) });
+  await assert.rejects(validateParaReceipt(signParaReceipt({ userId: other._id, sessionId: otherSid, alertId: String(alert._id) })));
+  await Alert.updateOne({ _id: alert._id }, { status: 'dismissed' });
+  await assert.rejects(validateParaReceipt(receipt), /unavailable/);
+  await Alert.updateOne({ _id: alert._id }, { status: 'sent' });
+});
+test('registration requires login and a valid token; delivery stops after revocation', async () => {
+  await request(app).put('/notifications/push-device').send({ token: 'x'.repeat(30) }).expect(401);
+  await request(app).put('/notifications/push-device').set('Authorization', `Bearer ${token}`).send({ token: 'bad' }).expect(400);
+  await request(app).put('/notifications/push-device').set('Authorization', `Bearer ${token}`).send({ token: 'x'.repeat(30) }).expect(200);
+  assert.equal(await PushDevice.countDocuments({ sessionId: sid }), 1);
+  const notification = { type: 'stop_alert_created', userId: user._id, payload: { stopAlertId: String(alert._id) } };
+  await sendParaPush(notification);
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].data.sessionId, sid);
+  await AuthSession.updateOne({ _id: sid }, { revokedAt: new Date() });
+  await sendParaPush(notification);
+  assert.equal(sends.length, 1);
+  await assert.rejects(validateParaReceipt(sends[0].data.receipt), /no longer active/);
+  const newSid = crypto.randomUUID();
+  await AuthSession.create({ _id: newSid, userId: user._id, authVersion: 0, expiresAt: new Date(Date.now() + 600000) });
+  const newToken = signToken({ sub: String(user._id), sid: newSid, role: 'DRIVER' });
+  await request(app).put('/notifications/push-device').set('Authorization', `Bearer ${newToken}`).send({ token: 'x'.repeat(30) }).expect(200);
+  assert.equal(await PushDevice.countDocuments({ sessionId: sid }), 0);
+  assert.equal(await PushDevice.countDocuments({ sessionId: newSid }), 1);
+});

@@ -525,9 +525,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                 focusedTrip,
                 !(focusedTrip.acceptRequests ?? true),
               ),
-      onAcknowledgeAlert: activeAlerts.isEmpty
-          ? null
-          : () => _acknowledgeAlert(activeAlerts.first.id),
+      onAcknowledgeAlert: null,
       onDismissAlert: activeAlerts.isEmpty
           ? null
           : () => _dismissDriveAlert(activeAlerts.first.id),
@@ -789,17 +787,6 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                 detail: alert.note ??
                     'Passenger is nearing the selected unloading point.',
                 status: alert.status,
-                primaryLabel:
-                    _DriverHomeScreenState._activeAlertStatuses.contains(
-                  alert.status,
-                )
-                        ? 'Acknowledge'
-                        : null,
-                onPrimary: _DriverHomeScreenState._activeAlertStatuses.contains(
-                  alert.status,
-                )
-                    ? () => _acknowledgeAlert(alert.id)
-                    : null,
                 secondaryLabel: canCompleteUnload ? 'Mark unloaded' : null,
                 onSecondary: canCompleteUnload
                     ? () => _completeUnloadAlert(alert)

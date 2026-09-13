@@ -46,7 +46,8 @@ class PassengerHomeScreen extends StatefulWidget {
   State<PassengerHomeScreen> createState() => _PassengerHomeScreenState();
 }
 
-class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
+class _PassengerHomeScreenState extends State<PassengerHomeScreen>
+    with WidgetsBindingObserver {
   static const LatLng _defaultMapCenter = LatLng(14.6091, 121.0223);
   static const Distance _distance = Distance();
   static const double _pickupPinToleranceMeters = 300;
@@ -382,8 +383,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
           _clearPassengerEtaSelection();
         }
         _trips = trips;
-        _requests = requests;
-        _rides = rides;
+        for (final request in requests) {
+          _requests = _upsertPickupRequests(_requests, request);
+        }
+        for (final ride in rides) {
+          _rides = _upsertRideSessions(_rides, ride);
+        }
         _notifications = notifications;
         _routes = routes;
         _selectedTripId = nextTripId;
@@ -474,7 +479,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     try {
       _refreshAnnouncementsIfDue(useCache: true);
       final refreshes = <Future<void>>[
-        _refreshBookings(useCache: true),
+        _refreshBookings(useCache: false),
         _refreshNotifications(useCache: true, silent: silent),
       ];
       final routeRefreshAt = _lastRouteMetadataRefreshAt;
@@ -571,8 +576,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         anchor: _draftPickupPoint,
       );
       setState(() {
-        _requests = result.value.requests;
-        _rides = result.value.rides;
+        for (final request in result.value.requests) {
+          _requests = _upsertPickupRequests(_requests, request);
+        }
+        for (final ride in result.value.rides) {
+          _rides = _upsertRideSessions(_rides, ride);
+        }
         _selectedRouteId = nextRouteId;
         _selectedTripId = nextTripId;
       });
@@ -743,6 +752,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final next = List<PickupRequestModel>.from(requests);
     final existingIndex = next.indexWhere((item) => item.id == request.id);
     if (existingIndex >= 0) {
+      if (next[existingIndex].status == 'completed' &&
+          request.status != 'completed') {
+        return next;
+      }
       next[existingIndex] = request;
     } else {
       next.insert(0, request);
@@ -758,6 +771,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     final next = List<RideSessionModel>.from(rides);
     final existingIndex = next.indexWhere((item) => item.id == ride.id);
     if (existingIndex >= 0) {
+      if (next[existingIndex].status == 'completed' &&
+          ride.status != 'completed') {
+        return next;
+      }
       next[existingIndex] = ride;
     } else {
       next.insert(0, ride);
@@ -3556,6 +3573,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _load(preferFresh: true);
       if (!mounted) return;
@@ -3599,6 +3617,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _securitySession?.removeListener(_handleSecuritySession);
     _liveRefreshTimer?.cancel();
     _passengerEtaTimer?.cancel();
@@ -3615,6 +3634,13 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
     _realtimeSocketService.dispose();
     _routeVehicleBatchReconciler.clear();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      unawaited(_refreshBookings(useCache: false, replacePending: true));
+    }
   }
 
   void _connectRealtimeSocket() {

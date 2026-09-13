@@ -1,4 +1,7 @@
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'services/para_sound_service.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -21,11 +24,29 @@ Future<void> _initializeFirebaseIfSupported() async {
   }
 }
 
+@pragma('vm:entry-point')
+Future<void> handleParaBackground(RemoteMessage message) async {
+  try {
+    await _initializeFirebaseIfSupported();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    final tokens = await TokenStorage(prefs: prefs).loadTokens();
+    if (message.data['sessionId'] != ParaSoundService.sessionId(tokens['accessToken'])) return;
+    await AppConfig.load();
+    final client = ApiClient(baseUrl: prefs.getString('para_api_base_url') ?? AppConfig.apiBaseUrl);
+    await ParaSoundService.play(message.data['alertId'] ?? '', client,
+      sentAt: message.data['sentAt'], receipt: message.data['receipt']);
+  } catch (_) {
+    // Never sound an alert when its session cannot be authorized.
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppConfig.load();
   await AppConfig.resolveApiBaseUrl();
   await _initializeFirebaseIfSupported();
+  FirebaseMessaging.onBackgroundMessage(handleParaBackground);
 
   final apiClient = ApiClient(baseUrl: AppConfig.apiBaseUrl);
   final storage = TokenStorage();

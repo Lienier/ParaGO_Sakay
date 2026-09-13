@@ -33,6 +33,11 @@ const publishNotification = async ({
   });
 
   emitNotificationCreated(notification);
+  if (notification.type === 'stop_alert_created') {
+    void require('./paraPush.service').sendParaPush(notification).catch(() => {
+      console.error('[Para push] Dispatch failed');
+    });
+  }
   emitOperationsChanged({
     type: 'notification.created',
     notificationId: notification._id.toString(),

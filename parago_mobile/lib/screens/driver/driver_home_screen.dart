@@ -22,6 +22,7 @@ import '../../models/trip/trip_session.dart';
 import '../../services/driver_service.dart';
 import '../../services/location_tracking_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/para_sound_service.dart';
 import '../../services/announcement_service.dart';
 import '../../services/ride_session_service.dart';
 import '../../services/route_preview_cache.dart';
@@ -165,6 +166,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       await _load();
       if (mounted) {
         final session = context.read<SessionController>();
+        unawaited(_paraSound.start(session).then((enabled) {
+          if (mounted && !enabled) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Para notification sound is unavailable. Check notification permissions and connection.'),
+            ));
+          }
+        }).catchError((Object _) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Background para notifications could not be enabled. Keep the app open.'),
+            ));
+          }
+        }));
         _syncRealtimeSocket(session, forceReconnect: true);
         unawaited(
           _refreshAutomaticAvailability(
@@ -179,6 +193,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   SessionController? _securitySession;
+  final _paraSound = ParaSoundService();
   String? _securitySocketToken;
 
   @override
@@ -208,6 +223,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   @override
   void dispose() {
+    _paraSound.dispose();
     _securitySession?.removeListener(_handleSecuritySession);
     WidgetsBinding.instance.removeObserver(this);
     _vehicleMotionTimer?.cancel();
@@ -1373,6 +1389,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
     if (notification.type == 'stop_alert_created') {
       final alert = _readDriverStopAlert(notification.payload);
+      unawaited(ParaSoundService.play(
+        alert?.id ?? '', context.read<SessionController>().apiClient,
+        sentAt: alert?.createdAt,
+      ).catchError((Object _) {}));
       final message = alert == null
           ? '${notification.title}: ${notification.body}'
           : 'New stop alert: ${alert.stopRef}';
@@ -1751,16 +1771,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       loadingMessage: 'Acknowledging pickup request...',
       successMessage: 'Pickup request acknowledged.',
       action: () => driverService.acknowledgeRequest(requestId),
-    );
-  }
-
-  Future<void> _acknowledgeAlert(String alertId) async {
-    final session = context.read<SessionController>();
-    final alertService = StopAlertService(session.apiClient);
-    await _runDriverAction(
-      loadingMessage: 'Acknowledging stop alert...',
-      successMessage: 'Destination alert acknowledged.',
-      action: () => alertService.acknowledgeStopAlert(alertId),
     );
   }
 
@@ -3811,8 +3821,6 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                             message: activeDestinationAlerts.length == 1
                                 ? '${activeDestinationAlerts.first.stopRef} is ready for unloading.'
                                 : '${activeDestinationAlerts.first.stopRef} plus ${activeDestinationAlerts.length - 1} more unloading alerts are active.',
-                            actionLabel: 'Acknowledge',
-                            onAction: onAcknowledgeAlert,
                             onClose: onDismissAlert,
                           ),
                         ],
@@ -4099,10 +4107,6 @@ class _DriveMapMiniOverlay extends StatelessWidget {
                           fontSize: 12,
                         ),
                       ),
-                    ),
-                    TextButton(
-                      onPressed: onAcknowledgeDropOff,
-                      child: const Text('Ack'),
                     ),
                   ],
                 ),
@@ -4569,15 +4573,11 @@ class _DriverPopupAlert extends StatelessWidget {
   const _DriverPopupAlert({
     required this.title,
     required this.message,
-    required this.actionLabel,
-    required this.onAction,
     this.onClose,
   });
 
   final String title;
   final String message;
-  final String actionLabel;
-  final VoidCallback? onAction;
   final VoidCallback? onClose;
 
   @override
@@ -4635,15 +4635,6 @@ class _DriverPopupAlert extends StatelessWidget {
                 icon: const Icon(Icons.close),
               ),
             ],
-          ),
-          const SizedBox(height: 10),
-          Align(
-            alignment: Alignment.centerRight,
-            child: FilledButton.tonalIcon(
-              onPressed: onAction,
-              icon: const Icon(Icons.check_circle_outline),
-              label: Text(actionLabel),
-            ),
           ),
         ],
       ),
