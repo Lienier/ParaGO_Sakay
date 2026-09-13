@@ -1,3 +1,4 @@
+import '../../widgets/operations_panel.dart';
 import 'dart:async';
 import '../../core/utils/action_feedback.dart';
 
@@ -474,7 +475,7 @@ class _AdminAnnouncementsScreenState extends State<AdminAnnouncementsScreen> {
   }
 
   Widget _buildList(bool narrow) {
-    return Card(
+    return OperationsCard(
       margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -586,7 +587,7 @@ class _AdminAnnouncementsScreenState extends State<AdminAnnouncementsScreen> {
   Widget _buildDetailPane() {
     final item = _selected;
     if (item == null) {
-      return const Card(
+      return const OperationsCard(
         margin: EdgeInsets.zero,
         child: _CenteredMessage(
           icon: Icons.article_outlined,
@@ -594,7 +595,7 @@ class _AdminAnnouncementsScreenState extends State<AdminAnnouncementsScreen> {
         ),
       );
     }
-    return Card(
+    return OperationsCard(
       margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
       child: _AnnouncementDetail(
@@ -628,7 +629,7 @@ class _AnnouncementListRow extends StatelessWidget {
     final color = _severityColor(item.severity);
     return Material(
       color: selected
-          ? color.withValues(alpha: 0.09)
+          ? const Color(0xFFF0F6F5)
           : Theme.of(context).colorScheme.surface,
       borderRadius: BorderRadius.circular(8),
       clipBehavior: Clip.antiAlias,
@@ -644,17 +645,17 @@ class _AnnouncementListRow extends StatelessWidget {
                   width: 2),
               top: BorderSide(
                 color: selected
-                    ? color.withValues(alpha: 0.35)
+                    ? const Color(0xFF9DBCB6)
                     : Colors.black.withValues(alpha: 0.06),
               ),
               right: BorderSide(
                 color: selected
-                    ? color.withValues(alpha: 0.35)
+                    ? const Color(0xFF9DBCB6)
                     : Colors.black.withValues(alpha: 0.06),
               ),
               bottom: BorderSide(
                 color: selected
-                    ? color.withValues(alpha: 0.35)
+                    ? const Color(0xFF9DBCB6)
                     : Colors.black.withValues(alpha: 0.06),
               ),
             ),

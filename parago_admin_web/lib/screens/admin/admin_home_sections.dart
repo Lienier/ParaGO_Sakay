@@ -86,6 +86,13 @@ class _AdminOperationsPage extends StatelessWidget {
                             ? 'Loading'
                             : 'Unavailable'),
                     icon: Icons.circle,
+                    caption: dashboard == null
+                        ? (loading.contains('activity')
+                            ? 'Fetching current activity'
+                            : 'No activity data available')
+                        : errors.containsKey('activity')
+                            ? 'Last available snapshot'
+                            : 'Current activity',
                     accent: AppColors.primary))
         ]);
       });
@@ -99,25 +106,41 @@ class _AdminOperationsPage extends StatelessWidget {
         .length;
     final pending = dashboard?['pendingRequests'];
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      _SectionCard(
-          title: 'Needs attention',
-          subtitle:
-              'Review outstanding pickups and terminal location warnings.',
+      OperationsPanel(
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (pending == null)
-              const Text('Pickup status is not available yet.')
-            else
-              Text('$pending pickup requests awaiting resolution'),
-            if (board == null)
-              const Text('Terminal location status is not available yet.')
-            else
-              Text('$warnings terminal jeeps with old or missing GPS'),
-            const SizedBox(height: 12),
-            TextButton(
-                onPressed: () => onSelect(_AdminWorkspaceSection.dispatch),
-                child: const Text('Review dispatch')),
-          ])),
+        Row(children: [
+          Container(width: 4, height: 38, color: AppColors.primary),
+          const SizedBox(width: 14),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text('Needs attention',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(color: const Color(0xFF142C46))),
+                const Text('Review pickups and terminal location warnings.',
+                    style: TextStyle(color: AppColors.textSecondary)),
+              ])),
+        ]),
+        const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Divider(height: 1)),
+        if (pending == null)
+          const Text('Pickup status is not available yet.')
+        else
+          Text('$pending pickup requests awaiting resolution'),
+        if (board == null)
+          const Text('Terminal location status is not available yet.')
+        else
+          Text('$warnings terminal jeeps with old or missing GPS'),
+        const SizedBox(height: 12),
+        OutlinedButton(
+            onPressed: () => onSelect(_AdminWorkspaceSection.dispatch),
+            child: const Text('Review dispatch')),
+      ])),
       const SizedBox(height: 24),
       Text('Current activity', style: Theme.of(context).textTheme.titleLarge),
       _state('activity'),
@@ -132,21 +155,26 @@ class _AdminOperationsPage extends StatelessWidget {
             child: const Text('Open dispatch'))
       ]),
       _state('dispatch'),
-      if (board != null) ...[
-        if (_queue.isEmpty)
-          const AppEmptyState(
-              title: 'No terminal trips',
-              message: 'Checked successfully. The queue is empty.'),
-        for (final trip in _queue.take(3))
-          ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(_dispatchTripLabel(trip)),
-              subtitle: Text(
-                  'Position ${trip['terminalQueueNumber'] ?? '-'} - ${trip['terminalQueueStatus'] ?? 'Unknown'}'),
-              trailing: TextButton(
-                  onPressed: () => onSelect(_AdminWorkspaceSection.dispatch),
-                  child: const Text('View'))),
-      ],
+      if (board != null)
+        OperationsPanel(
+            padding: EdgeInsets.zero,
+            child: Column(children: [
+              if (_queue.isEmpty)
+                const AppEmptyState(
+                    title: 'No terminal trips',
+                    message: 'Checked successfully. The queue is empty.'),
+              for (final trip in _queue.take(3))
+                ListTile(
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                    title: Text(_dispatchTripLabel(trip)),
+                    subtitle: Text(
+                        'Position ${trip['terminalQueueNumber'] ?? '-'} - ${trip['terminalQueueStatus'] ?? 'Unknown'}'),
+                    trailing: TextButton(
+                        onPressed: () =>
+                            onSelect(_AdminWorkspaceSection.dispatch),
+                        child: const Text('View'))),
+            ])),
     ]);
   }
 
@@ -163,43 +191,58 @@ class _AdminOperationsPage extends StatelessWidget {
         .where((t) => selected == null || _routeKey(t) == selected)
         .toList();
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Align(alignment: Alignment.centerRight, child: TextButton(
-        onPressed: () => showDialog<void>(context: context, builder: (_) => const CodingHolidaysDialog()),
-        child: const Text('Coding holidays'))),
-      DropdownButtonFormField<String>(
-          key: ValueKey(selected),
-          initialValue: selected ?? '',
-          decoration: const InputDecoration(labelText: 'Route / direction'),
-          items: [
-            const DropdownMenuItem(value: '', child: Text('All routes')),
-            for (final r in routes.entries)
-              DropdownMenuItem(value: r.key, child: Text(r.value))
-          ],
-          onChanged: (value) => onRoute(value == '' ? null : value)),
-      _state('dispatch'),
+      OperationsPanel(
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        DropdownButtonFormField<String>(
+            key: ValueKey(selected),
+            initialValue: selected ?? '',
+            decoration: const InputDecoration(labelText: 'Route / direction'),
+            items: [
+              const DropdownMenuItem(value: '', child: Text('All routes')),
+              for (final r in routes.entries)
+                DropdownMenuItem(value: r.key, child: Text(r.value))
+            ],
+            onChanged: (value) => onRoute(value == '' ? null : value)),
+        _state('dispatch'),
+      ])),
       if (board != null) ...[
         for (final status in ['loading', 'waiting', 'skipped']) ...[
           const SizedBox(height: 20),
-          Text(ParagoFormat.statusLabel(status),
-              style: Theme.of(context).textTheme.titleLarge),
+          Row(children: [
+            Text(ParagoFormat.statusLabel(status),
+                style: Theme.of(context)
+                    .textTheme
+                    .titleLarge
+                    ?.copyWith(color: const Color(0xFF142C46))),
+            const SizedBox(width: 10),
+            Text(
+                '${trips.where((t) => t['terminalQueueStatus'] == status).length}',
+                style: const TextStyle(color: AppColors.textSecondary)),
+          ]),
+          Text(
+              status == 'loading'
+                  ? 'Boarding now · departure requires confirmation'
+                  : status == 'waiting'
+                      ? 'Next in line · ordered separately for each route'
+                      : 'Out of rotation · restore to the back of the queue',
+              style: const TextStyle(
+                  fontSize: 12, color: AppColors.textSecondary)),
           const SizedBox(height: 8),
           if (!trips.any((t) => t['terminalQueueStatus'] == status))
-            Text('No $status jeeps.'),
+            OperationsPanel(
+                child: Text('No $status jeeps.',
+                    style: const TextStyle(color: AppColors.textSecondary))),
           for (final trip
               in trips.where((t) => t['terminalQueueStatus'] == status))
             Padding(
                 padding: const EdgeInsets.only(bottom: 12),
-                child: _HybridDispatchTile(
-                  title:
-                      '${trip['terminalQueueNumber'] ?? '-'} - ${_dispatchTripLabel(trip)}',
-                  subtitle:
-                      '${_readDynamicMap(_readDynamicMap(trip['driverId'])['userId'])['fullName'] ?? 'Driver'} - ${_dispatchTerminalLabel(trip)}',
-                  caption:
-                      '${trip['occupancyCount'] ?? 'Unavailable'} onboard / ${trip['terminalSummary']?['reservedSeats'] ?? 'Unavailable'} reserved / ${trip['terminalSummary']?['availableSeats'] ?? 'Unavailable'} free / GPS: ${trip['terminalSummary']?['gpsWarning'] == true ? 'old or missing - advisory only' : trip['terminalSummary'] == null ? 'unavailable' : 'recent'}',
+                child: _TerminalDispatchRow(
+                  trip: _readDynamicMap(trip),
                   actions: errors.containsKey('dispatch') ||
                           loading.contains('dispatch')
                       ? const []
-                      : [TerminalLoadingClock(summary: trip['terminalSummary'] is Map ? Map<String, dynamic>.from(trip['terminalSummary']) : null), ..._terminalQueueActions(trip,
+                      : _terminalQueueActions(trip,
                           index: trips
                               .where((t) =>
                                   t['terminalQueueStatus'] == 'waiting' &&
@@ -213,7 +256,7 @@ class _AdminOperationsPage extends StatelessWidget {
                               .length,
                           onReorder: onReorder,
                           onSkippedChanged: onSkip,
-                          onStatusChanged: onDepart)],
+                          onStatusChanged: onDepart),
                 )),
         ],
         const SizedBox(height: 28),
@@ -283,8 +326,9 @@ class _AdminOperationsPage extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) =>
-      ListView(padding: const EdgeInsets.all(24), children: [
+  Widget build(BuildContext context) => ColoredBox(
+      color: const Color(0xFFEDF1F5),
+      child: ListView(padding: const EdgeInsets.all(24), children: [
         AppPageHeader(
             title: section == _AdminWorkspaceSection.overview
                 ? 'Operations overview'
@@ -301,7 +345,7 @@ class _AdminOperationsPage extends StatelessWidget {
           _dispatch(context)
         else
           _reports(context),
-      ]);
+      ]));
 }
 
 String _dispatchTripLabel(dynamic value) {
@@ -369,57 +413,111 @@ List<Widget> _terminalQueueActions(
   ];
 }
 
-class _HybridDispatchTile extends StatelessWidget {
-  const _HybridDispatchTile({
-    required this.title,
-    required this.subtitle,
-    required this.caption,
-    this.actions = const <Widget>[],
-  });
-
-  final String title;
-  final String subtitle;
-  final String caption;
+class _TerminalDispatchRow extends StatelessWidget {
+  const _TerminalDispatchRow({required this.trip, required this.actions});
+  final Map<String, dynamic> trip;
   final List<Widget> actions;
-
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-          ),
-          const SizedBox(height: 4),
-          Text(subtitle),
-          const SizedBox(height: 6),
-          Text(
-            caption,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: const Color(0xFF67726E),
-                ),
-          ),
-          if (actions.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: actions,
-            ),
-          ],
-        ],
-      ),
-    );
+    final summary = _readDynamicMap(trip['terminalSummary']);
+    final driver = _readDynamicMap(_readDynamicMap(trip['driverId'])['userId']);
+    final vehicle = _readDynamicMap(trip['jeepneyId']);
+    final route = _readDynamicMap(trip['routeId']);
+    Widget field(String label, String value, {Color? color}) =>
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 11,
+                  color: AppColors.textSecondary,
+                  fontWeight: FontWeight.w500)),
+          const SizedBox(height: 5),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: color ?? const Color(0xFF142C46))),
+        ]);
+    final identity =
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(vehicle['plateNumber']?.toString() ?? 'Jeep unavailable',
+          style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF142C46))),
+      const SizedBox(height: 4),
+      Text(driver['fullName']?.toString() ?? 'Driver unavailable',
+          style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+    ]);
+    final seats = Wrap(spacing: 18, runSpacing: 10, children: [
+      field('Onboard',
+          '${summary['onboardSeats'] ?? trip['occupancyCount'] ?? '—'}'),
+      field('Reserved', '${summary['reservedSeats'] ?? '—'}'),
+      field('Free', '${summary['availableSeats'] ?? '—'}',
+          color: AppColors.primary),
+    ]);
+    final gps = field(
+        'GPS',
+        summary.isEmpty
+            ? 'Unavailable'
+            : summary['gpsWarning'] == true
+                ? 'Old / missing'
+                : 'Recent',
+        color: summary['gpsWarning'] == true
+            ? AppColors.warning
+            : AppColors.textPrimary);
+    final routeField = field('Route / terminal',
+        '${route['name'] ?? 'Unassigned route'}\n${_dispatchTerminalLabel(trip)}');
+    return OperationsPanel(
+        child: LayoutBuilder(
+            builder: (context, constraints) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (constraints.maxWidth >= 780)
+                        Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(
+                                  width: 62,
+                                  child: field('Position',
+                                      '${summary['queuePosition'] ?? trip['terminalQueueNumber'] ?? '—'}')),
+                              Expanded(flex: 3, child: identity),
+                              const SizedBox(width: 16),
+                              Expanded(flex: 3, child: routeField),
+                              const SizedBox(width: 16),
+                              Expanded(flex: 3, child: seats),
+                              SizedBox(width: 110, child: gps),
+                            ])
+                      else ...[
+                        Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: identity),
+                              const SizedBox(width: 12),
+                              field('Position',
+                                  '${summary['queuePosition'] ?? trip['terminalQueueNumber'] ?? '—'}')
+                            ]),
+                        const SizedBox(height: 16),
+                        routeField,
+                        const SizedBox(height: 16),
+                        Wrap(
+                            spacing: 28,
+                            runSpacing: 16,
+                            children: [seats, gps]),
+                      ],
+                      if (trip['terminalQueueStatus'] == 'loading')
+                        TerminalLoadingClock(
+                            key: ValueKey(trip['_id']), summary: summary),
+                      if (actions.isNotEmpty) ...[
+                        const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Divider(height: 1)),
+                        Wrap(
+                            alignment: WrapAlignment.end,
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: actions),
+                      ],
+                    ])));
   }
 }
 
@@ -445,8 +543,9 @@ class _PassengerFlowHotspotMap extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.03),
-        borderRadius: BorderRadius.circular(22),
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFDCE3EB)),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -630,7 +729,8 @@ class _PassengerFlowStatTile extends StatelessWidget {
       width: 220,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.surfaceSubtle,
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFDCE3EB)),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -676,8 +776,9 @@ class _PassengerFlowChart extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8F8F5),
-        borderRadius: BorderRadius.circular(22),
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFDCE3EB)),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -889,7 +990,8 @@ class _PassengerFlowTopStopsCardState
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.03),
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFDCE3EB)),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -1001,33 +1103,6 @@ class _PassengerFlowTopStopsCardState
   }
 }
 
-class _SectionCard extends StatelessWidget {
-  const _SectionCard({
-    required this.title,
-    required this.subtitle,
-    required this.child,
-  });
-
-  final String title;
-  final String subtitle;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return AppCard(
-      padding: AppSpacing.xl,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          AppSectionHeader(title: title, subtitle: subtitle),
-          const SizedBox(height: AppSpacing.xl),
-          child,
-        ],
-      ),
-    );
-  }
-}
-
 String _sectionLabel(_AdminWorkspaceSection section) {
   switch (section) {
     case _AdminWorkspaceSection.overview:
@@ -1046,6 +1121,8 @@ String _sectionLabel(_AdminWorkspaceSection section) {
       return 'Fare Settings';
     case _AdminWorkspaceSection.announcements:
       return 'Announcements';
+    case _AdminWorkspaceSection.numberCoding:
+      return 'Number Coding';
     case _AdminWorkspaceSection.support:
       return 'Support';
   }

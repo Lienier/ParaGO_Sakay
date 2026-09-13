@@ -737,7 +737,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                     return _DriverActionCard(
                       title: destinationLabel,
                       subtitle:
-                          'Onboard passenger - ${ParagoFormat.relative(ride.boardedAt)}',
+                          '${ride.passengerLabel} · Booking ${ride.bookingLabel}\nOnboard - ${ParagoFormat.relative(ride.boardedAt)}',
                       detail: hasSavedPoint
                           ? 'Saved drop-off location is pinned on the driver map.'
                           : 'Passenger saved a drop-off stop reference without map coordinates.',

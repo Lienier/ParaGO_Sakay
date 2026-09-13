@@ -1842,3 +1842,21 @@ test('GPS review: older and duplicate samples do not overwrite passenger positio
  }
  assert.deepEqual((await Passenger.findById(fixture.passenger._id)).lastKnownLocation.coordinates,[121.1,15.1]);
 });
+
+
+test('new driver login disconnects old socket without ending the trip', async () => {
+  const fixture = await seedCoreFixture();
+  const user = fixture.users.driver;
+  await User.updateOne({ _id: user._id }, { $set: { passwordHash: await require('bcryptjs').hash('Session-test-password-42', 4) } });
+  const oldSocket = await connectClient(fixture.tokens.driver);
+  const beforeTrip = await TripSession.findById(fixture.trip._id).lean();
+  const disconnected = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Replaced socket stayed connected')), 30000);
+    oldSocket.once('disconnect', () => { clearTimeout(timer); resolve(); });
+  });
+  const login = await require('../src/services/auth.service').loginEmail({ email: user.email, password: 'Session-test-password-42' });
+  const currentSocket = await connectClient(login.token);
+  await disconnected;
+  assert.equal(currentSocket.connected, true);
+  assert.deepEqual(await TripSession.findById(fixture.trip._id).lean(), beforeTrip);
+});

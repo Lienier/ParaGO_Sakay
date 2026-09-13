@@ -149,7 +149,7 @@ test('reset sends a fragment link, returns no secret and consumes it once', asyn
 
 test('report bounds are rejected and reset page uses restrictive browser headers', async () => {
   const sid = crypto.randomUUID();
-  await AuthSession.create({ _id: sid, userId: admin._id, authVersion: 0, expiresAt: new Date(Date.now() + 60000) });
+  await AuthSession.create({ _id: sid, userId: admin._id, authVersion: (await User.findById(admin._id).select('+authVersion')).authVersion, expiresAt: new Date(Date.now() + 60000) });
   const token = signToken({ sub: String(admin._id), sid });
   const response = await request(app).get('/api/v1/reports/passenger-flow?from=1900-01-01&to=2026-01-01').set('Authorization', `Bearer ${token}`);
   assert.equal(response.status, 400);
@@ -157,4 +157,61 @@ test('report bounds are rejected and reset page uses restrictive browser headers
   assert.equal(page.status, 200);
   assert.equal(page.headers['cache-control'], 'no-store');
   assert.match(page.headers['content-security-policy'], /frame-ancestors 'none'/);
+});
+
+
+test('simultaneous logins leave one session; replacement rejects HTTP and refresh', async () => {
+  const logins = await Promise.all([1, 2, 3].map(() => auth.loginEmail({ email: passenger.email, password: 'Replacement-password-42' })));
+  const validity = await Promise.allSettled(logins.map(login => requireSession(verifyAccessToken(login.token))));
+  assert.equal(validity.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(await AuthSession.countDocuments({ userId: passenger._id, revokedAt: null }), 1);
+  for (let i = 0; i < logins.length; i++) {
+    if (validity[i].status === 'rejected') {
+      assert.equal(validity[i].reason.code, 'SESSION_REPLACED');
+      await assert.rejects(auth.refreshSession({ refreshToken: logins[i].refreshToken }), { code: 'SESSION_REPLACED' });
+      const response = await request(app).get('/api/v1/reports/passenger-flow').set('Authorization', `Bearer ${logins[i].token}`);
+      assert.equal(response.status, 401);
+      assert.equal(response.body.message, 'Your account was signed in on another device');
+      assert.equal(response.body.code, 'SESSION_REPLACED');
+    }
+  }
+});
+
+test('failed login preserves session; refresh retains session and absolute expiry', async () => {
+  const first = await auth.loginEmail({ email: passenger.email, password: 'Replacement-password-42' });
+  await assert.rejects(auth.loginEmail({ email: passenger.email, password: 'wrong-password' }));
+  const original = await requireSession(verifyAccessToken(first.token));
+  const refreshed = await auth.refreshSession({ refreshToken: first.refreshToken });
+  const continued = await requireSession(verifyAccessToken(refreshed.token));
+  assert.equal(continued.active._id, original.active._id);
+  assert.equal(+continued.active.expiresAt, +original.active.expiresAt);
+});
+
+test('refresh racing a new login cannot revive the old session; old logout preserves new login', async () => {
+  const old = await auth.loginEmail({ email: passenger.email, password: 'Replacement-password-42' });
+  const [rotation, login] = await Promise.allSettled([
+    auth.refreshSession({ refreshToken: old.refreshToken }),
+    auth.loginEmail({ email: passenger.email, password: 'Replacement-password-42' }),
+  ]);
+  assert.equal(login.status, 'fulfilled');
+  await assert.rejects(requireSession(verifyAccessToken(old.token)), { code: 'SESSION_REPLACED' });
+  if (rotation.status === 'fulfilled') {
+    await assert.rejects(requireSession(verifyAccessToken(rotation.value.token)), { code: 'SESSION_REPLACED' });
+  }
+  await auth.logoutSession({ refreshToken: old.refreshToken });
+  await requireSession(verifyAccessToken(login.value.token));
+  assert.equal(await AuthSession.countDocuments({ userId: passenger._id, revokedAt: null }), 1);
+});
+
+test('admin session replacement waits for successful OTP verification', async () => {
+  const initial = await auth.startAdminLoginOtp({ email: admin.email, password });
+  const code = sent.at(-1).text.match(/\b\d{6}\b/)[0];
+  const first = await auth.verifyAdminLoginOtp({ challengeId: initial.challengeId, code });
+  const next = await auth.startAdminLoginOtp({ email: admin.email, password });
+  const nextCode = sent.at(-1).text.match(/\b\d{6}\b/)[0];
+  await assert.rejects(auth.verifyAdminLoginOtp({ challengeId: next.challengeId, code: nextCode === '000000' ? '111111' : '000000' }));
+  await requireSession(verifyAccessToken(first.token));
+  const second = await auth.verifyAdminLoginOtp({ challengeId: next.challengeId, code: nextCode });
+  await assert.rejects(requireSession(verifyAccessToken(first.token)), { code: 'SESSION_REPLACED' });
+  await requireSession(verifyAccessToken(second.token));
 });

@@ -45,7 +45,13 @@ router.get(
       status: 1,
       createdAt: -1,
     });
-    return ok(res, sessions, 'Trip ride sessions');
+    const passengers = await require('../models/passenger').find({
+      _id: { $in: sessions.map(ride => ride.passengerId) },
+    }).select('userId').populate({ path: 'userId', select: 'fullName' });
+    const names = new Map(passengers.map(passenger => [String(passenger._id), passenger.userId?.fullName || null]));
+    return ok(res, sessions.map(ride => ({ ...ride.toObject(),
+      passengerDisplayName: names.get(String(ride.passengerId)) || null,
+    })), 'Trip ride sessions');
   })
 );
 
@@ -71,6 +77,7 @@ router.patch(
       session,
       trip,
       actorRole: req.user.role,
+      actorUserId: req.user._id,
       completionMethod: 'manual',
     });
     return ok(res, completedSession, 'Ride session completed');

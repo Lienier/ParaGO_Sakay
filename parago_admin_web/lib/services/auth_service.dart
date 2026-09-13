@@ -61,7 +61,7 @@ class AuthService {
   }
 
   Future<UserProfile> getCurrentUser() async {
-    final response = await _client.request(method: 'GET', path: '/auth/me');
+    final response = await _client.request(method: 'GET', path: '/auth/me', useCache: false);
     final data =
         response['data'] as Map<String, dynamic>? ?? <String, dynamic>{};
     return UserProfile.fromJson(

@@ -43,6 +43,7 @@ const completeRideSession = async ({
   session,
   trip,
   actorRole = 'system',
+  actorUserId = null,
   completionMethod = 'manual',
 }) => {
   actorRole = String(actorRole).toLowerCase();
@@ -61,6 +62,8 @@ const completeRideSession = async ({
       endedAt,
       canSendStopAlert: false,
       offboardingMethod: completionMethod,
+      completedByRole: actorRole,
+      ...(actorUserId ? { completedByUserId: actorUserId } : {}),
     },
   };
   if (!hasValidGeoPoint(session.destinationLocation)) {
@@ -73,6 +76,11 @@ const completeRideSession = async ({
   try {
     await transaction.withTransaction(async () => {
       changed = false;
+      if (actorRole === 'driver') {
+        const driver = actorUserId && await Driver.findOne({ userId: actorUserId, status: 'active' }).session(transaction);
+        const assigned = driver && await TripSession.findOne({ _id: session.tripSessionId, driverId: driver._id }).session(transaction);
+        if (!assigned) throw new ApiError(403, 'You are no longer assigned to this trip');
+      }
       completedSession = await RideSession.findOneAndUpdate(
         { _id: session._id, status: 'onboard' }, update,
         { new: true, session: transaction }

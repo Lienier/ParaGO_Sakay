@@ -1,3 +1,4 @@
+import '../../widgets/operations_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -24,6 +25,7 @@ class _AdminRouteFareSettingsScreenState
   List<RouteSummaryModel> _routes = [];
   bool _loading = false;
   bool _saving = false;
+  bool _loadFailed = false;
   String? _message;
 
   late TextEditingController _fareBaseAmountCtrl;
@@ -58,6 +60,7 @@ class _AdminRouteFareSettingsScreenState
       if (!mounted) return;
 
       setState(() {
+        _loadFailed = false;
         _routes = routes;
         if (routes.isNotEmpty) {
           _applyFareConfig(routes.first.fareConfig);
@@ -66,7 +69,10 @@ class _AdminRouteFareSettingsScreenState
       });
     } catch (error) {
       if (!mounted) return;
-      setState(() => _message = ActionFeedback.messageOf(error));
+      setState(() {
+        _loadFailed = true;
+        _message = ActionFeedback.messageOf(error);
+      });
     } finally {
       if (mounted) {
         setState(() => _loading = false);
@@ -185,7 +191,7 @@ class _AdminRouteFareSettingsScreenState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Card(
+          OperationsCard(
             child: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -201,7 +207,11 @@ class _AdminRouteFareSettingsScreenState
                   const SizedBox(height: 6),
                   Text(
                     _routes.isEmpty
-                        ? 'No routes are available yet.'
+                        ? (_loading
+                            ? 'Loading route fare settings...'
+                            : _loadFailed
+                                ? 'Route fare settings could not be loaded. Displayed values are defaults.'
+                                : 'No routes are available yet.')
                         : '${_routes.length} routes will use these fare rules.',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,

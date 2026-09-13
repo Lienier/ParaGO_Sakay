@@ -41,7 +41,7 @@ const normalizeError = (error) => {
 const errorHandler = (err, _req, res, _next) => {
   const { status, message, errors } = normalizeError(err);
   if (err.retryAfter) res.set('Retry-After', String(err.retryAfter));
-  return res.status(status).json({ success: false, message, errors });
+  return res.status(status).json({ success: false, message, errors, ...(err instanceof ApiError && err.code === 'SESSION_REPLACED' ? { code: err.code } : {}) });
 };
 
 module.exports = { notFound, errorHandler };

@@ -17,6 +17,7 @@ class RideSessionModel {
     this.offboardingMethod,
     this.boardedAt,
     this.endedAt,
+    this.passengerDisplayName,
   });
 
   final String id;
@@ -34,6 +35,17 @@ class RideSessionModel {
   final String? offboardingMethod;
   final String? boardedAt;
   final String? endedAt;
+  final String? passengerDisplayName;
+
+  String get passengerLabel => (passengerDisplayName ?? '').trim().isEmpty
+      ? 'Passenger'
+      : passengerDisplayName!.trim();
+  String get bookingLabel {
+    final value = pickupRequestId.isEmpty ? id : pickupRequestId;
+    return value.length <= 8
+        ? value.toUpperCase()
+        : value.substring(value.length - 8).toUpperCase();
+  }
 
   double? get estimatedFare => fareSnapshot?.amount;
 
@@ -54,6 +66,7 @@ class RideSessionModel {
       offboardingMethod: json['offboardingMethod']?.toString(),
       boardedAt: json['boardedAt']?.toString(),
       endedAt: json['endedAt']?.toString(),
+      passengerDisplayName: json['passengerDisplayName']?.toString(),
     );
   }
 }

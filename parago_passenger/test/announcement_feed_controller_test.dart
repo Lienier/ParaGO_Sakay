@@ -182,6 +182,7 @@ void main() {
     addTearDown(tester.view.reset);
     final announcement = _announcement(
       id: 'passenger-review',
+      publishedAt: DateTime.now().subtract(const Duration(hours: 25)),
       severity: 'critical',
       body:
           'Flooding has temporarily moved the boarding point beside City Hall. '
@@ -234,6 +235,7 @@ void main() {
 AnnouncementModel _announcement({
   required String id,
   int revision = 1,
+  DateTime? publishedAt,
   String body = 'Service announcement',
   String severity = 'info',
 }) {
@@ -248,7 +250,7 @@ AnnouncementModel _announcement({
     status: 'published',
     revision: revision,
     startsAt: startsAt,
-    publishedAt: startsAt,
+    publishedAt: publishedAt ?? startsAt,
   );
 }
 

@@ -9,6 +9,7 @@
     "npm": "11.x"
   },
   "scripts": {
+    "test:manual-unloading": "node --test tests/manual-unloading.integration.test.js",
     "test:passenger-state": "node --test tests/boarding-notifications.integration.test.js tests/para-push.integration.test.js tests/firebase-admin-config.test.js",
     "start": "node src/server.js",
     "start:worker": "node src/worker.js",

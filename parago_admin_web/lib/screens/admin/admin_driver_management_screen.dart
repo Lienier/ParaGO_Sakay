@@ -1,3 +1,4 @@
+import '../../widgets/operations_panel.dart';
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -432,7 +433,7 @@ class _AdminDriverManagementScreenState
     final body = RefreshIndicator(
       onRefresh: _load,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 22),
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
         children: [
           if (widget.embedded) ...[
             Align(
@@ -444,7 +445,7 @@ class _AdminDriverManagementScreenState
             ),
             const SizedBox(height: 12),
           ],
-          Card(
+          OperationsCard(
             child: Padding(
               padding: const EdgeInsets.all(18),
               child: Column(
@@ -563,7 +564,8 @@ class _AdminDriverManagementScreenState
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              color: Colors.white,
+              border: Border.all(color: const Color(0xFFDCE3EB)),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
@@ -602,7 +604,7 @@ class _AdminDriverManagementScreenState
               ),
               child: Text(
                 allDrivers.isEmpty
-                    ? 'No drivers found yet. Use the "Create driver" button below to add the first driver account.'
+                    ? 'No drivers found yet. Use the "Create driver" button to add the first driver account.'
                     : 'No drivers match the current search or filter.',
               ),
             )

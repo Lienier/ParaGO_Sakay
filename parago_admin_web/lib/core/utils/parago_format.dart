@@ -24,7 +24,7 @@ class ParagoFormat {
   static String dateTime(String? iso) {
     final time = _tryParse(iso);
     if (time == null) return 'Not available';
-    final local = time.toLocal();
+    final local = time.toUtc().add(const Duration(hours: 8));
     final month = _monthName(local.month);
     final day = local.day.toString().padLeft(2, '0');
     final hour =
@@ -36,8 +36,8 @@ class ParagoFormat {
 
   static String shortTime(String? iso) {
     final time = _tryParse(iso);
-    if (time == null) return 'Now';
-    final local = time.toLocal();
+    if (time == null) return 'Not available';
+    final local = time.toUtc().add(const Duration(hours: 8));
     final hour =
         local.hour == 0 ? 12 : (local.hour > 12 ? local.hour - 12 : local.hour);
     final minute = local.minute.toString().padLeft(2, '0');
@@ -47,7 +47,7 @@ class ParagoFormat {
 
   static String relative(String? iso) {
     final time = _tryParse(iso);
-    if (time == null) return 'Just now';
+    if (time == null) return 'Not available';
     final diff = DateTime.now().difference(time.toLocal());
     if (diff.inSeconds < 60) return 'Just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';

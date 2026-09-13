@@ -39,6 +39,7 @@ class _ApiCachedResponse {
 class ApiClient {
   Future<void> Function()? beforeAuthenticatedRequest;
   Future<void> Function()? onAuthenticationRejected;
+  String? authenticationRejectionMessage;
   DateTime? _cooldownUntil;
   ApiClient({String? baseUrl})
       : _dio = Dio(
@@ -435,6 +436,9 @@ class ApiClient {
     } on DioException catch (error) {
       if (error.response?.statusCode == 401 && !path.startsWith('/auth/') &&
           error.requestOptions.headers['Authorization'] == _dio.options.headers['Authorization']) {
+        final body = error.response?.data;
+        authenticationRejectionMessage = body is Map && body['code'] == 'SESSION_REPLACED'
+            ? 'Your account was signed in on another device' : null;
         await onAuthenticationRejected?.call();
       }
       if (error.response?.statusCode == 429) {

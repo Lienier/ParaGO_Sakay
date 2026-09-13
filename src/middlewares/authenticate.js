@@ -19,6 +19,7 @@ const authenticate = async (req, res, next) => {
     req.authSessionId = payload.sid;
     next();
   } catch (_error) {
+    if (_error.code === 'SESSION_REPLACED') return next(_error);
     next(new ApiError(401, 'Invalid or expired token'));
   }
 };

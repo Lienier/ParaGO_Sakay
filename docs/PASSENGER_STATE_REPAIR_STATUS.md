@@ -23,9 +23,36 @@ Local work only. No deployment or APK distribution authorized by this change.
 - Foreground/minimized/locked-phone sound, duplicate suppression, offline expiry and logged-out suppression are physically verified. Notification permission denial was checked on-device and permission restored.
 - Android debug APK build succeeded. Physical delivery checks are still required; no APK has been installed or distributed.
 
-## Phases 3 and 4 — not started
+## Phase 3 — local validation passed
 
-Phase 2's controlled-device sound gate is complete. Manual-unloading enhancements and single-device session enforcement remain to be implemented. Existing manual unloading remains; multiple concurrent login sessions remain possible.
+- Authorized driver/admin trip rosters now include passenger display names while retaining the existing passenger ID shape. No email, phone or other profile fields are added.
+- Onboard cards display passenger name and short booking identifier. Both driver unload actions use a confirmation showing the passenger, booking and destination. Duplicate dialog/action submissions for the same ride are guarded.
+- Completion records include authenticated actor ID/role and the existing method/timestamp, saved with the occupancy transaction. Concurrent attempts preserve the first completion audit. Driver assignment is rechecked inside the transaction.
+- No fresh passenger GPS or para alert is required for driver manual unloading. Closing the passenger app does not itself unload the passenger. Automatic separation rules are unchanged.
+- Validation: all 27 driver tests passed; targeted analysis passed; combined boarding/manual-unloading/realtime backend run passed 60 tests. Final focused unloading run passed 4 tests, including a new reassignment check. Initial invalid test fixture was corrected to include saved booking coordinates, with no fresh GPS provided.
+- These changes are local, not yet pushed, deployed or installed on the phone. A physical end-to-end ride walkthrough remains part of final release verification.
+
+## Phase 4 - implemented locally; device gate pending
+
+- Successful new logins transactionally replace previous sessions for all roles. Admin replacement occurs only after OTP verification. Refresh retains the session and absolute expiry.
+- Old HTTP/refresh credentials receive SESSION_REPLACED. All clients clear credentials and show the replacement explanation, with uncached periodic profile validation to recover from missed events.
+- Socket replacement revalidates current sessions to tolerate delayed events. The existing 20-second recheck with a five-second deadline remains. Offline/background client UI updates depend on connectivity and OS scheduling; server revocation still applies.
+- Passed: 79 combined backend session, socket, boarding, unloading and push checks; 23 security-suite checks; all 28 driver tests; nine focused client session tests across three applications. Targeted client analysis passed.
+- All 42 passenger tests passed after correcting a date-dependent announcement screenshot fixture. No screenshot baseline was changed.
+- Physical two-device login replacement and the full boarding/para/unloading walkthrough remain release blockers. No deployment or APK distribution was performed.
+
+### Single-session cutover and rollback
+
+1. Finish device validation and prepare matching clients. Back up the database and pause API/authentication traffic across all instances for maintenance.
+2. Review `node scripts/security-session-cutover.js` (dry-run description). During the separately authorized release, run it with `--apply` to revoke all existing sessions, refresh tokens, OTP challenges and reset links. Do not retain one arbitrary legacy session. Business records remain untouched.
+3. Start only the updated backend, restart sockets/workers and resume traffic. Require fresh login; verify second-device rejection while active trips and rides persist.
+4. Rollback must retain revocation enforcement and transactional session replacement. Never restore revoked token records or insecure authentication code; pause authentication and repair forward if necessary.
+
+One server session is enforced per account. This is not hardware attestation: copied credentials or tabs sharing one session cannot be distinguished as separate physical devices.
+
+## GitHub checkpoint
+
+Phases 1–2 were committed as `b21ab4b` and pushed to `repair/passenger-state-para-alerts`. Main automatically deploys staging, so it was not updated by this GitHub checkpoint. Unrelated admin UI and tooling changes were excluded.
 
 ## Resume validation
 

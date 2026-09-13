@@ -19,6 +19,8 @@ Namecheap appends sakaygaray.com to the Host field; enter only the host shown ab
 
 ## Remaining activation gates
 
+Rechecked directly through AWS on 2026-09-09: `ProductionAccessEnabled=false`, `SendingEnabled=true`, review status `DENIED`, case `178882864700452`. Domain verified-for-sending is true and DKIM is SUCCESS. SendingEnabled does not remove sandbox restrictions. No controlled OTP email was sent during this check; normal production OTP delivery is still blocked by the SES readiness gate.
+
 1. Completed: SES identity verification and DKIM both succeed.
 2. Confirm SES production access is approved (submission is not approval).
 3. Check the deployed AUTH_EMAIL_ENABLED flag and enable it only after readiness is confirmed; restart API and worker when changing runtime configuration.

@@ -32,6 +32,7 @@ import '../../services/session_controller.dart';
 import '../../services/stop_alert_service.dart';
 import '../../services/trip_service.dart';
 import '../../widgets/status_badge.dart';
+import '../../widgets/confirm_unload_dialog.dart';
 import '../../widgets/announcement_card.dart';
 import '../support/driver_support_screen.dart';
 import 'driver_profile_screen.dart';
@@ -169,13 +170,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         unawaited(_paraSound.start(session).then((enabled) {
           if (mounted && !enabled) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Para notification sound is unavailable. Check notification permissions and connection.'),
+              content: Text(
+                  'Para notification sound is unavailable. Check notification permissions and connection.'),
             ));
           }
         }).catchError((Object _) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Background para notifications could not be enabled. Keep the app open.'),
+              content: Text(
+                  'Background para notifications could not be enabled. Keep the app open.'),
             ));
           }
         }));
@@ -1390,7 +1393,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (notification.type == 'stop_alert_created') {
       final alert = _readDriverStopAlert(notification.payload);
       unawaited(ParaSoundService.play(
-        alert?.id ?? '', context.read<SessionController>().apiClient,
+        alert?.id ?? '',
+        context.read<SessionController>().apiClient,
         sentAt: alert?.createdAt,
       ).catchError((Object _) {}));
       final message = alert == null
@@ -1775,28 +1779,33 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   Future<void> _completeUnloadAlert(StopAlertModel alert) async {
-    final session = context.read<SessionController>();
-    final rideService = RideSessionService(session.apiClient);
-    await _runDriverAction(
-      loadingMessage: 'Closing ride session...',
-      successMessage:
-          'Passenger unloaded near ${alert.stopRef}. Ride session closed.',
-      action: () => rideService.completeRideSession(alert.rideSessionId),
-    );
+    for (final ride
+        in _tripRides[alert.tripSessionId] ?? <RideSessionModel>[]) {
+      if (ride.id == alert.rideSessionId) {
+        await _completeRideDestination(ride);
+        return;
+      }
+    }
+    await _load();
   }
 
+  final Set<String> _pendingUnloads = {};
+
   Future<void> _completeRideDestination(RideSessionModel ride) async {
-    final session = context.read<SessionController>();
-    final rideService = RideSessionService(session.apiClient);
-    final destinationLabel = (ride.destinationStopRef ?? '').trim().isEmpty
-        ? 'the saved destination'
-        : ride.destinationStopRef!.trim();
-    await _runDriverAction(
-      loadingMessage: 'Closing ride session...',
-      successMessage:
-          'Passenger unloaded near $destinationLabel. Ride session closed.',
-      action: () => rideService.completeRideSession(ride.id),
-    );
+    if (ride.status != 'onboard' || !_pendingUnloads.add(ride.id)) return;
+    try {
+      if (!await confirmPassengerUnload(context, ride) || !mounted) return;
+      final session = context.read<SessionController>();
+      final rideService = RideSessionService(session.apiClient);
+      await _runDriverAction(
+        loadingMessage: 'Closing ride session...',
+        successMessage:
+            '${ride.passengerLabel} marked unloaded. Ride session closed.',
+        action: () => rideService.completeRideSession(ride.id),
+      );
+    } finally {
+      _pendingUnloads.remove(ride.id);
+    }
   }
 
   LocationTrackingService _driverLocationTrackingService(

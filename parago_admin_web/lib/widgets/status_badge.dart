@@ -41,19 +41,16 @@ class StatusBadge extends StatelessWidget {
       case 'ready':
       case 'sent':
       case 'on_road':
-        return const _StatusColors(Color(0xFFDCFCE7), AppColors.success);
+        return const _StatusColors(Color(0xFFE5F1ED), Color(0xFF24634E));
       case 'pending':
       case 'waiting':
-      case 'scheduled':
       case 'seen':
-        return const _StatusColors(Color(0xFFFFF1CC), AppColors.warning);
+        return const _StatusColors(Color(0xFFFFF1CC), Color(0xFF805300));
       case 'completed':
       case 'acknowledged_done':
         return const _StatusColors(Color(0xFFDBEAFE), AppColors.info);
       case 'cancelled':
-      case 'expired':
       case 'dismissed':
-      case 'inactive':
       case 'suspended':
       case 'deactivated':
         return const _StatusColors(Color(0xFFFEE4E2), AppColors.error);

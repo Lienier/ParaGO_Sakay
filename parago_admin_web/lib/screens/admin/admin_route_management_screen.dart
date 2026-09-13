@@ -1,3 +1,4 @@
+import '../../widgets/operations_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -263,9 +264,9 @@ class _AdminRouteManagementScreenState
     final body = RefreshIndicator(
       onRefresh: _load,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+        padding: const EdgeInsets.all(24),
         children: [
-          Card(
+          OperationsCard(
             child: Padding(
               padding: const EdgeInsets.all(18),
               child: Column(
@@ -457,7 +458,7 @@ class _RouteSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
+    return OperationsCard(
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(

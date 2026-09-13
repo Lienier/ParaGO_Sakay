@@ -17,8 +17,9 @@ class SessionController extends ChangeNotifier {
   })  : _apiClient = apiClient,
         _storage = tokenStorage {
     _apiClient.beforeAuthenticatedRequest = ensureFreshSession;
+    _apiClient.onAuthenticationRejected = _handleRejection;
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      unawaited(ensureFreshSession().catchError((Object _) {}));
+      unawaited(validateSession().catchError((Object _) {}));
     });
   }
 
@@ -27,9 +28,36 @@ class SessionController extends ChangeNotifier {
   Timer? _refreshTimer;
   Future<bool>? _refreshInFlight;
   int _sessionEpoch = 0;
+  String? signedOutMessage;
+  bool _validating = false;
+
+  Future<void> _handleRejection() async {
+    signedOutMessage = _apiClient.authenticationRejectionMessage;
+    await clear();
+  }
+
+  Future<void> validateSession() async {
+    if (!isAuthenticated || _validating) return;
+    _validating = true;
+    final epoch = _sessionEpoch;
+    try {
+      await ensureFreshSession();
+      if (epoch == _sessionEpoch && isAuthenticated) {
+        await AuthService(_apiClient).getCurrentUser();
+      }
+    } on ApiException catch (error) {
+      if (epoch == _sessionEpoch && (error.statusCode == 401 || error.statusCode == 403)) {
+        signedOutMessage = error.message;
+        await clear();
+      }
+    } finally {
+      _validating = false;
+    }
+  }
 
   Future<void> ensureFreshSession() async {
     if (_accessToken == null || _refreshToken == null) return;
+    final epoch = _sessionEpoch;
     try {
       final claims = jsonDecode(utf8.decode(base64Url
           .decode(base64Url.normalize(_accessToken!.split('.')[1])))) as Map;
@@ -37,7 +65,10 @@ class SessionController extends ChangeNotifier {
       if (DateTime.now().millisecondsSinceEpoch < expires - 60000) return;
       if (await _tryRefreshSession(_refreshToken)) notifyListeners();
     } on ApiException catch (error) {
-      if (error.statusCode == 401 || error.statusCode == 403) await clear();
+      if (epoch == _sessionEpoch && (error.statusCode == 401 || error.statusCode == 403)) {
+        signedOutMessage = error.message;
+        await clear();
+      }
       rethrow;
     }
   }
@@ -46,6 +77,7 @@ class SessionController extends ChangeNotifier {
   void dispose() {
     _refreshTimer?.cancel();
     _apiClient.beforeAuthenticatedRequest = null;
+    _apiClient.onAuthenticationRejected = null;
     super.dispose();
   }
 
@@ -105,6 +137,8 @@ class SessionController extends ChangeNotifier {
     if (!_isStaffUser(session.user)) {
       throw StateError('Invalid email/password');
     }
+    signedOutMessage = null;
+    _apiClient.authenticationRejectionMessage = null;
     _accessToken = session.accessToken;
     _refreshToken = session.refreshToken;
     _user = session.user;
@@ -143,7 +177,8 @@ class SessionController extends ChangeNotifier {
         if (!restored) {
           await clear(notify: false);
         }
-      } catch (_) {
+      } catch (error) {
+        if (error is ApiException && error.statusCode == 401) signedOutMessage = error.message;
         await clear(notify: false);
       }
     } finally {

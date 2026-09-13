@@ -33,6 +33,17 @@ class _PreviewAppState extends State<PreviewApp> {
   bool otp = false;
   String mode = 'Populated';
   @override
+  void initState() {
+    super.initState();
+    final requested = Uri.base.queryParameters['mode'];
+    if (['Populated', 'Empty', 'Error', 'Loading', 'Dispatch error']
+        .contains(requested)) {
+      mode = requested!;
+      PreviewApi.mode = mode;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) => MaterialApp(
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light(),
@@ -148,6 +159,12 @@ class PreviewApi extends ApiClient {
                   'routeId': {'name': 'Town center - Terminal'},
                   'occupancyCount': 8,
                   'terminalSummary': {
+                    'serverTime': DateTime.now().toUtc().toIso8601String(),
+                    'loadingDeadline': DateTime.now()
+                        .add(const Duration(minutes: 6))
+                        .toUtc()
+                        .toIso8601String(),
+                    'remainingSeconds': 360,
                     'reservedSeats': 4,
                     'availableSeats': 8,
                     'gpsWarning': false
@@ -294,6 +311,13 @@ class PreviewApi extends ApiClient {
       'lastMessagePreview': 'Where should I wait for my assigned jeep?',
       'unreadAdminCount': 1
     };
+    if (path == '/admin/coding-holidays') {
+      data = empty
+          ? []
+          : [
+              {'date': '2026-12-25', 'name': 'Christmas Day'}
+            ];
+    }
     if (path == '/support/admin/threads') data = empty ? [] : [thread];
     if (path == '/support/threads/sample-support/messages') {
       data = {

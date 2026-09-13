@@ -68,6 +68,8 @@ const rideSessionSchema = new Schema(
     },
     boardedAt: { type: Date },
     endedAt: { type: Date },
+    completedByUserId: { type: Schema.Types.ObjectId, ref: 'User' },
+    completedByRole: { type: String, enum: ['passenger', 'driver', 'admin', 'system'] },
     canSendStopAlert: { type: Boolean, default: false },
     destinationApproachAlertedAt: { type: Date },
   },

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:parago_passenger/core/exceptions/api_exception.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -18,6 +19,7 @@ String tokenWithExpiry(int seconds) =>
 
 class FakeApi extends ApiClient {
   int refreshCalls = 0;
+  bool replaced = false;
   String? lastPath;
   dynamic lastBody;
   final refresh = Completer<Map<String, dynamic>>();
@@ -29,6 +31,7 @@ class FakeApi extends ApiClient {
       dynamic body,
       bool useCache = true,
       Duration? cacheTtl}) async {
+    if (replaced && path == '/auth/me') throw ApiException(401, 'Your account was signed in on another device');
     lastPath = path;
     lastBody = body;
     if (path == '/auth/refresh') {
@@ -76,6 +79,19 @@ void main() {
     });
     await Future.wait([first, second]);
     expect(session.isAuthenticated, isFalse);
+    expect((await TokenStorage().loadTokens())['refreshToken'], isNull);
+  });
+
+  test('revoked session clears credentials and preserves the replacement explanation', () async {
+    final api = FakeApi();
+    final session = SessionController(apiClient: api, tokenStorage: TokenStorage());
+    addTearDown(session.dispose);
+    await session.saveAuth(AuthSession(accessToken: tokenWithExpiry(900), refreshToken: 'old',
+      user: const UserProfile(fullName: 'Test', email: 'test@example.test', role: UserRole.passenger)));
+    api.replaced = true;
+    await session.validateSession();
+    expect(session.isAuthenticated, isFalse);
+    expect(session.signedOutMessage, 'Your account was signed in on another device');
     expect((await TokenStorage().loadTokens())['refreshToken'], isNull);
   });
 

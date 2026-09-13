@@ -1,3 +1,4 @@
+import '../../widgets/operations_panel.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -576,7 +577,7 @@ class _SupportInboxList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
+    return OperationsCard(
       margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -829,7 +830,7 @@ class _SupportThreadDetail extends StatelessWidget {
         ],
       ],
     );
-    return Card(
+    return OperationsCard(
       margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
       child: Column(

@@ -1,5 +1,41 @@
 # Admin redesign - local review
 
+## Number Coding module (2026-09-09)
+
+The deferred module is now implemented locally. Administration > Number Coding replaces the Terminal dispatch holiday button. The page separates the read-only weekday plate schedule from Holiday exemptions, retaining GET/PUT/DELETE `/admin/coding-holidays` and existing backend permissions/rules. Added strict calendar-date and required-name validation, removal confirmation, disabled controls during requests and explicit refresh/error feedback. The preview now includes a holiday fixture; real writes remain blocked. Desktop and phone captures were inspected with no browser page errors. A regression test verifies invalid dates cause no mutation, saving uses the existing endpoint, cancelling removal is harmless and confirmed removal updates the list. No deployment performed.
+
+## Executive-light refresh - Phase 3 (2026-09-09)
+
+Local verification found and corrected two presentation problems: activity cards now distinguish initial loading/unavailable data from a real stale snapshot; fare settings distinguish failed loading from a successfully empty route list and identify default values after initial failure. API calls, validation and business rules remain unchanged.
+
+The browser walkthrough captured all eight workspace pages in Empty, Error, Loading and Dispatch error modes, plus driver creation, announcement editing, report dates and coding-holiday dialogs at desktop and phone sizes. Representative captures were inspected, including empty/full/partial errors and all four phone dialogs. No browser page errors occurred. Tab navigation reached driver fields in order, announcement title/message/audience controls, report controls and holiday fields. This is a sampled keyboard check, not a full screen-reader accessibility audit. Phase 2 already captured populated pages at all four planned viewport sizes; existing regression tests cover long messages and stale responses.
+
+Full `flutter analyze` and all 26 admin tests pass after the corrections. Production `lib/main.dart` and sample preview are built separately; the production check output is `parago_admin_web/build/production-check`. JavaScript builds retain the existing socket dependency WebAssembly dry-run warning. No screenshot baselines changed in Phase 3.
+
+The final targeted browser assertion for the corrected labels timed out on Flutter semantics; those final text changes have build/test verification, but their browser assertion is not counted as passed. The earlier complete state/dialog capture run completed without page errors.
+
+Local review remains at http://127.0.0.1:8088. The Coding Holidays preview has no GET fixture, so its dialog shows the load-error treatment; live holiday editing was not tested or moved into its deferred standalone module. The preview blocks mutations, and this review does not certify real email, authentication or database operations. User visual acceptance and controlled live-flow verification remain release gates. No push or deployment performed.
+
+## Executive-light refresh - Phase 2 (2026-09-09)
+
+Implemented locally: shared white Material panels with restrained shadows on Drivers, Routes, Fare Settings, Announcements and Support; matching report surfaces; navy headings and shared table header/hover/selection styles scoped to the authenticated workspace. Announcement selection now uses neutral teal independently of severity badges. Driver/route spacing is aligned. Login and operational behavior remain unchanged.
+
+Verification: `flutter analyze lib` clean; all 26 admin tests pass. Three changed screenshot baselines were individually inspected before regeneration (the fourth remained unchanged). JavaScript sample preview built successfully. All eight workspace pages were captured at 1440x900, 1024x768, 768x1024 and 390x844, with zero browser page errors; representative layouts across the six Phase 2 pages and login were visually inspected. Local browser opened at http://127.0.0.1:8088. Existing socket dependency WebAssembly dry-run warning remains.
+
+Next: local user design review, then Phase 3 detailed state/keyboard/dialog walkthrough and a separate production-entrypoint build. Preview checks do not verify live API mutations. No commit, push or deployment performed.
+
+Deferred by user request: move Coding Holidays into its own administration module later, reusing the current holiday editor and API permissions. Its working Terminal dispatch button remains available until that follow-up.
+
+## Executive-light refresh — Phase 1 (2026-09-09)
+
+New local review checkpoint: Overview and Terminal dispatch now use a cooler workspace background, white bordered panels with subtle depth, navy detail text, clearer metric hierarchy and aligned queue fields. Tablet/phone rows stack their labels; loading countdowns are separated from mutation controls. The sidebar uses a light Material surface so selection and hover feedback remain visible. Login styling and backend behavior are unchanged.
+
+The local preview includes sample loading deadlines and supports `?mode=Empty`, `?mode=Error`, `?mode=Loading` and `?mode=Dispatch%20error` for reviewing unavailable states. It uses sample data and blocks real writes.
+
+Initial verification: analysis clean, all 26 admin tests passed, JavaScript preview build passed. Overview/dispatch were captured at 1440×900, 1024×768, 768×1024 and 390×844 with no browser JavaScript errors. Existing screenshot baselines were not regenerated. The existing socket dependency WebAssembly dry-run warning remains separate from the successful JavaScript build.
+
+Review http://127.0.0.1:8088 before applying this treatment to the remaining workspace screens (Phase 2). Production-entrypoint build and full shared-screen acceptance follow in Phase 3. No push or deployment in this refresh.
+
 ## Current status — Phase 4 local verification (2026-09-08)
 
 Phases 1–3 and the approved login colors were previously pushed as `b2d15fb` on `admin-ui-redesign-20260908`. The user redirected the merge request to Phase 4. No merge or deployment was performed. Older “local only” and “await feedback” statements below describe earlier checkpoints, not current branch status.
@@ -74,3 +110,11 @@ User requested the previous login design after Phase 3. Restored the pre-redesig
 ## Login color refinement
 
 Preserved the previous split login layout with a white panel, dark readable text, teal actions, muted gray-green background (#D5E0DD), and a soft green-tinted shadow for depth. Changes remain local.
+
+## Professional refresh � Phase 1 foundation (2026-09-10)
+
+Implemented responsive shared page headers (actions stack below 600px), header semantics, consistent workspace button sizing/padding and visible keyboard-focus borders, stronger focused input borders, restrained status colors, and Philippine-time timestamp formatting. Missing timestamp labels no longer claim to be current. Login theme remains unchanged; screen-specific layouts and raw labels are scheduled for later phases.
+
+Verification: 25 functional tests passed, including narrow-header action access and UTC-to-Philippine date rollover. Flutter analyze passed with no issues after correcting test imports. Local preview JavaScript build succeeded; existing socket_io_common WebAssembly dry-run warning remains. Screenshot baselines were not updated. Full visual/focus walkthrough remains pending local review.
+
+Preview opened at http://127.0.0.1:8088 using sample data. Nothing committed, pushed or deployed for this phase.

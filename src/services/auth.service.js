@@ -114,10 +114,34 @@ const ensureRoleProfile = async (user) => {
 
 const issueSession = async (user, existingSession = null, dbSession = null) => {
   ensureActiveUser(user);
-  await ensureRoleProfile(user);
+  if (!existingSession) {
+    await ensureRoleProfile(user);
+    const transaction = await mongoose.startSession();
+    let result;
+    try {
+      await transaction.withTransaction(async () => {
+        // Every new login writes the same account record, serializing competing
+        // logins and account-wide revocation without touching business records.
+        const current = await User.findOneAndUpdate({ _id: user._id, status: 'active' },
+          { $inc: { authVersion: 1 } }, { new: true, session: transaction }).select('+authVersion');
+        if (!current) throw new ApiError(401, 'Account is no longer active');
+        const now = new Date();
+        await AuthSession.updateMany({ userId: user._id, revokedAt: null },
+          { $set: { revokedAt: now, revokedReason: 'replaced' } }, { session: transaction });
+        await RefreshToken.updateMany({ userId: user._id, revokedAt: null },
+          { $set: { revokedAt: now } }, { session: transaction });
+        const [created] = await AuthSession.create([{ _id: crypto.randomUUID(), userId: user._id,
+          expiresAt: new Date(Date.now() + 30 * 86400000), authVersion: current.authVersion }], { session: transaction });
+        result = await issueSession(current, created, transaction);
+      });
+    } finally { await transaction.endSession(); }
+    // A publication failure must not report a committed login as failed.
+    try { await notifyRevocation({ userId: user._id, reason: 'replaced' }); }
+    catch (_) { console.error('[Sessions] Invalidation publication failed; periodic validation remains active'); }
+    return result;
+  }
   const sid = existingSession?._id || crypto.randomUUID();
   const expiresAt = existingSession?.expiresAt || new Date(Date.now() + 30 * 86400000);
-  if (!existingSession) await AuthSession.create([{ _id: sid, userId: user._id, expiresAt, authVersion: user.authVersion || 0 }], { session: dbSession });
   const claims = { sub: String(user._id), role: user.role, sid };
   const token = signToken(claims);
   const refreshToken = signToken({ ...claims, exp: Math.floor(expiresAt.getTime() / 1000) }, 'refresh');

@@ -310,9 +310,15 @@ const attachSocketServer = (httpServer, { corsOrigins = [] } = {}) => {
     }
   });
 
-  void subscribeRedisChannel(revocationChannel, ({ userId, sessionId }) => {
+  void subscribeRedisChannel(revocationChannel, ({ userId, sessionId, reason }) => {
     for (const socket of io.sockets.sockets.values()) {
-      if (socket.data.claims?.sub === userId && (!sessionId || socket.data.claims?.sid === sessionId)) socket.disconnect(true);
+      if (socket.data.claims?.sub === userId && (!sessionId || socket.data.claims?.sid === sessionId)) {
+        if (reason === 'replaced') {
+          // Revalidate instead of trusting event order: a newer valid login
+          // must survive a delayed event from an earlier competing login.
+          void requireSession(socket.data.claims).catch(() => socket.disconnect(true));
+        } else socket.disconnect(true);
+      }
     }
   }).then((stop) => { stopSecuritySubscriber = stop; });
   io.on('connection', (socket) => {

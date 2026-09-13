@@ -1,6 +1,8 @@
+import '../../widgets/admin_workspace_theme.dart';
 import 'dart:async';
+import '../../widgets/operations_panel.dart';
 import '../../widgets/terminal_loading_clock.dart';
-import '../../widgets/coding_holidays_dialog.dart';
+import 'admin_number_coding_screen.dart';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -11,7 +13,6 @@ import 'package:provider/provider.dart';
 import '../../core/config/app_config.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
-import '../../core/theme/app_spacing.dart';
 import '../../widgets/app_card.dart';
 import '../../core/utils/parago_format.dart';
 import '../../services/admin_service.dart';
@@ -37,6 +38,7 @@ enum _AdminWorkspaceSection {
   fareSettings,
   announcements,
   support,
+  numberCoding,
 }
 
 class AdminHomeScreen extends StatefulWidget {
@@ -431,6 +433,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         return AdminAnnouncementsScreen(
           realtimeSocketService: _realtimeSocketService,
         );
+      case _AdminWorkspaceSection.numberCoding:
+        return const AdminNumberCodingScreen();
       case _AdminWorkspaceSection.support:
         return AdminSupportInboxScreen(
           realtimeSocketService: _realtimeSocketService,
@@ -486,80 +490,92 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     }
   }
 
-  Widget _navigation({bool drawer = false}) => Container(
+  Widget _navigation({bool drawer = false}) => SizedBox(
         width: 224,
-        color: AppColors.surface,
-        child:
-            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          const Padding(
-              padding: EdgeInsets.fromLTRB(24, 28, 24, 32),
-              child: Text('SakayGaray',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700))),
-          const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 24),
-              child: Text('WORKSPACE',
-                  style: TextStyle(
-                      fontSize: 11,
-                      letterSpacing: 1.2,
-                      color: AppColors.textSecondary))),
-          const SizedBox(height: 12),
-          Expanded(
-              child: ListView(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  children: [
-                for (final section in const [
-                  _AdminWorkspaceSection.overview,
-                  _AdminWorkspaceSection.dispatch,
-                  _AdminWorkspaceSection.drivers,
-                  _AdminWorkspaceSection.routes,
-                  _AdminWorkspaceSection.fareSettings,
-                  _AdminWorkspaceSection.announcements,
-                  _AdminWorkspaceSection.support,
-                  _AdminWorkspaceSection.reports
-                ]) ...[
-                  if ([
-                    _AdminWorkspaceSection.overview,
-                    _AdminWorkspaceSection.drivers,
-                    _AdminWorkspaceSection.announcements,
-                    _AdminWorkspaceSection.reports
-                  ].contains(section))
-                    Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 20, 16, 6),
-                        child: Text(
-                            section == _AdminWorkspaceSection.overview
-                                ? 'Operations'
-                                : section == _AdminWorkspaceSection.drivers
-                                    ? 'Management'
-                                    : section ==
-                                            _AdminWorkspaceSection.announcements
-                                        ? 'Communication'
-                                        : 'Reporting',
-                            style: const TextStyle(
-                                fontSize: 11, color: AppColors.textSecondary))),
-                  Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: ListTile(
-                        dense: true,
-                        minTileHeight: 44,
-                        shape: const RoundedRectangleBorder(
-                            borderRadius: AppRadius.medium),
-                        selected: _selectedSection == section,
-                        selectedColor: AppColors.primaryDark,
-                        selectedTileColor: const Color(0xFFF0F6F5),
-                        title: Text(_sectionLabel(section)),
-                        onTap: () {
-                          _selectSection(section);
-                          if (drawer) Navigator.pop(context);
-                        },
-                      )),
-                ],
-              ])),
-          const Padding(
-              padding: EdgeInsets.all(24),
-              child: Text('Administration',
-                  style:
-                      TextStyle(color: AppColors.textSecondary, fontSize: 12))),
-        ]),
+        child: Material(
+            color: const Color(0xFFF8FAFC),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Padding(
+                      padding: EdgeInsets.fromLTRB(24, 28, 24, 32),
+                      child: Text('SakayGaray',
+                          style: TextStyle(
+                              fontSize: 20, fontWeight: FontWeight.w700))),
+                  const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 24),
+                      child: Text('WORKSPACE',
+                          style: TextStyle(
+                              fontSize: 11,
+                              letterSpacing: 1.2,
+                              color: AppColors.textSecondary))),
+                  const SizedBox(height: 12),
+                  Expanded(
+                      child: ListView(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          children: [
+                        for (final section in const [
+                          _AdminWorkspaceSection.overview,
+                          _AdminWorkspaceSection.dispatch,
+                          _AdminWorkspaceSection.drivers,
+                          _AdminWorkspaceSection.routes,
+                          _AdminWorkspaceSection.fareSettings,
+                          _AdminWorkspaceSection.announcements,
+                          _AdminWorkspaceSection.support,
+                          _AdminWorkspaceSection.reports,
+                          _AdminWorkspaceSection.numberCoding
+                        ]) ...[
+                          if ([
+                            _AdminWorkspaceSection.overview,
+                            _AdminWorkspaceSection.drivers,
+                            _AdminWorkspaceSection.announcements,
+                            _AdminWorkspaceSection.reports,
+                            _AdminWorkspaceSection.numberCoding
+                          ].contains(section))
+                            Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(16, 20, 16, 6),
+                                child: Text(
+                                    section == _AdminWorkspaceSection.overview
+                                        ? 'Operations'
+                                        : section ==
+                                                _AdminWorkspaceSection.drivers
+                                            ? 'Management'
+                                            : section ==
+                                                    _AdminWorkspaceSection
+                                                        .announcements
+                                                ? 'Communication'
+                                                : section ==
+                                                        _AdminWorkspaceSection
+                                                            .numberCoding
+                                                    ? 'Administration'
+                                                    : 'Reporting',
+                                    style: const TextStyle(
+                                        fontSize: 11,
+                                        color: AppColors.textSecondary))),
+                          Padding(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: ListTile(
+                                dense: true,
+                                minTileHeight: 44,
+                                shape: const RoundedRectangleBorder(
+                                    borderRadius: AppRadius.medium),
+                                selected: _selectedSection == section,
+                                selectedColor: AppColors.primaryDark,
+                                selectedTileColor: const Color(0xFFE1EEEB),
+                                title: Text(_sectionLabel(section),
+                                    style: TextStyle(
+                                        fontWeight: _selectedSection == section
+                                            ? FontWeight.w700
+                                            : FontWeight.w500)),
+                                onTap: () {
+                                  _selectSection(section);
+                                  if (drawer) Navigator.pop(context);
+                                },
+                              )),
+                        ],
+                      ])),
+                ])),
       );
 
   @override
@@ -610,7 +626,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis)))),
           ])),
-      Expanded(child: _buildWorkspaceContent()),
+      Expanded(child: AdminWorkspaceTheme(child: _buildWorkspaceContent())),
     ]);
     return Scaffold(
       drawer: desktop

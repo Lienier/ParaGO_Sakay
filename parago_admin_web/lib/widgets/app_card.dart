@@ -49,24 +49,28 @@ class AppPageHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    final heading = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: Theme.of(context).textTheme.headlineMedium),
-              if (subtitle != null) ...[
-                const SizedBox(height: AppSpacing.xs),
-                Text(subtitle!, style: Theme.of(context).textTheme.bodyMedium),
-              ],
-            ],
-          ),
-        ),
-        if (trailing != null) ...[const SizedBox(width: AppSpacing.md), trailing!],
+        Semantics(header: true, child: Text(title, style: Theme.of(context).textTheme.headlineMedium)),
+        if (subtitle != null) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Text(subtitle!, style: Theme.of(context).textTheme.bodyMedium),
+        ],
       ],
     );
+    return LayoutBuilder(builder: (context, constraints) {
+      if (constraints.maxWidth < 600) {
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          heading,
+          if (trailing != null) ...[const SizedBox(height: AppSpacing.md), trailing!],
+        ]);
+      }
+      return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(child: heading),
+        if (trailing != null) ...[const SizedBox(width: AppSpacing.md), trailing!],
+      ]);
+    });
   }
 }
 
