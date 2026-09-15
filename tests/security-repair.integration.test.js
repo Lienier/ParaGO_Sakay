@@ -21,6 +21,14 @@ email.sendAuthEmail = async (message) => {
   sent.push(message);
 };
 counters.reserveAuthEmail = async () => {};
+const firebase = require('../src/config/firebaseAdmin');
+let firebaseIdentity = null;
+firebase.isFirebaseAdminConfigured = () => firebaseIdentity !== null;
+firebase.getFirebaseAuth = () => ({
+  verifyIdToken: async () => firebaseIdentity,
+  getUser: async (uid) => ({ disabled: false, providerData: [{ providerId: 'google.com',
+    uid: uid === firebaseIdentity.uid ? firebaseIdentity.firebase.identities['google.com'][0] : 'different-user' }] }),
+});
 const auth = require('../src/services/auth.service');
 const User = require('../src/models/user');
 const AuthSession = require('../src/models/authSession');
@@ -44,6 +52,45 @@ before(async () => {
   await Promise.all(Object.values(mongoose.models).map((model) => model.init()));
 });
 after(async () => { await mongoose.disconnect(); if (repl) await repl.stop(); });
+
+test('Firebase Google accepts canonical and legacy identities without linking local accounts', async (t) => {
+  t.after(() => { firebaseIdentity = null; });
+  const account = await User.create({ email: 'google-legacy@example.test', fullName: 'Google legacy',
+    authProvider: 'google', providerId: 'firebase-legacy-uid', role: 'PASSENGER' });
+  firebaseIdentity = { uid: 'firebase-legacy-uid', email: account.email, email_verified: true,
+    firebase: { sign_in_provider: 'google.com', identities: { 'google.com': ['google-sub-123'] } } };
+  const first = await auth.firebaseGoogleLogin({ idToken: 'verified-test-token', role: 'PASSENGER' });
+  assert.equal(String(first.user._id), String(account._id));
+  assert.equal((await User.findById(account._id)).providerId, 'google-sub-123');
+  const again = await auth.firebaseGoogleLogin({ idToken: 'verified-test-token', role: 'PASSENGER' });
+  assert.equal(String(again.user._id), String(account._id));
+  firebaseIdentity.firebase.identities['google.com'] = ['different-google-sub'];
+  await assert.rejects(auth.firebaseGoogleLogin({ idToken: 'verified-test-token', role: 'PASSENGER' }), /existing sign-in/);
+  firebaseIdentity.email = passenger.email;
+  await assert.rejects(auth.firebaseGoogleLogin({ idToken: 'verified-test-token', role: 'PASSENGER' }), /existing sign-in/);
+  firebaseIdentity.firebase.identities = {};
+  await assert.rejects(auth.firebaseGoogleLogin({ idToken: 'verified-test-token', role: 'PASSENGER' }), /verified Google identity/);
+});
+
+test('direct Google login recovers a Firebase legacy account only with provider proof', async (t) => {
+  const config = require('../src/config/env');
+  const previous = [...config.googleClientIds];
+  config.googleClientIds.push('isolated-test-client');
+  t.after(() => { firebaseIdentity = null; config.googleClientIds.splice(0, config.googleClientIds.length, ...previous); });
+  const account = await User.create({ email: 'google-direct@example.test', fullName: 'Google direct',
+    authProvider: 'google', providerId: 'firebase-direct-uid', role: 'PASSENGER' });
+  firebaseIdentity = { uid: account.providerId, firebase: { identities: { 'google.com': ['direct-sub-123'] } } };
+  t.mock.method(require('google-auth-library').OAuth2Client.prototype, 'verifyIdToken', async () => ({
+    getPayload: () => ({ sub: 'wrong-sub', email: account.email, email_verified: true }),
+  }));
+  await assert.rejects(auth.socialLogin({ provider: 'google', token: 'test', role: 'PASSENGER' }), /existing sign-in/);
+  t.mock.restoreAll();
+  t.mock.method(require('google-auth-library').OAuth2Client.prototype, 'verifyIdToken', async () => ({
+    getPayload: () => ({ sub: 'direct-sub-123', email: account.email, email_verified: true }),
+  }));
+  const login = await auth.socialLogin({ provider: 'google', token: 'test', role: 'PASSENGER' });
+  assert.equal(String(login.user._id), String(account._id));
+});
 
 test('password-only admin login is blocked even when role is omitted', async () => {
   for (const role of [undefined, 'ADMIN']) {

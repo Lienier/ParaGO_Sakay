@@ -355,8 +355,15 @@ const verifyFirebaseGoogleToken = async (idToken) => {
         throw new ApiError(401, 'Firebase token is not a Google login session');
       }
 
+      const identities = decoded.firebase?.identities?.['google.com'];
+      if (!Array.isArray(identities) || identities.length !== 1 ||
+          typeof identities[0] !== 'string' || !identities[0].trim()) {
+        throw new ApiError(401, 'Firebase token has no verified Google identity');
+      }
+
       return {
-        providerId: decoded.uid,
+        providerId: identities[0],
+        firebaseUid: decoded.uid,
         email: decoded.email.toLowerCase(),
         fullName: decoded.name || decoded.email.split('@')[0],
       };
@@ -447,7 +454,34 @@ const issueSocialAccountSession = async ({ profile, provider, role }) => {
         }
         throw new ApiError(401, GENERIC_LOGIN_FAILURE_MESSAGE);
       }
-      throw new ApiError(409, 'Please use your existing sign-in method');
+      // Older Firebase logins stored the Firebase UID in providerId. Email
+      // locates a candidate only; verified provider ownership is required.
+      let ownsLegacyIdentity = false;
+      if (provider === 'google' && existingEmailUser.authProvider === 'google') {
+        if (profile.firebaseUid) {
+          ownsLegacyIdentity = existingEmailUser.providerId === profile.firebaseUid;
+        } else if (isFirebaseAdminConfigured() && existingEmailUser.providerId) {
+          try {
+            const record = await getFirebaseAuth().getUser(existingEmailUser.providerId);
+            ownsLegacyIdentity = !record.disabled && record.providerData.some(
+              (identity) => identity.providerId === 'google.com' && identity.uid === profile.providerId
+            );
+          } catch (error) {
+            if (error.code !== 'auth/user-not-found' && error.code !== 'auth/invalid-uid') {
+              throw new ApiError(503, 'Google sign-in is temporarily unavailable. Please try again');
+            }
+          }
+        }
+      }
+      if (!ownsLegacyIdentity) throw new ApiError(409, 'Please use your existing sign-in method');
+      ensureActiveUser(existingEmailUser);
+      user = await User.findOneAndUpdate({ _id: existingEmailUser._id, authProvider: 'google',
+        providerId: existingEmailUser.providerId, status: 'active' },
+      { $set: { providerId: profile.providerId } }, { new: true }).select('+authVersion');
+      // Another verified request may already have migrated this same account.
+      if (!user) user = await User.findOne({ _id: existingEmailUser._id, authProvider: 'google',
+        providerId: profile.providerId, status: 'active' }).select('+authVersion');
+      if (!user) throw new ApiError(409, 'Please retry Google sign-in');
     } else {
       user = await User.create({
         email: profile.email,
