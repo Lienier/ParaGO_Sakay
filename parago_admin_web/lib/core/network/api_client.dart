@@ -380,7 +380,10 @@ class ApiClient {
     try {
       final response = await _dio.request(
         requestPath,
-        options: Options(method: upperMethod),
+        options: Options(
+          method: upperMethod,
+          receiveTimeout: body is FormData ? const Duration(seconds: 90) : null,
+        ),
         queryParameters: queryParameters,
         data: body,
       );

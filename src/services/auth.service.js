@@ -236,6 +236,7 @@ const createUserByAdmin = async ({
   status = 'active',
   phone,
   session = null,
+  driverProfileId = null,
 }) => {
   const createOptions = session ? { session } : {};
   const normalizedEmail = normalizeEmail(email);
@@ -263,7 +264,7 @@ const createUserByAdmin = async ({
   if (normalizedRole === 'PASSENGER') {
     await Passenger.create([{ userId: user._id }], createOptions);
   } else if (normalizedRole === 'DRIVER') {
-    await Driver.create([{ userId: user._id }], createOptions);
+    await Driver.create([{ ...(driverProfileId ? { _id: driverProfileId } : {}), userId: user._id }], createOptions);
   } else if (normalizedRole === 'ADMIN') {
     await Admin.create([{ userId: user._id }], createOptions);
   }

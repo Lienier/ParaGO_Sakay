@@ -528,12 +528,6 @@ router.patch(
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'pickup request id');
     const request = await requirePickupRequest(req.params.id);
-    if (request.status === 'acknowledged') {
-      return ok(res, request, 'Pickup request already acknowledged');
-    }
-    if (!canDriverAcknowledgePickupRequest(request.status)) {
-      throw new ApiError(409, 'Only pending pickup requests can be acknowledged');
-    }
     const trip = await requireTrip(request.tripSessionId);
     if (trip.status !== 'active') {
       throw new ApiError(409, 'Trip is not active for acknowledgment');
@@ -553,6 +547,13 @@ router.patch(
       throw new ApiError(409, 'Trip driver missing');
     }
 
+    if (request.status === 'acknowledged') {
+      return ok(res, request, 'Pickup request already acknowledged');
+    }
+    if (!canDriverAcknowledgePickupRequest(request.status)) {
+      throw new ApiError(409, 'Only pending pickup requests can be acknowledged');
+    }
+    if (request.expiresAt <= new Date()) throw new ApiError(409, 'Pickup request has expired');
     const previousStatus = request.status;
     request.status = 'acknowledged';
     request.acknowledgedAt = new Date();
@@ -561,12 +562,16 @@ router.patch(
       request.acknowledgedBy = driver?._id || null;
     }
     const acknowledged = await PickupRequest.findOneAndUpdate(
-      { _id: request._id, status: 'pending' },
+      { _id: request._id, status: 'pending', expiresAt: { $gt: new Date() } },
       { $set: { status: 'acknowledged', acknowledgedAt: request.acknowledgedAt,
         ...(request.acknowledgedBy ? { acknowledgedBy: request.acknowledgedBy } : {}) } },
       { new: true }
     );
-    if (!acknowledged) throw new ApiError(409, 'Pickup request is no longer pending');
+    if (!acknowledged) {
+      const current = await PickupRequest.findById(request._id);
+      if (current?.status === 'acknowledged') return ok(res, current, 'Pickup request already acknowledged');
+      throw new ApiError(409, 'Pickup request is no longer pending');
+    }
     if (request.pickupType === 'terminal') {
       await syncTerminalQueueStatus(trip);
     }
@@ -583,7 +588,7 @@ router.patch(
         request: serializePickupRequest(request),
       },
       category: 'trip',
-    });
+    }).catch(() => console.error('[Pickup] Acknowledgement notification failed after save'));
     return ok(res, request, 'Pickup request acknowledged');
   })
 );

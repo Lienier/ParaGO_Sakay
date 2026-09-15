@@ -1,3 +1,4 @@
+import '../../services/passenger_booking_guard.dart';
 import '../../core/utils/automation_location.dart';
 import '../../widgets/legal_pages.dart';
 import 'dart:async';
@@ -931,7 +932,22 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   bool get _terminalBookingFull =>
       _bookingMode == _PassengerBookingMode.terminal && !_hasTerminalSeats;
 
+  bool _pickupSubmitting = false;
+
+  String? get _pickupBlockedReason => passengerBookingBlockedReason(
+      rides: _rides, requests: _requests);
+
   Future<void> _sendPickup() async {
+    if (_pickupSubmitting || _loading || _pickupBlockedReason != null) return;
+    setState(() => _pickupSubmitting = true);
+    try {
+      await _prepareAndSendPickup();
+    } finally {
+      if (mounted) setState(() => _pickupSubmitting = false);
+    }
+  }
+
+  Future<void> _prepareAndSendPickup() async {
     final selectedRoute = _selectedRoute;
     if (_selectedRouteId == null || selectedRoute == null) {
       setState(() =>
@@ -997,6 +1013,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       _bookingMode = payload.bookingMode;
     });
 
+    if (_pickupBlockedReason != null) {
+      setState(() => _statusMessage = _pickupBlockedReason);
+      return;
+    }
     final session = context.read<SessionController>();
     final passengerService = PassengerService(session.apiClient);
     await _runPassengerAction(
@@ -6803,9 +6823,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                               const SizedBox(height: 16),
                             ],
                             PassengerPrimaryButton(
-                              label: 'Request pickup',
+                              label: _pickupBlockedReason ?? (_pickupSubmitting ? 'Preparing pickup...' : 'Request pickup'),
                               icon: Icons.near_me_rounded,
-                              onPressed: _loading || _terminalBookingFull
+                              onPressed: _loading || _pickupSubmitting || _terminalBookingFull || _pickupBlockedReason != null
                                   ? null
                                   : _sendPickup,
                             ),

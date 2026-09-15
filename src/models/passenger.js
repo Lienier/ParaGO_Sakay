@@ -14,6 +14,7 @@ const passengerSchema = new Schema(
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
     phone: { type: String, trim: true },
     photoUrl: { type: String },
+    journeyRevision: { type: Number, default: 0 },
     emergencyContact: {
       name: { type: String, trim: true },
       phone: { type: String, trim: true },

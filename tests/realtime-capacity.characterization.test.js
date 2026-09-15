@@ -1459,7 +1459,7 @@ test('manual occupancy is authoritative, reaches final capacity, and can return 
   const added = await request(app)
     .patch(`/api/v1/trips/${fixture.trip._id}/occupancy`)
     .set(auth(fixture.tokens.driver))
-    .send({ manualOccupancyCount: 1 });
+    .send({ manualOccupancyCount: 1, expectedManualOccupancyCount: 0 });
   assert.equal(added.status, 200, added.text);
   assert.equal(added.body.data.manualOccupancyCount, 1);
   assert.equal(added.body.data.occupancyCount, 1);
@@ -1467,7 +1467,7 @@ test('manual occupancy is authoritative, reaches final capacity, and can return 
   const removed = await request(app)
     .patch(`/api/v1/trips/${fixture.trip._id}/occupancy`)
     .set(auth(fixture.tokens.driver))
-    .send({ manualOccupancyCount: 0 });
+    .send({ manualOccupancyCount: 0, expectedManualOccupancyCount: 1 });
   assert.equal(removed.status, 200, removed.text);
   assert.equal(removed.body.data.manualOccupancyCount, 0);
   assert.equal(removed.body.data.occupancyCount, 0);
@@ -1498,7 +1498,7 @@ test('manual occupancy preserves app-tracked rides and publishes an update to th
     const response = await request(app)
       .patch(`/api/v1/trips/${fixture.trip._id}/occupancy`)
       .set(auth(fixture.tokens.driver))
-      .send({ manualOccupancyCount: 1 });
+      .send({ manualOccupancyCount: 1, expectedManualOccupancyCount: 0 });
     assert.equal(response.status, 200, response.text);
   });
 
@@ -1859,4 +1859,87 @@ test('new driver login disconnects old socket without ending the trip', async ()
   await disconnected;
   assert.equal(currentSocket.connected, true);
   assert.deepEqual(await TripSession.findById(fixture.trip._id).lean(), beforeTrip);
+});
+
+
+test('manual adjustments serialize, deduplicate retries, and reject stale absolute writes', async () => {
+  const fixture = await seedCoreFixture();
+  await Jeepney.updateOne({ _id: fixture.jeepney._id }, { capacity: 20 });
+  const adjust = (delta, operationId) => request(app)
+    .patch(`/api/v1/trips/${fixture.trip._id}/occupancy`)
+    .set(auth(fixture.tokens.driver)).send({ delta, operationId });
+  const results = await Promise.all(Array.from({ length: 8 }, (_, i) => adjust(1, `manual-count-test-${i}`)));
+  for (const result of results) assert.equal(result.status, 200, result.text);
+  assert.equal((await TripSession.findById(fixture.trip._id)).manualOccupancyCount, 8);
+  const retries = await Promise.all(Array.from({ length: 4 }, () => adjust(1, 'manual-count-test-0')));
+  for (const result of retries) assert.equal(result.status, 200, result.text);
+  assert.equal((await TripSession.findById(fixture.trip._id)).manualOccupancyCount, 8);
+  assert.equal((await adjust(-1, 'manual-count-test-0')).status, 409);
+  const stale = await request(app).patch(`/api/v1/trips/${fixture.trip._id}/occupancy`)
+    .set(auth(fixture.tokens.driver)).send({ manualOccupancyCount: 1, expectedManualOccupancyCount: 0 });
+  assert.equal(stale.status, 409);
+  for (let i = 0; i < 8; i++) assert.equal((await adjust(-1, `manual-count-minus-${i}`)).status, 200);
+  assert.equal((await adjust(-1, 'manual-count-below-zero')).status, 409);
+  assert.equal((await TripSession.findById(fixture.trip._id)).occupancyCount, 0);
+});
+
+
+test('manual adjustments protect last seat, ownership, and concurrent first retries', async () => {
+  const fixture = await seedCoreFixture();
+  await Jeepney.updateOne({ _id: fixture.jeepney._id }, { capacity: 1 });
+  const adjust = (operationId, token = fixture.tokens.driver) => request(app)
+    .patch(`/api/v1/trips/${fixture.trip._id}/occupancy`).set(auth(token)).send({ delta: 1, operationId });
+  const duplicate = await Promise.all([adjust('same-first-operation'), adjust('same-first-operation')]);
+  for (const result of duplicate) assert.equal(result.status, 200, result.text);
+  assert.equal((await TripSession.findById(fixture.trip._id)).occupancyCount, 1);
+  assert.equal((await adjust('capacity-extra-operation')).status, 409);
+  assert.equal((await adjust('wrong-owner-operation', fixture.tokens.otherDriver)).status, 403);
+  assert.equal((await TripSession.findById(fixture.trip._id)).occupancyCount, 1);
+});
+
+
+test('one passenger cannot reserve competing trips; cancellation and expiry permit a new booking', async () => {
+  const f = await seedCoreFixture();
+  const { createTripRecord } = require('../src/services/tripLifecycle.service');
+  const book = trip => createTripRecord(PickupRequest, {
+    passengerId: f.passenger._id, tripSessionId: trip._id, routeId: trip.routeId,
+    pickupType: 'roadside', expiresAt: new Date(Date.now() + 600000),
+  }, { accepting: true });
+  const results = await Promise.allSettled([book(f.trip), book(f.otherTrip)]);
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  assert.equal(results.find(r => r.status === 'rejected').reason.statusCode, 409);
+  await PickupRequest.updateMany({ passengerId: f.passenger._id }, { status: 'cancelled' });
+  const second = await book(f.trip);
+  await PickupRequest.updateOne({ _id: second._id }, { expiresAt: new Date(Date.now() - 1000) });
+  await book(f.trip);
+});
+
+test('onboard passenger cannot book another jeep even when their booking is completed', async () => {
+  const f = await seedCoreFixture();
+  const pickup = await createPickupRequest({ fixture: f });
+  await request(app).post('/api/v1/boarding/validate').set(auth(f.tokens.passenger))
+    .send({ tripSessionId: String(f.trip._id), pickupRequestId: String(pickup._id), lat: routePath[0][1], lng: routePath[0][0] }).expect(200);
+  const { createTripRecord } = require('../src/services/tripLifecycle.service');
+  const book = () => createTripRecord(PickupRequest, {
+    passengerId: f.passenger._id, tripSessionId: f.otherTrip._id, routeId: f.otherRoute._id,
+    pickupType: 'roadside', expiresAt: new Date(Date.now() + 600000),
+  }, { accepting: true });
+  await assert.rejects(book(), /active ride/);
+  await RideSession.updateMany({ passengerId: f.passenger._id }, { status: 'completed' });
+  await book();
+});
+
+
+test('pickup toast acknowledgement enforces ownership before idempotent replies and rejects expiry', async () => {
+  const f = await seedCoreFixture();
+  const pickup = await createPickupRequest({ fixture: f, status: 'pending' });
+  const ack = token => request(app).patch(`/api/v1/pickup-requests/${pickup._id}/acknowledge`).set(auth(token));
+  await ack(f.tokens.otherDriver).expect(403);
+  const results = await Promise.all([ack(f.tokens.driver), ack(f.tokens.driver)]);
+  for (const result of results) assert.equal(result.status, 200, result.text);
+  await ack(f.tokens.otherDriver).expect(403);
+  assert.equal(await RideSession.countDocuments({ pickupRequestId: pickup._id }), 0);
+  const expired = await createPickupRequest({ fixture: f, status: 'pending' });
+  await PickupRequest.updateOne({ _id: expired._id }, { expiresAt: new Date(Date.now() - 1000) });
+  await request(app).patch(`/api/v1/pickup-requests/${expired._id}/acknowledge`).set(auth(f.tokens.driver)).expect(409);
 });

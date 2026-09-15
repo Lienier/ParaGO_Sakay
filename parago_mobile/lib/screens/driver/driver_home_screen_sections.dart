@@ -405,8 +405,6 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         _visibleInfoMessage(_driverOperationsBannerMessage(focusedTrip));
     final visibleStatusMessage = _visibleInfoMessage(_statusMessage);
     final displayedOnboard = _displayedOnboardCount(focusedTrip, focusedRides);
-    final focusedTripCountBusy =
-        focusedTrip != null && _isOccupancySyncInFlight(focusedTrip.id);
     final activeAlerts = focusedAlerts
         .where(
           (alert) =>
@@ -499,10 +497,10 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       routePath: routePath,
       markers: markers,
       activeDestinationAlerts: activeAlerts,
-      onIncrement: focusedTrip == null || focusedTripCountBusy
+      onIncrement: focusedTrip == null
           ? null
           : () => _changePassengerCount(focusedTrip.id, 1),
-      onDecrement: focusedTrip == null || focusedTripCountBusy
+      onDecrement: focusedTrip == null
           ? null
           : () => _changePassengerCount(focusedTrip.id, -1),
       onStartTrip: _loading ||
@@ -568,8 +566,6 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         final liveOperationsMessage =
             _visibleInfoMessage(_driverOperationsBannerMessage(liveTrip));
         final liveStatusMessage = _visibleInfoMessage(_statusMessage);
-        final liveTripCountBusy =
-            liveTrip != null && _isOccupancySyncInFlight(liveTrip.id);
 
         return _DrivePanelLiveData(
           trip: liveTrip,
@@ -591,10 +587,10 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               )
               .length,
           activeDestinationAlerts: liveActiveAlerts,
-          onIncrement: liveTrip == null || liveTripCountBusy
+          onIncrement: liveTrip == null
               ? null
               : () => _changePassengerCount(liveTrip.id, 1),
-          onDecrement: liveTrip == null || liveTripCountBusy
+          onDecrement: liveTrip == null
               ? null
               : () => _changePassengerCount(liveTrip.id, -1),
           onStartTrip: _loading ||
@@ -678,11 +674,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                               ? 'Passenger requested terminal boarding.'
                               : 'Passenger requested a roadside pickup.'),
               status: request.status,
-              primaryLabel: request.status == 'pending'
-                  ? request.pickupType == 'terminal'
-                      ? 'Load passenger'
-                      : 'Acknowledge'
-                  : null,
+              primaryLabel: request.status == 'pending' ? 'Acknowledge' : null,
               onPrimary: request.status == 'pending' &&
                       visiblePickupRequirementMessage == null
                   ? () => _acknowledgeRequest(focusedTrip, request.id)

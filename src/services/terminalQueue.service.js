@@ -205,6 +205,9 @@ async function transfer({ requestId, passengerId, offerId, accept }) {
     if (request.status !== 'transfer_offered' || request.expiresAt <= new Date()) throw new ApiError(409, 'Transfer offer is no longer available');
     if (!accept) request.status = 'cancelled';
     else {
+      const journey = require('./passengerJourney.service');
+      await journey.lockPassenger(passengerId, session);
+      await journey.assertCanBook(passengerId, session, request._id);
       const trip = await promote(request.routeId, session);
       if (!trip) throw new ApiError(409, 'No loading jeep is available. Your offer remains pending');
       await reserve(trip, session);

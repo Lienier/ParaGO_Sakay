@@ -13,262 +13,280 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
             final narrow = MediaQuery.sizeOf(context).width < 600;
             final form = Form(
               key: _createFormKey,
-              child: ListView(
+              child: SingleChildScrollView(
                 padding: const EdgeInsets.all(20),
                 keyboardDismissBehavior:
                     ScrollViewKeyboardDismissBehavior.onDrag,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Create driver account',
-                          style: Theme.of(context).textTheme.titleLarge,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Create driver account',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
                         ),
+                        IconButton(
+                          tooltip: 'Close',
+                          onPressed: dialogSaving
+                              ? null
+                              : () => Navigator.of(dialogContext).pop(),
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      'Fields marked * are required.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      decoration: const InputDecoration(labelText: 'Email *'),
+                      keyboardType: TextInputType.emailAddress,
+                      textInputAction: TextInputAction.next,
+                      onTapOutside: (_) =>
+                          FocusManager.instance.primaryFocus?.unfocus(),
+                      onSaved: (value) => _createEmail = value,
+                      validator: (value) =>
+                          _textOf(value).isEmpty ? 'Email is required' : null,
+                    ),
+                    TextFormField(
+                      decoration:
+                          const InputDecoration(labelText: 'Password *'),
+                      obscureText: true,
+                      textInputAction: TextInputAction.next,
+                      onTapOutside: (_) =>
+                          FocusManager.instance.primaryFocus?.unfocus(),
+                      onSaved: (value) => _createPassword = value,
+                      validator: (value) {
+                        if (_textOf(value).length < 8) {
+                          return 'Password must be at least 8 chars';
+                        }
+                        return null;
+                      },
+                    ),
+                    TextFormField(
+                      decoration:
+                          const InputDecoration(labelText: 'Full name *'),
+                      textInputAction: TextInputAction.next,
+                      onTapOutside: (_) =>
+                          FocusManager.instance.primaryFocus?.unfocus(),
+                      onSaved: (value) => _createFullName = value,
+                      validator: (value) => _textOf(value).isEmpty
+                          ? 'Full name is required'
+                          : null,
+                    ),
+                    TextFormField(
+                      controller: _createLicenseCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'License number *',
                       ),
-                      IconButton(
-                        tooltip: 'Close',
-                        onPressed: dialogSaving
+                      textInputAction: TextInputAction.next,
+                      onTapOutside: (_) =>
+                          FocusManager.instance.primaryFocus?.unfocus(),
+                      onSaved: (value) => _createLicense = value,
+                      validator: (value) => _textOf(value).isEmpty
+                          ? 'License number is required'
+                          : null,
+                    ),
+                    TextFormField(
+                      controller: _createEmployeeCtrl,
+                      decoration:
+                          const InputDecoration(labelText: 'Employee number'),
+                      textInputAction: TextInputAction.next,
+                      onTapOutside: (_) =>
+                          FocusManager.instance.primaryFocus?.unfocus(),
+                      onSaved: (value) => _createEmployee = value,
+                    ),
+                    TextFormField(
+                      controller: _createPhoneCtrl,
+                      decoration: const InputDecoration(labelText: 'Phone *'),
+                      keyboardType: TextInputType.phone,
+                      textInputAction: TextInputAction.next,
+                      onTapOutside: (_) =>
+                          FocusManager.instance.primaryFocus?.unfocus(),
+                      onSaved: (value) => _createPhone = value,
+                      validator: (value) =>
+                          _textOf(value).isEmpty ? 'Phone is required' : null,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Driver license',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Upload clear JPEG or PNG images up to 5 MB each.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 10),
+                    FormField<_SelectedLicenseImage>(
+                      initialValue: _createLicenseFront,
+                      validator: (value) => value == null
+                          ? 'License front image is required'
+                          : null,
+                      builder: (field) => _LicenseImageField(
+                        label: 'License front *',
+                        image: _createLicenseFront,
+                        errorText: field.errorText,
+                        onSelect: () async {
+                          final selected = await _pickLicenseImage();
+                          if (selected == null || !dialogContext.mounted) {
+                            return;
+                          }
+                          setDialogState(() {
+                            _createLicenseFront = selected;
+                            field.didChange(selected);
+                          });
+                        },
+                        onRemove: _createLicenseFront == null
                             ? null
-                            : () => Navigator.of(dialogContext).pop(),
-                        icon: const Icon(Icons.close),
+                            : () => setDialogState(() {
+                                  _createLicenseFront = null;
+                                  field.didChange(null);
+                                }),
                       ),
-                    ],
-                  ),
-                  Text(
-                    'Fields marked * are required.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    decoration: const InputDecoration(labelText: 'Email *'),
-                    keyboardType: TextInputType.emailAddress,
-                    textInputAction: TextInputAction.next,
-                    onTapOutside: (_) =>
-                        FocusManager.instance.primaryFocus?.unfocus(),
-                    onSaved: (value) => _createEmail = value,
-                    validator: (value) =>
-                        _textOf(value).isEmpty ? 'Email is required' : null,
-                  ),
-                  TextFormField(
-                    decoration: const InputDecoration(labelText: 'Password *'),
-                    obscureText: true,
-                    textInputAction: TextInputAction.next,
-                    onTapOutside: (_) =>
-                        FocusManager.instance.primaryFocus?.unfocus(),
-                    onSaved: (value) => _createPassword = value,
-                    validator: (value) {
-                      if (_textOf(value).length < 8) {
-                        return 'Password must be at least 8 chars';
-                      }
-                      return null;
-                    },
-                  ),
-                  TextFormField(
-                    decoration: const InputDecoration(labelText: 'Full name *'),
-                    textInputAction: TextInputAction.next,
-                    onTapOutside: (_) =>
-                        FocusManager.instance.primaryFocus?.unfocus(),
-                    onSaved: (value) => _createFullName = value,
-                    validator: (value) =>
-                        _textOf(value).isEmpty ? 'Full name is required' : null,
-                  ),
-                  TextFormField(
-                    controller: _createLicenseCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'License number *',
                     ),
-                    textInputAction: TextInputAction.next,
-                    onTapOutside: (_) =>
-                        FocusManager.instance.primaryFocus?.unfocus(),
-                    onSaved: (value) => _createLicense = value,
-                    validator: (value) => _textOf(value).isEmpty
-                        ? 'License number is required'
-                        : null,
-                  ),
-                  TextFormField(
-                    controller: _createEmployeeCtrl,
-                    decoration:
-                        const InputDecoration(labelText: 'Employee number'),
-                    textInputAction: TextInputAction.next,
-                    onTapOutside: (_) =>
-                        FocusManager.instance.primaryFocus?.unfocus(),
-                    onSaved: (value) => _createEmployee = value,
-                  ),
-                  TextFormField(
-                    controller: _createPhoneCtrl,
-                    decoration: const InputDecoration(labelText: 'Phone *'),
-                    keyboardType: TextInputType.phone,
-                    textInputAction: TextInputAction.next,
-                    onTapOutside: (_) =>
-                        FocusManager.instance.primaryFocus?.unfocus(),
-                    onSaved: (value) => _createPhone = value,
-                    validator: (value) =>
-                        _textOf(value).isEmpty ? 'Phone is required' : null,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Driver license',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Upload clear JPEG or PNG images up to 5 MB each.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 10),
-                  FormField<_SelectedLicenseImage>(
-                    validator: (value) => value == null
-                        ? 'License front image is required'
-                        : null,
-                    builder: (field) => _LicenseImageField(
-                      label: 'License front *',
-                      image: _createLicenseFront,
-                      errorText: field.errorText,
-                      onSelect: () async {
-                        final selected = await _pickLicenseImage();
-                        if (selected == null || !dialogContext.mounted) return;
-                        setDialogState(() {
-                          _createLicenseFront = selected;
-                          field.didChange(selected);
-                        });
-                      },
-                      onRemove: _createLicenseFront == null
-                          ? null
-                          : () => setDialogState(() {
-                                _createLicenseFront = null;
-                                field.didChange(null);
-                              }),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  FormField<_SelectedLicenseImage>(
-                    validator: (value) =>
-                        value == null ? 'License back image is required' : null,
-                    builder: (field) => _LicenseImageField(
-                      label: 'License back *',
-                      image: _createLicenseBack,
-                      errorText: field.errorText,
-                      onSelect: () async {
-                        final selected = await _pickLicenseImage();
-                        if (selected == null || !dialogContext.mounted) return;
-                        setDialogState(() {
-                          _createLicenseBack = selected;
-                          field.didChange(selected);
-                        });
-                      },
-                      onRemove: _createLicenseBack == null
-                          ? null
-                          : () => setDialogState(() {
-                                _createLicenseBack = null;
-                                field.didChange(null);
-                              }),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Jeepney details',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 10),
-                  TextFormField(
-                    controller: _createJeepneyPlateCtrl,
-                    decoration:
-                        const InputDecoration(labelText: 'Plate number *'),
-                    textInputAction: TextInputAction.next,
-                    onTapOutside: (_) =>
-                        FocusManager.instance.primaryFocus?.unfocus(),
-                    onSaved: (value) => _createJeepneyPlateNumber = value,
-                    validator: (value) => _textOf(value).isEmpty
-                        ? 'Plate number is required'
-                        : null,
-                  ),
-                  TextFormField(
-                    controller: _createJeepneyCapacityCtrl,
-                    decoration: const InputDecoration(labelText: 'Capacity *'),
-                    keyboardType: TextInputType.number,
-                    textInputAction: TextInputAction.done,
-                    onTapOutside: (_) =>
-                        FocusManager.instance.primaryFocus?.unfocus(),
-                    onSaved: (value) => _createJeepneyCapacity = value,
-                    validator: (value) {
-                      final parsed = int.tryParse(_textOf(value));
-                      if (parsed == null || parsed < 1) {
-                        return 'Capacity must be a positive whole number';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  DropdownButtonFormField<String?>(
-                    initialValue: _createRouteId,
-                    decoration:
-                        const InputDecoration(labelText: 'Assigned route'),
-                    items: [
-                      const DropdownMenuItem(
-                        value: null,
-                        child: Text('No route'),
+                    const SizedBox(height: 10),
+                    FormField<_SelectedLicenseImage>(
+                      initialValue: _createLicenseBack,
+                      validator: (value) => value == null
+                          ? 'License back image is required'
+                          : null,
+                      builder: (field) => _LicenseImageField(
+                        label: 'License back *',
+                        image: _createLicenseBack,
+                        errorText: field.errorText,
+                        onSelect: () async {
+                          final selected = await _pickLicenseImage();
+                          if (selected == null || !dialogContext.mounted) {
+                            return;
+                          }
+                          setDialogState(() {
+                            _createLicenseBack = selected;
+                            field.didChange(selected);
+                          });
+                        },
+                        onRemove: _createLicenseBack == null
+                            ? null
+                            : () => setDialogState(() {
+                                  _createLicenseBack = null;
+                                  field.didChange(null);
+                                }),
                       ),
-                      ..._routes.map(
-                        (route) => DropdownMenuItem(
-                          value: route.id,
-                          child: Text('${route.code} - ${route.name}'),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Jeepney details',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      controller: _createJeepneyPlateCtrl,
+                      decoration:
+                          const InputDecoration(labelText: 'Plate number *'),
+                      textInputAction: TextInputAction.next,
+                      onTapOutside: (_) =>
+                          FocusManager.instance.primaryFocus?.unfocus(),
+                      onSaved: (value) => _createJeepneyPlateNumber = value,
+                      validator: (value) => _textOf(value).isEmpty
+                          ? 'Plate number is required'
+                          : null,
+                    ),
+                    TextFormField(
+                      controller: _createJeepneyCapacityCtrl,
+                      decoration:
+                          const InputDecoration(labelText: 'Capacity *'),
+                      keyboardType: TextInputType.number,
+                      textInputAction: TextInputAction.done,
+                      onTapOutside: (_) =>
+                          FocusManager.instance.primaryFocus?.unfocus(),
+                      onSaved: (value) => _createJeepneyCapacity = value,
+                      validator: (value) {
+                        final parsed = int.tryParse(_textOf(value));
+                        if (parsed == null || parsed < 1) {
+                          return 'Capacity must be a positive whole number';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<String?>(
+                      initialValue: _createRouteId,
+                      decoration:
+                          const InputDecoration(labelText: 'Assigned route'),
+                      items: [
+                        const DropdownMenuItem(
+                          value: null,
+                          child: Text('No route'),
                         ),
-                      ),
-                    ],
-                    onChanged: (value) => _createRouteId = value,
-                  ),
-                  const SizedBox(height: 10),
-                  DropdownButtonFormField<String>(
-                    initialValue: _createStatus,
-                    decoration:
-                        const InputDecoration(labelText: 'Account status'),
-                    items: const [
-                      DropdownMenuItem(value: 'active', child: Text('Active')),
-                      DropdownMenuItem(
-                        value: 'suspended',
-                        child: Text('Suspended'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'deactivated',
-                        child: Text('Deactivated'),
-                      ),
-                    ],
-                    onChanged: (value) => _createStatus = value ?? 'active',
-                  ),
-                  const SizedBox(height: 10),
-                  FilledButton(
-                    onPressed: dialogSaving
-                        ? null
-                        : () async {
-                            if (!(_createFormKey.currentState?.validate() ??
-                                false)) {
-                              return;
-                            }
-                            setDialogState(() => dialogSaving = true);
-                            await _createDriver(dialogContext);
-                            if (dialogContext.mounted) {
-                              setDialogState(() => dialogSaving = false);
-                            }
-                          },
-                    child: dialogSaving
-                        ? const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              SizedBox(
-                                width: 18,
-                                height: 18,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2),
-                              ),
-                              SizedBox(width: 10),
-                              Text('Uploading...'),
-                            ],
-                          )
-                        : const Text('Create driver'),
-                  ),
-                  const SizedBox(height: 12),
-                ],
+                        ..._routes.map(
+                          (route) => DropdownMenuItem(
+                            value: route.id,
+                            child: Text('${route.code} - ${route.name}'),
+                          ),
+                        ),
+                      ],
+                      onChanged: (value) => _createRouteId = value,
+                    ),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<String>(
+                      initialValue: _createStatus,
+                      decoration:
+                          const InputDecoration(labelText: 'Account status'),
+                      items: const [
+                        DropdownMenuItem(
+                            value: 'active', child: Text('Active')),
+                        DropdownMenuItem(
+                          value: 'suspended',
+                          child: Text('Suspended'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'deactivated',
+                          child: Text('Deactivated'),
+                        ),
+                      ],
+                      onChanged: (value) => _createStatus = value ?? 'active',
+                    ),
+                    const SizedBox(height: 10),
+                    FilledButton(
+                      onPressed: dialogSaving
+                          ? null
+                          : () async {
+                              if (!(_createFormKey.currentState?.validate() ??
+                                  false)) {
+                                return;
+                              }
+                              setDialogState(() => dialogSaving = true);
+                              try {
+                                await _createDriver(dialogContext);
+                              } finally {
+                                if (dialogContext.mounted) {
+                                  setDialogState(() => dialogSaving = false);
+                                }
+                              }
+                            },
+                      child: dialogSaving
+                          ? const Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                                SizedBox(width: 10),
+                                Text('Uploading...'),
+                              ],
+                            )
+                          : const Text('Create driver'),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                ),
               ),
             );
             if (narrow) {
@@ -502,6 +520,12 @@ class _LicenseImageField extends StatelessWidget {
                     width: double.infinity,
                     height: 180,
                     fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => const SizedBox(
+                      height: 80,
+                      child: Center(
+                          child: Text(
+                              'Image cannot be previewed. Replace it with a valid JPEG or PNG.')),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 8),

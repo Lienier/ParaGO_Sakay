@@ -330,6 +330,7 @@ class _AdminDriverManagementScreenState
   }
 
   Future<void> _createDriver(BuildContext sheetContext) async {
+    if (_saving) return;
     if (!(_createFormKey.currentState?.validate() ?? false)) return;
     _createFormKey.currentState?.save();
 

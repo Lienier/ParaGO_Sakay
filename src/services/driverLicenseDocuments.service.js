@@ -35,17 +35,25 @@ const normalizeImage = async (buffer) =>
 
 const uploadLicenseDocument = async ({ driverId, side, file }) => {
   if (!file?.buffer) throw new ApiError(400, `Driver license ${side} image is required`);
-  const body = await normalizeImage(file.buffer);
+  const bucket = requireBucket();
+  let body;
+  try {
+    body = await normalizeImage(file.buffer);
+  } catch (_) {
+    throw new ApiError(400, `Driver license ${side} image could not be read. Choose a valid JPEG or PNG image`);
+  }
   const objectKey = `drivers/${driverId}/license/${side}-${crypto.randomUUID()}.jpg`;
   await getS3Client().send(
     new PutObjectCommand({
-      Bucket: requireBucket(),
+      Bucket: bucket,
       Key: objectKey,
       Body: body,
       ContentType: 'image/jpeg',
       ServerSideEncryption: 'AES256',
     })
-  );
+  ).catch(() => {
+    throw new ApiError(503, 'Driver document storage is unavailable. Please try again later');
+  });
   return {
     objectKey,
     mimeType: 'image/jpeg',

@@ -81,12 +81,13 @@ class TripService {
 
   Future<TripSession> updateTripManualOccupancy(
     String tripId,
-    int manualOccupancyCount,
+    int delta,
+    String operationId,
   ) async {
     final response = await _client.request(
       method: 'PATCH',
       path: '/trips/$tripId/occupancy',
-      body: {'manualOccupancyCount': manualOccupancyCount},
+      body: {'delta': delta, 'operationId': operationId},
     );
     return TripSession.fromJson(response['data'] as Map<String, dynamic>);
   }

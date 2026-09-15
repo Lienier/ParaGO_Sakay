@@ -1,3 +1,4 @@
+import '../../widgets/driver_action_toast.dart';
 import 'dart:async';
 import '../../widgets/terminal_loading_clock.dart';
 import 'dart:math' as math;
@@ -31,6 +32,7 @@ import '../../services/realtime_socket_service.dart';
 import '../../services/session_controller.dart';
 import '../../services/stop_alert_service.dart';
 import '../../services/trip_service.dart';
+import '../../services/occupancy_adjustment_queue.dart';
 import '../../widgets/status_badge.dart';
 import '../../widgets/confirm_unload_dialog.dart';
 import '../../widgets/announcement_card.dart';
@@ -89,7 +91,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Map<String, List<PickupRequestModel>> _tripRequests = {};
   Map<String, List<StopAlertModel>> _tripAlerts = {};
   Map<String, List<RideSessionModel>> _tripRides = {};
-  Set<String> _occupancySyncTripIds = <String>{};
+  bool _driverActionBusy = false;
+  final _countQueues = <String, OccupancyAdjustmentQueue>{};
   Map<String, dynamic> _driverProfile = {};
   String? _assignedRouteId;
   String? _focusedTripId;
@@ -669,25 +672,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return;
     }
 
-    final action = event['action']?.toString().toLowerCase() ?? '';
-    final alreadyKnown = (_tripRequests[request.tripSessionId] ?? const [])
-        .any((item) => item.id == request.id);
-
     setState(() {
       _tripRequests = _upsertTripRequests(_tripRequests, request);
     });
-
-    if (action == 'created' && !alreadyKnown) {
-      final messenger = ScaffoldMessenger.of(context);
-      messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            'New pickup request: ${request.stopRef ?? 'Selected stop'}',
-          ),
-        ),
-      );
-    }
   }
 
   NotificationModel? _extractRealtimeNotification(
@@ -801,7 +788,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
       if (!mounted || loadGeneration != _loadGeneration) return;
       setState(() {
-        _trips = trips;
+        _trips = trips.map((incoming) {
+          final current = _trips.where((t) => t.id == incoming.id).firstOrNull;
+          return current != null && current.isNewerThan(incoming)
+              ? current
+              : incoming;
+        }).toList(growable: false);
         _notifications = notifications;
         _routes = routes;
         _cachedRoutePreviewPoints = cachedRoutePreviewPoints;
@@ -1377,6 +1369,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (!mounted) {
       return;
     }
+    if (notification.type == 'pickup_request_created') return;
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
 
@@ -1420,25 +1413,25 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     required Future<dynamic> Function() action,
     bool reloadAfter = true,
   }) async {
-    await ActionFeedback.run<void>(
-      context: context,
-      loadingMessage: loadingMessage,
-      successMessage: successMessage,
-      action: () async {
-        await action();
-        if (reloadAfter) {
-          await _load();
-        }
-      },
-      onSuccess: (_) async {
-        if (!mounted) return;
-        setState(() => _statusMessage = successMessage);
-      },
-      onError: (error) async {
-        if (!mounted) return;
-        setState(() => _statusMessage = ActionFeedback.messageOf(error));
-      },
-    );
+    if (_driverActionBusy || !mounted) return;
+    _driverActionBusy = true;
+    setState(() => _statusMessage = loadingMessage);
+    try {
+      await action();
+      if (mounted && reloadAfter) await _load(silent: true);
+      if (!mounted) return;
+      setState(() => _statusMessage = successMessage);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(successMessage)));
+    } catch (error) {
+      if (!mounted) return;
+      final message = ActionFeedback.messageOf(error);
+      setState(() => _statusMessage = message);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      _driverActionBusy = false;
+    }
   }
 
   Future<void> _startTrip(TripSession? trip) async {
@@ -2683,13 +2676,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     });
   }
 
-  bool _isOccupancySyncInFlight(String tripId) {
-    return _occupancySyncTripIds.contains(tripId);
-  }
-
   void _replaceTripSnapshot(TripSession updatedTrip) {
     _trips = _trips
-        .map((trip) => trip.id == updatedTrip.id ? updatedTrip : trip)
+        .map((trip) =>
+            trip.id == updatedTrip.id && !trip.isNewerThan(updatedTrip)
+                ? updatedTrip
+                : trip)
         .toList(growable: false);
   }
 
@@ -2699,64 +2691,38 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   Future<void> _changePassengerCount(String tripId, int delta) async {
-    final trip = _trips
-        .cast<TripSession?>()
-        .firstWhere((item) => item?.id == tripId, orElse: () => _focusedTrip);
-    if (trip == null || delta == 0 || _isOccupancySyncInFlight(tripId)) {
+    if (!mounted || ![-1, 1].contains(delta)) return;
+    final queue =
+        _countQueues.putIfAbsent(tripId, OccupancyAdjustmentQueue.new);
+    if (queue.pending >= 30) {
+      setState(() => _statusMessage = 'Please wait for pending count changes.');
       return;
     }
-
-    final rides = _tripRides[tripId] ?? const <RideSessionModel>[];
-    final currentManualCount = _manualOnboardCount(trip);
-    final nextManualCount = math.max(0, currentManualCount + delta);
-    if (nextManualCount == currentManualCount) {
-      return;
-    }
-
-    // The trip snapshot is the authoritative total. Derive the app-tracked
-    // component from it instead of trusting a possibly stale ride hydration.
-    // This prevents the final available seat from being blocked locally.
-    final appOnboardCount = trip.occupancyCount == null
-        ? rides.where((ride) => ride.status == 'onboard').length
-        : math.max(0, trip.occupancyCount! - currentManualCount);
-    final nextCount = appOnboardCount + nextManualCount;
-    final seatCapacity = trip.jeepneyCapacity;
-    if (delta > 0 &&
-        seatCapacity != null &&
-        seatCapacity > 0 &&
-        nextCount > seatCapacity) {
-      final message = 'Jeep capacity is $seatCapacity. Increase blocked.';
-      if (!mounted) {
-        return;
-      }
-      setState(() => _statusMessage = message);
-      final messenger = ScaffoldMessenger.maybeOf(context);
-      messenger?.hideCurrentSnackBar();
-      messenger?.showSnackBar(SnackBar(content: Text(message)));
-      return;
-    }
-
-    if (!mounted) {
-      return;
-    }
-
     final session = context.read<SessionController>();
     final tripService = TripService(session.apiClient);
 
     setState(() {
-      _occupancySyncTripIds = {..._occupancySyncTripIds, tripId};
       _statusMessage = 'Updating passenger count...';
     });
 
     try {
-      final updatedTrip = await tripService.updateTripManualOccupancy(
-        tripId,
-        nextManualCount,
-      );
+      await queue.add((operationId) async {
+        if (!mounted) return;
+        // Invalidate GETs started before this mutation, including their hydration.
+        _loadGeneration++;
+        final updatedTrip = await tripService.updateTripManualOccupancy(
+          tripId,
+          delta,
+          operationId,
+        );
+        if (!mounted) return;
+        _loadGeneration++;
+        setState(() => _replaceTripSnapshot(updatedTrip));
+      });
+      final updatedTrip = _trips.firstWhere((trip) => trip.id == tripId);
       if (!mounted) {
         return;
       }
-      final syncIds = {..._occupancySyncTripIds}..remove(tripId);
       final updatedCapacity = updatedTrip.jeepneyCapacity;
       final autoPaused = updatedTrip.acceptRequests == false &&
           updatedCapacity != null &&
@@ -2768,17 +2734,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           : 'Walk-in passenger count updated.';
       setState(() {
         _replaceTripSnapshot(updatedTrip);
-        _occupancySyncTripIds = syncIds;
-        _statusMessage = successMessage;
+        _statusMessage = queue.pending > 0
+            ? 'Updating passenger count (${queue.pending} pending)...'
+            : successMessage;
       });
     } catch (error) {
       if (!mounted) {
         return;
       }
-      final syncIds = {..._occupancySyncTripIds}..remove(tripId);
-      final message = ActionFeedback.messageOf(error);
+      unawaited(_load(silent: true));
+      final message =
+          '${ActionFeedback.messageOf(error)} Check the refreshed count before retrying.';
       setState(() {
-        _occupancySyncTripIds = syncIds;
         _statusMessage = message;
       });
       final messenger = ScaffoldMessenger.maybeOf(context);
@@ -2813,6 +2780,64 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return trip!.occupancyCount!;
     }
     return rides.where((ride) => ride.status == 'onboard').length;
+  }
+
+  List<DriverToastAction> _driverToastActions() {
+    final actions = <DriverToastAction>[];
+    for (final trip in _trips.where((t) => t.status == 'active')) {
+      for (final request in _tripRequests[trip.id] ?? <PickupRequestModel>[]) {
+        if (request.status != 'pending' ||
+            !(DateTime.tryParse(request.expiresAt ?? '')
+                    ?.isAfter(DateTime.now()) ??
+                false)) {
+          continue;
+        }
+        actions.add(DriverToastAction(
+          id: 'pickup:${request.id}',
+          title: 'Passenger pickup request',
+          detail:
+              '${request.stopRef ?? "Selected stop"} | Booking ${ParagoFormat.shortId(request.id)}',
+          label: 'Acknowledge',
+          run: () async {
+            _loadGeneration++;
+            final updated =
+                await DriverService(context.read<SessionController>().apiClient)
+                    .acknowledgeRequest(request.id);
+            if (!mounted) return;
+            _loadGeneration++;
+            setState(() {
+              _tripRequests = _upsertTripRequests(_tripRequests, updated);
+            });
+          },
+        ));
+      }
+      for (final ride in _tripRides[trip.id] ?? <RideSessionModel>[]) {
+        if (ride.status != 'onboard') continue;
+        final hasPara = (_tripAlerts[trip.id] ?? <StopAlertModel>[]).any((a) =>
+            a.rideSessionId == ride.id &&
+            _activeAlertStatuses.contains(a.status));
+        actions.add(DriverToastAction(
+          id: '${hasPara ? "para" : "ride"}:${ride.id}',
+          title: hasPara ? 'Passenger para alert' : 'Passenger onboard',
+          detail:
+              '${ride.passengerLabel} | ${ride.bookingLabel} | ${ride.destinationStopRef ?? "Saved destination"}',
+          label: 'Mark unloaded',
+          run: () => _completeRideDestination(ride),
+        ));
+      }
+      if (trip.operatingMode == 'terminal_queue' &&
+          trip.terminalQueueStatus == 'loading') {
+        actions.add(DriverToastAction(
+            id: 'depart:${trip.id}',
+            title: trip.terminalSummary?['departureRequired'] == true
+                ? 'Terminal departure required'
+                : 'Loading at terminal',
+            detail: 'Onboard passengers remain on this trip.',
+            label: 'Depart terminal',
+            run: () => _toggleAccept(trip, false)));
+      }
+    }
+    return actions;
   }
 
   @override
@@ -2881,21 +2906,28 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           return Stack(
             children: [
               Positioned.fill(child: bodyContent),
-              if (_tabIndex == 0 && _announcements.isNotEmpty)
-                Positioned(
-                  top: 10,
-                  left: 14,
-                  right: 14,
-                  child: SafeArea(
+              Positioned(
+                top: 8,
+                left: 12,
+                right: 12,
+                child: SafeArea(
                     bottom: false,
-                    child: AnnouncementCard(
-                      announcement: _announcements.first,
-                      compact: true,
-                      onDismiss: () =>
-                          _dismissAnnouncement(_announcements.first),
-                    ),
-                  ),
-                ),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                          maxHeight: constraints.maxHeight * 0.55),
+                      child: SingleChildScrollView(
+                          child:
+                              Column(mainAxisSize: MainAxisSize.min, children: [
+                        DriverActionToast(actions: _driverToastActions()),
+                        if (_tabIndex == 0 && _announcements.isNotEmpty)
+                          AnnouncementCard(
+                              announcement: _announcements.first,
+                              compact: true,
+                              onDismiss: () =>
+                                  _dismissAnnouncement(_announcements.first)),
+                      ])),
+                    )),
+              ),
               if (_loading)
                 const Positioned(
                   top: 0,

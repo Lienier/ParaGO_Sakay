@@ -411,39 +411,41 @@ router.post(
       throw new ApiError(409, 'Jeepney plate number already exists');
     }
 
+    const preparedDriverId = new mongoose.Types.ObjectId();
     const uploadedDocuments = [];
     const session = await mongoose.startSession();
     let user;
     let driver;
     try {
-      session.startTransaction();
-      user = await createUserByAdmin({
-        email: body.email,
-        password: body.password,
-        fullName: body.fullName,
-        phone: body.phone,
-        role: 'DRIVER',
-        status: accountStatus,
-        session,
+      const front = await uploadLicenseDocument({
+        driverId: preparedDriverId,
+        side: 'front',
+        file: frontFile,
+      });
+      uploadedDocuments.push(front);
+      const back = await uploadLicenseDocument({
+        driverId: preparedDriverId,
+        side: 'back',
+        file: backFile,
+      });
+      uploadedDocuments.push(back);
+
+      await session.withTransaction(async () => {
+        user = await createUserByAdmin({
+          email: body.email,
+          password: body.password,
+          fullName: body.fullName,
+          phone: body.phone,
+          role: 'DRIVER',
+          driverProfileId: preparedDriverId,
+          status: accountStatus,
+          session,
       });
 
       driver = await Driver.findOne({ userId: user._id })
         .select('+licenseDocuments')
         .session(session);
       if (!driver) throw new ApiError(500, 'Driver profile could not be created');
-
-      const front = await uploadLicenseDocument({
-        driverId: driver._id,
-        side: 'front',
-        file: frontFile,
-      });
-      uploadedDocuments.push(front);
-      const back = await uploadLicenseDocument({
-        driverId: driver._id,
-        side: 'back',
-        file: backFile,
-      });
-      uploadedDocuments.push(back);
 
       driver.licenseNumber = String(body.licenseNumber).trim();
       driver.employeeNumber = String(body.employeeNumber || '').trim();
@@ -461,10 +463,15 @@ router.post(
       );
       driver.assignedJeepneyId = jeepney._id;
       await driver.save({ session });
-      await session.commitTransaction();
+      });
     } catch (error) {
       if (session.inTransaction()) await session.abortTransaction();
-      await Promise.allSettled(uploadedDocuments.map(deleteLicenseDocument));
+      // If commit acknowledgement was lost, never delete documents belonging
+      // to a successfully created driver. Preserve uploads if DB state is unknown.
+      const persisted = await Driver.exists({ _id: preparedDriverId }).catch(() => undefined);
+      if (persisted === null) await Promise.allSettled(uploadedDocuments.map(deleteLicenseDocument));
+      if (persisted !== null) throw new ApiError(503, 'Could not confirm creation. Refresh the driver list before trying again');
+      if (error.code === 11000) throw new ApiError(409, 'Driver email or jeepney plate number already exists');
       throw error;
     } finally {
       await session.endSession();

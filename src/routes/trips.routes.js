@@ -475,8 +475,16 @@ router.patch(
       throw new ApiError(409, 'Only active trips can update occupancy');
     }
 
-    const requestedManualOccupancy = Number(req.body?.manualOccupancyCount);
-    if (!Number.isInteger(requestedManualOccupancy) || requestedManualOccupancy < 0) {
+    const delta = req.body?.delta;
+    const operationId = req.body?.operationId;
+    const isAdjustment = delta !== undefined;
+    let requestedManualOccupancy = Number(req.body?.manualOccupancyCount);
+    if (isAdjustment && (![-1, 1].includes(delta) ||
+        typeof operationId !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(operationId) ||
+        req.body.manualOccupancyCount !== undefined)) {
+      throw new ApiError(400, 'A +1 or -1 delta and a unique operationId are required');
+    }
+    if (!isAdjustment && (!Number.isInteger(requestedManualOccupancy) || requestedManualOccupancy < 0)) {
       throw new ApiError(
         400,
         'manualOccupancyCount must be a whole number at or above zero'
@@ -494,6 +502,24 @@ router.patch(
         }).session(occupancySession);
         if (!freshTrip) {
           throw new ApiError(409, 'Only active trips can update occupancy');
+        }
+        if (String(freshTrip.driverId) !== String(trip.driverId)) {
+          throw new ApiError(403, 'Driver is no longer assigned to this trip');
+        }
+        const Operation = require('../models/occupancyOperation');
+        if (isAdjustment) {
+          const receipt = await Operation.findById(operationId).session(occupancySession);
+          if (receipt) {
+            if (String(receipt.tripId) !== String(trip._id) ||
+                String(receipt.driverId) !== String(freshTrip.driverId) || receipt.delta !== delta) {
+              throw new ApiError(409, 'Operation ID was already used for another adjustment');
+            }
+            return;
+          }
+          requestedManualOccupancy = (freshTrip.manualOccupancyCount || 0) + delta;
+          if (requestedManualOccupancy < 0) throw new ApiError(409, 'Manual passenger count is already zero');
+        } else if (req.body.expectedManualOccupancyCount !== freshTrip.manualOccupancyCount) {
+          throw new ApiError(409, 'Passenger count changed; refresh before updating');
         }
 
         const jeepney = await Jeepney.findById(freshTrip.jeepneyId)
@@ -532,6 +558,9 @@ router.patch(
           freshTrip.acceptRequests = false;
         }
         await freshTrip.save({ session: occupancySession });
+        if (isAdjustment) await Operation.create([{
+          _id: operationId, tripId: freshTrip._id, driverId: freshTrip.driverId, delta,
+        }], { session: occupancySession });
       });
     } finally {
       await occupancySession.endSession();

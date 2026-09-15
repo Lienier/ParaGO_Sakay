@@ -112,6 +112,7 @@ const completeBoardingForPickupRequest = async ({
     await session.withTransaction(async () => {
       created = false;
       if (pickupType === 'terminal') await require('./terminalQueue.service').lock(trip.routeId, session);
+      await require('./passengerJourney.service').lockPassenger(passengerId, session);
       const exactExisting = await RideSession.findOne({
         pickupRequestId: pickupRequest._id,
       }).session(session);
@@ -122,7 +123,6 @@ const completeBoardingForPickupRequest = async ({
 
       const activeExisting = await RideSession.findOne({
         passengerId,
-        tripSessionId: trip._id,
         status: { $in: ['waiting', 'onboard'] },
       }).session(session);
       if (activeExisting) {
@@ -132,7 +132,7 @@ const completeBoardingForPickupRequest = async ({
         }
         throw new ApiError(
           409,
-          'Passenger already has an active ride session for this trip'
+          'Passenger already has an active ride session'
         );
       }
 

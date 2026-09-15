@@ -21,6 +21,11 @@ async function createTripRecord(Model, document, { accepting = false } = {}) {
   try {
     await session.withTransaction(async () => {
       if (terminal) await queue.lock(document.routeId, session);
+      if (accepting) {
+        const journey = require('./passengerJourney.service');
+        await journey.lockPassenger(document.passengerId, session);
+        await journey.assertCanBook(document.passengerId, session);
+      }
       const trip = await Trip.findOneAndUpdate({ _id: document.tripSessionId, status: 'active',
         ...(accepting ? { acceptRequests: true } : {}) },
       { $inc: { lifecycleRevision: 1 } }, { new: true, session });

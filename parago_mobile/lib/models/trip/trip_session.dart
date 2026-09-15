@@ -21,6 +21,7 @@ class TripSession {
     this.acceptRequests,
     this.inactivityPausedAt,
     this.terminalSummary,
+    this.snapshotUpdatedAt,
     this.manualOccupancyCount,
     this.occupancyCount,
     this.active,
@@ -52,6 +53,11 @@ class TripSession {
   final bool? acceptRequests;
   final String? inactivityPausedAt;
   final Map<String, dynamic>? terminalSummary;
+  final DateTime? snapshotUpdatedAt;
+  bool isNewerThan(TripSession other) =>
+      snapshotUpdatedAt != null &&
+      (other.snapshotUpdatedAt == null ||
+          snapshotUpdatedAt!.isAfter(other.snapshotUpdatedAt!));
   final int? manualOccupancyCount;
   final int? occupancyCount;
   final bool? active;
@@ -96,6 +102,7 @@ class TripSession {
       terminalSummary: json['terminalSummary'] is Map
           ? Map<String, dynamic>.from(json['terminalSummary'] as Map)
           : null,
+      snapshotUpdatedAt: DateTime.tryParse(json['updatedAt']?.toString() ?? ''),
       manualOccupancyCount: _toInt(json['manualOccupancyCount']),
       occupancyCount: _toInt(json['occupancyCount']),
       active: json['active'] as bool?,
@@ -177,6 +184,7 @@ class TripSession {
       acceptRequests: acceptRequests ?? this.acceptRequests,
       inactivityPausedAt: inactivityPausedAt,
       terminalSummary: terminalSummary,
+      snapshotUpdatedAt: snapshotUpdatedAt,
       manualOccupancyCount: manualOccupancyCount ?? this.manualOccupancyCount,
       occupancyCount: occupancyCount ?? this.occupancyCount,
       active: active ?? this.active,
