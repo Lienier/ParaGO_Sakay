@@ -52,6 +52,9 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // Keep v1 alongside v2 so direct-distributed APKs install on
+            // older Android package installers as well.
+            signingConfig?.enableV1Signing = true
         }
     }
 }
