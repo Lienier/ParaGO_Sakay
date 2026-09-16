@@ -4,6 +4,74 @@ import 'package:parago_mobile/services/occupancy_adjustment_queue.dart';
 import 'package:parago_mobile/models/trip/trip_session.dart';
 
 void main() {
+  testWidgets('rapid taps display immediately and debounce ordered persistence',
+      (tester) async {
+    final queue =
+        OccupancyAdjustmentQueue(debounce: const Duration(milliseconds: 300));
+    final sent = <String>[];
+    final gate = Completer<void>();
+    Future<void> send(String id) async {
+      sent.add(id);
+      await gate.future;
+    }
+
+    final first = queue.add(send, delta: 1, manualCount: 2);
+    expect(queue.projectedManualCount, 3);
+    await tester.pump(const Duration(milliseconds: 200));
+    final second = queue.add(send, delta: 1, manualCount: 2);
+    expect(queue.projectedManualCount, 4);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(sent, isEmpty);
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(sent.length, 1);
+    // A server echo must not be added again to the optimistic total.
+    final third = queue.add(send, delta: -1, manualCount: 3);
+    expect(queue.projectedManualCount, 3);
+    gate.complete();
+    await tester.pump(const Duration(milliseconds: 300));
+    await Future.wait([first, second, third]);
+    expect(sent.toSet().length, 3);
+    expect(queue.pending, 0);
+    expect(queue.projectedManualCount, isNull);
+  });
+
+  testWidgets('continuous tapping flushes within one second', (tester) async {
+    final queue =
+        OccupancyAdjustmentQueue(debounce: const Duration(milliseconds: 300));
+    var sent = 0;
+    final futures = <Future<void>>[];
+    for (var i = 0; i < 5; i++) {
+      futures.add(queue.add((_) async {
+        sent++;
+      }, delta: 1, manualCount: 0));
+      await tester.pump(const Duration(milliseconds: 200));
+    }
+    await Future.wait(futures);
+    expect(sent, 5);
+    expect(queue.projectedManualCount, isNull);
+  });
+
+  testWidgets('failed save clears optimistic count and cancels pending taps',
+      (tester) async {
+    final queue =
+        OccupancyAdjustmentQueue(debounce: const Duration(milliseconds: 300));
+    final first = queue.add((_) async => throw StateError('offline'),
+        delta: 1, manualCount: 2);
+    var sent = false;
+    final second = queue.add((_) async {
+      sent = true;
+    }, delta: 1, manualCount: 2);
+    final checks = Future.wait([
+      expectLater(first, throwsStateError),
+      expectLater(second, throwsStateError)
+    ]);
+    expect(queue.projectedManualCount, 4);
+    await tester.pump(const Duration(milliseconds: 300));
+    await checks;
+    expect(sent, false);
+    expect(queue.projectedManualCount, isNull);
+  });
+
   test('newer occupancy snapshot survives delayed reads and local copies', () {
     TripSession snapshot(String time, int count) => TripSession.fromJson({
           '_id': 'trip',

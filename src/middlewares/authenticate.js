@@ -17,11 +17,15 @@ const authenticate = async (req, res, next) => {
     const { user } = await require('../services/sessionSecurity.service').requireSession(payload);
     req.user = user;
     req.authSessionId = payload.sid;
-    next();
   } catch (_error) {
     if (_error.code === 'SESSION_REPLACED') return next(_error);
     next(new ApiError(401, 'Invalid or expired token'));
+    return;
   }
+  try {
+    await require('../services/mobileUpdates.service').enforceNewJourney(req);
+    next();
+  } catch (error) { next(error); }
 };
 
 module.exports = authenticate;

@@ -17,6 +17,7 @@ const reportRoutes = require('../routes/reports.routes');
 const operationsRoutes = require('../routes/operations.routes');
 
 const routeDefinitions = [
+  { path: '/mobile-updates', router: require('../routes/mobileUpdates.routes') },
   { path: '/auth', router: authRoutes, rateLimitGroup: 'auth' },
   { path: '/users', router: userRoutes },
   { path: '/passengers', router: passengerRoutes },

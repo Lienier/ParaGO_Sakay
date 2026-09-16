@@ -85,3 +85,10 @@ Existing passenger warnings: unused latlong import in support_thread.dart; unuse
 Both mobile applications are version 1.0.2 (build 9), superseding build 8. Release builds use the existing signing identity and include ARM32, ARM64 and x86_64. For this coordinated repair, both API URL build settings point to https://api.sakaygaray.com/api/v1; these APKs do not fall back to a backend that may lack the new occupancy protocol.
 
 Distribution paths: dist/android-apk/sakaygaray-driver-release.apk and dist/android-apk/sakaygaray-passenger-release.apk. Actual APK hashes, certificate checks and the source commit are recorded in the local distribution manifest after successful builds. Pushing main triggers the existing AWS deployment workflow; its result must be checked separately from APK build success.
+
+
+## Immediate driver count feedback (2026-09-16)
+
+Driver +/- taps now update the walk-in and onboard display immediately while a 300 ms trailing debounce delays persistence. Continuous tapping releases the debounce within one second. The existing ordered one-seat API operations and distinct operation IDs are retained; no taps are dropped or combined into an unsafe absolute count. The preview is held separately from server snapshots so echoed updates cannot count a pending tap twice. Zero/capacity guards use the preview, with server-side reservations/capacity validation remaining authoritative. Failed operations clear the preview, cancel the remaining batch and request reconciliation. The 30-pending-operation bound remains.
+
+Verification: all 36 driver tests passed, including trailing debounce, continuous taps, distinct IDs, optimistic mixed taps during a server response, failure cleanup, ordered persistence and stale snapshots. No backend changes, deployment, APK rebuild or physical-device walkthrough were performed for this update. Displayed pending counts remain provisional until accepted by the server.

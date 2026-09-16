@@ -1,6 +1,8 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'widgets/app_update_gate.dart';
+import 'core/config/app_build_info.dart';
 
 import 'core/config/app_config.dart';
 import 'core/network/api_client.dart';
@@ -24,6 +26,7 @@ Future<void> _initializeFirebaseIfSupported() async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await AppBuildInfo.load();
   await AppConfig.load();
   await AppConfig.resolveApiBaseUrl();
   await _initializeFirebaseIfSupported();
@@ -51,6 +54,7 @@ class ParagoApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'ParaGO Passenger',
       theme: AppTheme.light(),
+      builder: (context, child) => AppUpdateGate(child: child ?? const SizedBox.shrink()),
       home: Consumer<SessionController>(
         builder: (context, session, _) {
           if (session.isLoading) {

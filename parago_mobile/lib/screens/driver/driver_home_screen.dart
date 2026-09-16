@@ -2686,14 +2686,32 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   int _manualOnboardCount(TripSession? trip) {
-    final value = trip?.manualOccupancyCount;
+    final value = _countQueues[trip?.id]?.projectedManualCount ??
+        trip?.manualOccupancyCount;
     return value == null || value < 0 ? 0 : value;
   }
 
   Future<void> _changePassengerCount(String tripId, int delta) async {
     if (!mounted || ![-1, 1].contains(delta)) return;
-    final queue =
-        _countQueues.putIfAbsent(tripId, OccupancyAdjustmentQueue.new);
+    final queue = _countQueues.putIfAbsent(
+        tripId,
+        () => OccupancyAdjustmentQueue(
+            debounce: const Duration(milliseconds: 300)));
+    final trip = _trips.where((trip) => trip.id == tripId).firstOrNull;
+    if (trip == null || trip.status != 'active') return;
+    final manual = _manualOnboardCount(trip);
+    final projectedTotal = (trip.occupancyCount ?? 0) -
+        (trip.manualOccupancyCount ?? 0) +
+        manual +
+        delta;
+    if (manual + delta < 0 ||
+        (trip.jeepneyCapacity != null &&
+            projectedTotal > trip.jeepneyCapacity!)) {
+      setState(() => _statusMessage = manual + delta < 0
+          ? 'Walk-in passenger count is already zero.'
+          : 'Jeep capacity reached.');
+      return;
+    }
     if (queue.pending >= 30) {
       setState(() => _statusMessage = 'Please wait for pending count changes.');
       return;
@@ -2718,7 +2736,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         if (!mounted) return;
         _loadGeneration++;
         setState(() => _replaceTripSnapshot(updatedTrip));
-      });
+      }, delta: delta, manualCount: trip.manualOccupancyCount ?? 0);
       final updatedTrip = _trips.firstWhere((trip) => trip.id == tripId);
       if (!mounted) {
         return;
@@ -2777,7 +2795,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   int _baseOnboardCount(TripSession? trip, List<RideSessionModel> rides) {
     if (trip?.occupancyCount != null) {
-      return trip!.occupancyCount!;
+      return math.max(
+          0,
+          trip!.occupancyCount! -
+              (trip.manualOccupancyCount ?? 0) +
+              _manualOnboardCount(trip));
     }
     return rides.where((ride) => ride.status == 'onboard').length;
   }

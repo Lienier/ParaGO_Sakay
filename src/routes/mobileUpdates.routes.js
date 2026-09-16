@@ -1,0 +1,9 @@
+const router = require('express').Router();
+const asyncHandler = require('../utils/asyncHandler');
+const authenticate = require('../middlewares/authenticate');
+const updates = require('../services/mobileUpdates.service');
+const { ok } = require('../utils/response');
+router.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+router.get('/status', authenticate, asyncHandler(async (req, res) => ok(res, await updates.status(req.user, req.get('X-App-Build')))));
+router.get('/:app', asyncHandler(async (req, res) => ok(res, await updates.catalog(req.params.app))));
+module.exports = router;

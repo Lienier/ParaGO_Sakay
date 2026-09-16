@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../exceptions/api_exception.dart';
 import '../../core/config/app_config.dart';
+import '../config/app_build_info.dart';
 
 class ApiRequestTelemetry {
   const ApiRequestTelemetry({
@@ -50,6 +51,7 @@ class ApiClient {
             headers: {
               'Content-Type': 'application/json',
               'Accept': 'application/json',
+              'X-App-Build': AppBuildInfo.build.toString(),
             },
           ),
         );

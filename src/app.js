@@ -38,10 +38,10 @@ app.use(structuredHttpLogger);
 app.use(
   cors({
     origin: createCorsOriginDelegate({
-      allowedOrigins: corsAllowedOrigins,
+      allowedOrigins: corsAllowedOrigins.length ? [...corsAllowedOrigins, 'https://downloads.sakaygaray.com'] : [],
     }),
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Authorization', 'Content-Type', 'X-Request-Id'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'X-Request-Id', 'X-App-Build'],
     exposedHeaders: ['X-Request-Id', 'RateLimit', 'RateLimit-Policy', 'Retry-After'],
     maxAge: 600,
   })
