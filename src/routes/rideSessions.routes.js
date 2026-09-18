@@ -70,7 +70,7 @@ router.patch(
         forbiddenMessage: 'You can only complete your own ride session',
       });
     }
-    if (session.status === 'completed') {
+    if (session.status === 'completed' && (session.partySize ?? 1) === 1) {
       return ok(res, session, 'Ride session already completed');
     }
     const completedSession = await completeRideSession({
@@ -79,8 +79,11 @@ router.patch(
       actorRole: req.user.role,
       actorUserId: req.user._id,
       completionMethod: 'manual',
+      groupAction: (session.partySize ?? 1) > 1 ? {
+        count: req.body.count, requestId: req.body.requestId, revision: req.body.revision,
+      } : null,
     });
-    return ok(res, completedSession, 'Ride session completed');
+    return ok(res, completedSession, completedSession.status === 'completed' ? 'Ride session completed' : 'Group passenger count updated');
   })
 );
 

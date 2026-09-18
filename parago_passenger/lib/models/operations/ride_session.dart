@@ -8,6 +8,11 @@ class RideSessionModel {
     required this.pickupRequestId,
     required this.status,
     required this.pickupType,
+    this.partySize = 1,
+    this.boardedCount = 1,
+    this.remainingCount = 1,
+    this.revision = 0,
+    this.regularTotal,
     this.boardingMethod = 'manual',
     this.destinationStopRef,
     this.destinationLatitude,
@@ -18,6 +23,14 @@ class RideSessionModel {
     this.boardedAt,
     this.endedAt,
   });
+
+  final int partySize;
+  final int boardedCount;
+  final int remainingCount;
+  final int revision;
+  final double? regularTotal;
+  bool get isGroup => partySize > 1;
+  int get onboardCount => status == 'onboard' ? remainingCount : 0;
 
   final String id;
   final String passengerId;
@@ -41,6 +54,13 @@ class RideSessionModel {
 
   factory RideSessionModel.fromJson(Map<String, dynamic> json) {
     return RideSessionModel(
+      partySize: (json['partySize'] as num?)?.toInt() ?? 1,
+      boardedCount: (json['boardedCount'] as num?)?.toInt() ?? 1,
+      remainingCount: json['status'] == 'completed'
+          ? 0
+          : (json['remainingCount'] as num?)?.toInt() ?? 1,
+      revision: (json['revision'] as num?)?.toInt() ?? 0,
+      regularTotal: (json['regularTotal'] as num?)?.toDouble(),
       id: json['_id'].toString(),
       passengerId: json['passengerId']?.toString() ?? '',
       tripSessionId: json['tripSessionId']?.toString() ?? '',

@@ -31,7 +31,8 @@ async function createTripRecord(Model, document, { accepting = false } = {}) {
       { $inc: { lifecycleRevision: 1 } }, { new: true, session });
       if (!trip) throw new ApiError(409, 'Trip is closed or no longer accepting pickups');
       if (accepting) await require('./operatingRules.service').assertVehicleAllowed(await Jeepney.findById(trip.jeepneyId).session(session), session);
-      if (terminal) await queue.reserve(trip, session);
+      if (terminal) await queue.reserve(trip, session, document.partySize ?? 1);
+      else if (accepting) await require('./seatAccounting.service').assertCapacity(trip, document.partySize ?? 1, session);
       [record] = await Model.create([document], { session });
     });
   } finally { await session.endSession(); }
@@ -58,7 +59,7 @@ async function endTrip(tripId, { actor, requestId, reason } = {}) {
       if (!trip) throw new ApiError(409, 'Trip already closed');
       rides = await Ride.find({ tripSessionId: tripId, status: { $in: ['onboard', 'waiting'] } }).session(session);
       await Ride.updateMany({ tripSessionId: tripId, status: { $in: ['onboard', 'waiting'] } },
-        { $set: { status: 'completed', endedAt: now, canSendStopAlert: false, offboardingMethod: 'trip_ended' } }, { session });
+        { $set: { status: 'completed', remainingCount: 0, endedAt: now, canSendStopAlert: false, offboardingMethod: 'trip_ended' }, $inc: { revision: 1 } }, { session });
       await Pickup.updateMany({ tripSessionId: tripId, status: { $in: ['pending', 'acknowledged'] } },
         { $set: { status: 'cancelled' } }, { session });
       await Alert.updateMany({ tripSessionId: tripId, status: { $in: ['sent', 'seen', 'acknowledged'] } },

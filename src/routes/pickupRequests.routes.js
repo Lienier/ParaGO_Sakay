@@ -1,5 +1,6 @@
 const { createTripRecord } = require('../services/tripLifecycle.service');
 const express = require('express');
+const { requireBookingPoint } = require('../utils/bookingLocation');
 const axios = require('axios');
 const PickupRequest = require('../models/pickupRequest');
 const RideSession = require('../models/rideSession');
@@ -12,7 +13,6 @@ const { emitToTrip } = require('../realtime/socketServer');
 const {
   isPointAfterOnRoute,
   isRoutePickupNearRoad,
-  pickDefaultRouteCoordinate,
   resolveRouteFareSnapshot,
 } = require('../utils/routeGeo');
 const { haversineMeters } = require('../utils/geo');
@@ -26,7 +26,6 @@ const {
   pickupRequestTtlMinutes,
   maxRequestsPerPassengerPerTrip,
   pickupRoadProximityMeters,
-  pickupCurrentLocationMaxDistanceMeters,
   unloadRoadProximityMeters,
   tomtomApiKey,
   jeepPassByReassignMeters,
@@ -57,6 +56,26 @@ const {
 } = require('../services/hybridDispatch.service');
 
 const router = express.Router();
+router.post('/:id/group-ready', authenticate, authorize(PASSENGER), asyncHandler(async (req, res) => {
+  ensureObjectId(req.params.id, 'booking');
+  return ok(res, await require('../services/groupBoarding.service').ready(req.params.id, req.user._id), 'Waiting for the driver to confirm your group count');
+}));
+router.post('/:id/group-board', authenticate, authorize(DRIVER), asyncHandler(async (req, res) => {
+  ensureObjectId(req.params.id, 'booking');
+  const booking = await requirePickupRequest(req.params.id);
+  if ((booking.partySize ?? 1) <= 1) throw new ApiError(409, 'Use normal boarding for a solo booking.');
+  const trip = await requireTrip(booking.tripSessionId);
+  await ensureDriverAssignedToTrip(req.user, trip);
+  const ride = await require('../services/boarding.service').completeBoardingForPickupRequest({
+    pickupRequest: booking, trip, passengerId: booking.passengerId, boardingMethod: 'manual', allowExisting: true,
+    groupConfirmation: { driverUserId: req.user._id, count: req.body.count, requestId: req.body.requestId },
+  });
+  return ok(res, ride, 'Group boarding confirmed');
+}));
+router.get('/capabilities', authenticate, authorize(PASSENGER), (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  return ok(res, { groupBookingsEnabled: require('../config/env').groupBookingsEnabled }, 'Booking capabilities');
+});
 
 const isFinitePositiveNumber = (value) =>
   Number.isFinite(Number(value)) && Number(value) > 0;
@@ -153,6 +172,7 @@ const resolveEligibleTripForRoute = async ({
   pickupLocation,
   pickupType,
   excludeTripIds = [],
+  partySize = 1,
 }) => {
   const normalizedPickupType = normalizePickupType(pickupType);
   const trips = await TripSession.find({
@@ -209,21 +229,10 @@ const resolveEligibleTripForRoute = async ({
       continue;
     }
 
-    const rideCount = await RideSession.countDocuments({
-      tripSessionId: trip._id,
-      status: { $in: ['waiting', 'onboard'] },
-    });
-    const pendingRequestCount = await PickupRequest.countDocuments({
-      tripSessionId: trip._id,
-      status: { $in: ['pending', 'acknowledged'] },
-      expiresAt: { $gt: new Date() },
-    });
-    const occupiedSeats = Number.isFinite(Number(trip.occupancyCount))
-      ? Number(trip.occupancyCount)
-      : rideCount;
-    const reservedSeats = Math.max(occupiedSeats, rideCount) + pendingRequestCount;
+    const seats = await require('../services/seatAccounting.service').counts(trip);
+    const reservedSeats = seats.occupied + seats.reserved;
     const availableSeats = Number(jeepney.capacity) - reservedSeats;
-    if (availableSeats < 1) {
+    if (availableSeats < partySize) {
       continue;
     }
 
@@ -276,6 +285,10 @@ router.post(
   authorize(PASSENGER),
   asyncHandler(async (req, res) => {
     const payload = req.body || {};
+    const partySize = require('../services/seatAccounting.service').partySize(payload.partySize);
+    if (partySize > 1 && !require('../config/env').groupBookingsEnabled) {
+      throw new ApiError(409, 'Companion bookings are not available yet. Book for yourself only.', [], 'GROUP_BOOKINGS_DISABLED');
+    }
     const passenger = await requireCurrentPassenger(req.user, {
       notFoundMessage: 'Passenger profile not found',
     });
@@ -293,40 +306,17 @@ router.post(
     const terminalStop = isTerminalPickupType(pickupType)
       ? resolveRouteTerminalStop(route)
       : null;
+    if (isTerminalPickupType(pickupType) && !terminalStop) throw new ApiError(409, 'This route has no terminal configured. Choose roadside pickup or contact support.', [], 'TERMINAL_UNAVAILABLE');
 
     let pickupLocation = isTerminalPickupType(pickupType)
       ? terminalStop?.location
       : payload.pickupLocation;
     if (!pickupLocation || !Array.isArray(pickupLocation.coordinates) || pickupLocation.coordinates.length < 2) {
-      pickupLocation = pickDefaultRouteCoordinate(route);
-      if (!pickupLocation) {
-        throw new ApiError(400, 'pickupLocation is required for this route');
-      }
+      throw new ApiError(400, 'Choose a pickup point on the selected route.', [], 'PICKUP_REQUIRED');
     }
     const [lngPickup, latPickup] = pickupLocation.coordinates;
+    pickupLocation = requireBookingPoint(pickupLocation, 'pickup');
     ensureLatLng(latPickup, lngPickup, 'pickupLocation');
-
-    if (
-      !payload.currentLocation ||
-      !Array.isArray(payload.currentLocation.coordinates) ||
-      payload.currentLocation.coordinates.length < 2
-    ) {
-      throw new ApiError(400, 'currentLocation is required');
-    }
-    const [lngCurrent, latCurrent] = payload.currentLocation.coordinates;
-    ensureLatLng(latCurrent, lngCurrent, 'currentLocation');
-    const pickupDistanceFromPassenger = haversineMeters(
-      latPickup,
-      lngPickup,
-      Number(latCurrent),
-      Number(lngCurrent)
-    );
-    if (pickupDistanceFromPassenger > pickupCurrentLocationMaxDistanceMeters) {
-      throw new ApiError(
-        400,
-        `Pickup point must stay within ${pickupCurrentLocationMaxDistanceMeters} meters of your current location`
-      );
-    }
 
     if (isTerminalPickupType(pickupType)) {
       if (!terminalStop) {
@@ -338,7 +328,7 @@ router.post(
       route,
       maxDistanceMeters: pickupRoadProximityMeters,
     })) {
-      throw new ApiError(400, 'Pickup point must be near the selected route');
+      throw new ApiError(400, 'Move your pickup pin closer to the selected route.', [], 'PICKUP_OFF_ROUTE');
     }
 
     let destinationLocation = payload.destinationLocation;
@@ -347,9 +337,10 @@ router.post(
       !Array.isArray(destinationLocation.coordinates) ||
       destinationLocation.coordinates.length < 2
     ) {
-      throw new ApiError(400, 'destinationLocation is required');
+      throw new ApiError(400, 'Choose an unload point on the selected route.', [], 'DESTINATION_REQUIRED');
     }
     const [lngDestination, latDestination] = destinationLocation.coordinates;
+    destinationLocation = requireBookingPoint(destinationLocation, 'unload');
     ensureLatLng(latDestination, lngDestination, 'destinationLocation');
 
     if (!isRoutePickupNearRoad({
@@ -360,7 +351,7 @@ router.post(
     })) {
       throw new ApiError(
         400,
-        `Unload point must be within ${unloadRoadProximityMeters} meters of the route`
+        `Move your unload pin within ${unloadRoadProximityMeters} meters of the route.`, [], 'DESTINATION_OFF_ROUTE'
       );
     }
     if (!isPointAfterOnRoute({
@@ -372,7 +363,7 @@ router.post(
     })) {
       throw new ApiError(
         400,
-        'Unload point must come after the pickup point along the route'
+        'Choose an unload point after your pickup along the selected direction.', [], 'DESTINATION_BEFORE_PICKUP'
       );
     }
 
@@ -389,6 +380,7 @@ router.post(
       routeId: route._id,
       pickupLocation,
       pickupType,
+      partySize,
     });
 
     const pendingCount = await PickupRequest.countDocuments({
@@ -401,6 +393,7 @@ router.post(
     }
 
     const request = await createTripRecord(PickupRequest, {
+      partySize,
       fareSnapshot: resolveRouteFareSnapshot({
         route,
         pickupLocation,

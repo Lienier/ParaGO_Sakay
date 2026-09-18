@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../exceptions/api_exception.dart';
 
 import 'package:flutter/material.dart';
 
@@ -148,13 +149,7 @@ class ActionFeedback {
   static String messageOf(Object error) => _messageOf(error);
 
   static String _messageOf(Object error) {
-    final text = error.toString().trim();
-    if (text.startsWith('Exception: ')) {
-      return text.substring(11).trim();
-    }
-    if (text.startsWith('Error: ')) {
-      return text.substring(7).trim();
-    }
-    return text;
+    if (error is ApiException) return error.message;
+    return 'We could not complete this action. Refresh your booking or ride status and try again.';
   }
 }

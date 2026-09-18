@@ -20,11 +20,30 @@ class RideSessionService {
         .toList();
   }
 
-  Future<RideSessionModel> completeRideSession(String rideSessionId) async {
+  Future<RideSessionModel> confirmGroupBoarding(
+      String requestId, int count) async {
+    final response = await _client.request(
+        method: 'POST',
+        path: '/pickup-requests/$requestId/group-board',
+        body: {
+          'count': count,
+          'requestId': 'board-$requestId-$count',
+        });
+    return RideSessionModel.fromJson(response['data'] as Map<String, dynamic>);
+  }
+
+  Future<RideSessionModel> completeRideSession(String rideSessionId,
+      {RideSessionModel? ride, int? count}) async {
     final response = await _client.request(
       method: 'PATCH',
       path: '/ride-sessions/$rideSessionId/complete',
-      body: const <String, dynamic>{},
+      body: ride?.isGroup == true
+          ? {
+              'count': count,
+              'revision': ride!.revision,
+              'requestId': 'driver-$rideSessionId-${ride.revision}-$count',
+            }
+          : const <String, dynamic>{},
     );
     return RideSessionModel.fromJson(response['data'] as Map<String, dynamic>);
   }

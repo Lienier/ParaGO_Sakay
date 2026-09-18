@@ -16,6 +16,7 @@ class TripSession {
     this.driverName,
     this.jeepneyLatitude,
     this.jeepneyLongitude,
+    this.jeepneyLastSeenAt,
     this.startedAt,
     this.endedAt,
     this.acceptRequests,
@@ -46,6 +47,7 @@ class TripSession {
   final String? driverName;
   final double? jeepneyLatitude;
   final double? jeepneyLongitude;
+  final DateTime? jeepneyLastSeenAt;
   final String? startedAt;
   final String? endedAt;
   final bool? acceptRequests;
@@ -87,6 +89,8 @@ class TripSession {
       driverName: _readMapString(driver, const ['fullName', 'name']),
       jeepneyLatitude: jeepneyCoordinates?.$2,
       jeepneyLongitude: jeepneyCoordinates?.$1,
+      jeepneyLastSeenAt: DateTime.tryParse(
+          _readMapString(jeepney, const ['lastSeenAt']) ?? ''),
       startedAt: json['startedAt']?.toString(),
       endedAt: json['endedAt']?.toString(),
       acceptRequests: json['acceptRequests'] as bool?,
@@ -138,6 +142,7 @@ class TripSession {
     String? driverName,
     double? jeepneyLatitude,
     double? jeepneyLongitude,
+    DateTime? jeepneyLastSeenAt,
     String? startedAt,
     String? endedAt,
     bool? acceptRequests,
@@ -168,6 +173,7 @@ class TripSession {
       driverName: driverName ?? this.driverName,
       jeepneyLatitude: jeepneyLatitude ?? this.jeepneyLatitude,
       jeepneyLongitude: jeepneyLongitude ?? this.jeepneyLongitude,
+      jeepneyLastSeenAt: jeepneyLastSeenAt ?? this.jeepneyLastSeenAt,
       startedAt: startedAt ?? this.startedAt,
       endedAt: endedAt ?? this.endedAt,
       acceptRequests: acceptRequests ?? this.acceptRequests,

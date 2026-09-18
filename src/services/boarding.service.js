@@ -20,7 +20,7 @@ const {
   normalizeTerminalQueueStatus,
 } = require('./hybridDispatch.service');
 
-const ensureTripHasBoardingCapacity = async (trip, { session } = {}) => {
+const ensureTripHasBoardingCapacity = async (trip, { session, count = 1 } = {}) => {
   const jeepney = await Jeepney.findById(trip.jeepneyId)
     .select('capacity')
     .session(session || null);
@@ -31,7 +31,7 @@ const ensureTripHasBoardingCapacity = async (trip, { session } = {}) => {
   if (
     Number.isFinite(seatCapacity) &&
     seatCapacity > 0 &&
-    occupiedSeats >= seatCapacity
+    occupiedSeats + count > seatCapacity
   ) {
     throw new ApiError(409, 'Trip is already at full capacity');
   }
@@ -48,7 +48,13 @@ const completeBoardingForPickupRequest = async ({
   now = new Date(),
   boardingMethod = 'manual',
   allowExisting = false,
+  groupConfirmation = null,
 }) => {
+  const size = pickupRequest.partySize ?? 1;
+  if (size > 1 && !groupConfirmation) throw new ApiError(409, 'Your driver must confirm how many people boarded.', [], 'GROUP_CONFIRMATION_REQUIRED');
+  const count = groupConfirmation?.count ?? 1;
+  if (!Number.isSafeInteger(count) || count < 1 || count > size) throw new ApiError(400, 'Boarded count must be between one and your reserved seats.', [], 'INVALID_BOARDING_COUNT');
+  if (groupConfirmation && (typeof groupConfirmation.requestId !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(groupConfirmation.requestId))) throw new ApiError(400, 'A valid action reference is required. Refresh and try again.');
   const pickupType = pickupRequest.pickupType || 'roadside';
   const pickupReference = isTerminalPickupType(pickupType)
     ? pickupRequest.terminalLocation || pickupRequest.pickupLocation
@@ -79,6 +85,9 @@ const completeBoardingForPickupRequest = async ({
   }
 
   const rideDocument = {
+    partySize: size, boardedCount: count, remainingCount: count,
+    regularTotal: Math.round((pickupRequest.fareSnapshot?.amount || 0) * count * 100) / 100,
+    boardingMutationId: groupConfirmation?.requestId,
     passengerId,
     tripSessionId: trip._id,
     pickupRequestId: pickupRequest._id,
@@ -113,10 +122,16 @@ const completeBoardingForPickupRequest = async ({
       created = false;
       if (pickupType === 'terminal') await require('./terminalQueue.service').lock(trip.routeId, session);
       await require('./passengerJourney.service').lockPassenger(passengerId, session);
+      if (groupConfirmation) {
+        const driver = await Driver.findOne({ userId: groupConfirmation.driverUserId, status: 'active' }).session(session);
+        const assigned = driver && await TripSession.findOne({ _id: trip._id, driverId: driver._id }).session(session);
+        if (!assigned) throw new ApiError(403, 'You are not assigned to this group booking.');
+      }
       const exactExisting = await RideSession.findOne({
         pickupRequestId: pickupRequest._id,
       }).session(session);
       if (exactExisting) {
+        if (groupConfirmation && exactExisting.boardedCount !== count) throw new ApiError(409, 'Boarding was already confirmed with a different count. Refresh the ride.', [], 'BOARDING_COUNT_CONFLICT');
         rideSession = exactExisting;
         return;
       }
@@ -144,6 +159,9 @@ const completeBoardingForPickupRequest = async ({
       }).session(session);
       if (!freshPickup) {
         throw new ApiError(409, 'Pickup request is no longer available for boarding');
+      }
+      if (groupConfirmation && (!freshPickup.groupReadyAt || freshPickup.status !== 'acknowledged' || (freshPickup.partySize ?? 1) !== size)) {
+        throw new ApiError(409, 'The organizer must confirm the group is near the jeep before you confirm boarding.', [], 'GROUP_NOT_READY');
       }
 
       const freshTrip = await TripSession.findOne({
@@ -188,7 +206,7 @@ const completeBoardingForPickupRequest = async ({
         if (haversineMeters(p[1], p[0], v[1], v[0]) > autoBoardingProximityMeters)
           throw new ApiError(409, 'Move near your assigned jeep before confirming boarding');
       }
-      await ensureTripHasBoardingCapacity(freshTrip, { session });
+      await ensureTripHasBoardingCapacity(freshTrip, { session, count });
 
       [rideSession] = await RideSession.create([rideDocument], { session });
       await PickupRequest.updateOne(
@@ -207,7 +225,7 @@ const completeBoardingForPickupRequest = async ({
       );
       await TripSession.updateOne(
         { _id: trip._id },
-        { $inc: { occupancyCount: 1 } },
+        { $inc: { occupancyCount: count } },
         { session }
       );
       created = true;

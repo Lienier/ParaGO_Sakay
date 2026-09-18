@@ -452,6 +452,8 @@ class _TerminalDispatchRow extends StatelessWidget {
       field('Onboard',
           '${summary['onboardSeats'] ?? trip['occupancyCount'] ?? '—'}'),
       field('Reserved', '${summary['reservedSeats'] ?? '—'}'),
+      if (summary['reservationPartySizes'] is List && (summary['reservationPartySizes'] as List).isNotEmpty)
+        field('People per booking', (summary['reservationPartySizes'] as List).join(' + ')),
       field('Free', '${summary['availableSeats'] ?? '—'}',
           color: AppColors.primary),
     ]);

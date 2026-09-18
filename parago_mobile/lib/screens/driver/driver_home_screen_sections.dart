@@ -535,6 +535,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           : () => _dismissInfoMessage(visibleStatusMessage),
       onMapReady: _handleDriverMapReady,
       onPositionChanged: _handleDriverMapPositionChanged,
+      onRecenter: _recenterDriverMap,
+      readFollowStatus: () => _driverFollowStatus,
       readLiveData: () {
         final liveTrip = _focusedTrip;
         final liveRequests = liveTrip == null
@@ -729,7 +731,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                     return _DriverActionCard(
                       title: destinationLabel,
                       subtitle:
-                          '${ride.passengerLabel} · Booking ${ride.bookingLabel}\nOnboard - ${ParagoFormat.relative(ride.boardedAt)}',
+                          '${ride.passengerLabel} · Booking ${ride.bookingLabel}\n${ride.remainingCount} onboard - ${ParagoFormat.relative(ride.boardedAt)}',
                       detail: hasSavedPoint
                           ? 'Saved drop-off location is pinned on the driver map.'
                           : 'Passenger saved a drop-off stop reference without map coordinates.',

@@ -41,6 +41,8 @@ const pickupRequestSchema = new Schema(
       coordinates: { type: [Number] },
     },
     fareSnapshot: fareSnapshotSchema,
+    partySize: { type: Number, default: 1, min: 1, validate: Number.isSafeInteger },
+    groupReadyAt: Date,
     status: {
       type: String,
       enum: ['pending', 'acknowledged', 'completed', 'expired', 'cancelled', 'transfer_offered'],

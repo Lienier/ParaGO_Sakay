@@ -6,6 +6,8 @@ class PickupRequestModel {
     required this.routeId,
     required this.status,
     required this.pickupType,
+    this.partySize = 1,
+    this.groupReadyAt,
     this.stopRef,
     this.terminalStopRef,
     this.sourceNote,
@@ -22,6 +24,9 @@ class PickupRequestModel {
     this.acknowledgedAt,
     this.transferOfferId,
   });
+
+  final int partySize;
+  final String? groupReadyAt;
 
   final String id;
   final String passengerId;
@@ -51,6 +56,8 @@ class PickupRequestModel {
 
   factory PickupRequestModel.fromJson(Map<String, dynamic> json) {
     return PickupRequestModel(
+      partySize: (json['partySize'] as num?)?.toInt() ?? 1,
+      groupReadyAt: json['groupReadyAt']?.toString(),
       id: json['_id'].toString(),
       passengerId: json['passengerId']?.toString() ?? '',
       tripSessionId: json['tripSessionId']?.toString() ?? '',

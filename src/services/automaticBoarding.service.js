@@ -61,7 +61,7 @@ const processAutomaticBoardingForRequest = async ({
   jeepneyLocation,
   now = new Date(),
 }) => {
-  if (!pickupRequest || pickupRequest.pickupType === 'terminal' || pickupRequest.status !== 'acknowledged') {
+  if (!pickupRequest || (pickupRequest.partySize ?? 1) > 1 || pickupRequest.pickupType === 'terminal' || pickupRequest.status !== 'acknowledged') {
     return null;
   }
   if (!trip || trip.status !== 'active') {

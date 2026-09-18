@@ -530,12 +530,10 @@ router.patch(
         }
 
         capacity = Number(jeepney.capacity);
-        const onboardRideCount = await RideSession.countDocuments({
-          tripSessionId: freshTrip._id,
-          status: 'onboard',
-        }).session(occupancySession);
+        const seatCounts = await require('../services/seatAccounting.service').counts(freshTrip, occupancySession);
+        const onboardRideCount = seatCounts.onboard;
         nextOccupancyCount = onboardRideCount + requestedManualOccupancy;
-        const reserved = freshTrip.operatingMode === 'terminal_queue' ? await require('../models/pickupRequest').countDocuments({ tripSessionId: freshTrip._id, status: { $in: ['pending', 'acknowledged'] }, expiresAt: { $gt: new Date() } }).session(occupancySession) : 0;
+        const reserved = seatCounts.reserved;
         if (nextOccupancyCount + reserved > capacity) throw new ApiError(409, 'Occupancy would consume reserved seats');
         if (
           Number.isFinite(capacity) &&

@@ -114,10 +114,10 @@ router.get(
   asyncHandler(async (req, res) => {
     const { from, to, routeId } = parseDates(req);
     const match = { createdAt: { $gte: from, $lte: to } };
-    if (routeId) match.routeId = routeId;
+    if (routeId) match.routeId = new mongoose.Types.ObjectId(routeId);
 
     const [rows, total] = await Promise.all([
-      PickupRequest.aggregate([{ $match: match }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+      PickupRequest.aggregate([{ $match: match }, { $group: { _id: '$status', count: { $sum: 1 }, passengers: { $sum: { $ifNull: ['$partySize', 1] } } } }]),
       PickupRequest.countDocuments(match),
     ]);
     return ok(res, { total, byStatus: rows }, 'Pickup request report');
@@ -134,7 +134,7 @@ router.get(
       match.tripSessionId = { $in: tripIds };
     }
     const [rows, total] = await Promise.all([
-      RideSession.aggregate([{ $match: match }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+      RideSession.aggregate([{ $match: match }, { $group: { _id: '$status', count: { $sum: 1 }, passengers: { $sum: { $ifNull: ['$boardedCount', 1] } } } }]),
       RideSession.countDocuments(match),
     ]);
     return ok(res, { total, byStatus: rows }, 'Boarding/ride session report');
@@ -175,7 +175,7 @@ router.get(
     const { from, to } = parseDates(req);
     const rows = await PickupRequest.aggregate([
       { $match: { createdAt: { $gte: from, $lte: to } } },
-      { $group: { _id: '$routeId', totalRequests: { $sum: 1 } } },
+      { $group: { _id: '$routeId', totalRequests: { $sum: 1 }, requestedPassengers: { $sum: { $ifNull: ['$partySize', 1] } } } },
       { $sort: { totalRequests: -1 } },
       { $limit: 100 },
     ]);
@@ -200,13 +200,12 @@ router.get(
     const boardedMatch = {
       boardedAt: { $gte: from, $lte: to },
     };
-    const unloadedMatch = {
-      endedAt: { $gte: from, $lte: to },
-    };
+    const { unloadingPipeline, totalSeats } = require('../services/passengerFlow.service');
+    const unloadedStages = unloadingPipeline({ from, to, tripIds });
+    const boardedStages = [{ $match: boardedMatch }, { $set: { seatCount: { $ifNull: ['$boardedCount', 1] } } }];
 
     if (tripIds) {
       boardedMatch.tripSessionId = { $in: tripIds };
-      unloadedMatch.tripSessionId = { $in: tripIds };
     }
 
     const [
@@ -217,10 +216,10 @@ router.get(
       topBoardingLocations,
       topUnloadLocations,
     ] = await Promise.all([
-      RideSession.countDocuments(boardedMatch),
-      RideSession.countDocuments(unloadedMatch),
+      totalSeats(boardedStages),
+      totalSeats(unloadedStages),
       RideSession.aggregate([
-        { $match: boardedMatch },
+        ...boardedStages,
         {
           $group: {
             _id: {
@@ -230,13 +229,13 @@ router.get(
                 timezone: 'UTC',
               },
             },
-            count: { $sum: 1 },
+            count: { $sum: '$seatCount' },
           },
         },
         { $sort: { _id: 1 } },
       ]),
       RideSession.aggregate([
-        { $match: unloadedMatch },
+        ...unloadedStages,
         {
           $group: {
             _id: {
@@ -246,13 +245,13 @@ router.get(
                 timezone: 'UTC',
               },
             },
-            count: { $sum: 1 },
+            count: { $sum: '$seatCount' },
           },
         },
         { $sort: { _id: 1 } },
       ]),
       RideSession.aggregate([
-        { $match: boardedMatch },
+        ...boardedStages,
         {
           $lookup: {
             from: 'pickuprequests',
@@ -269,6 +268,7 @@ router.get(
         },
         {
           $project: {
+            seatCount: 1,
             label: {
               $ifNull: [
                 '$boardingStopRef',
@@ -307,7 +307,7 @@ router.get(
         {
           $group: {
             _id: '$label',
-            count: { $sum: 1 },
+            count: { $sum: '$seatCount' },
             longitude: { $avg: { $arrayElemAt: ['$coordinates', 0] } },
             latitude: { $avg: { $arrayElemAt: ['$coordinates', 1] } },
           },
@@ -316,9 +316,10 @@ router.get(
         { $limit: 30 },
       ]),
       RideSession.aggregate([
-        { $match: unloadedMatch },
+        ...unloadedStages,
         {
           $project: {
+            seatCount: 1,
             label: {
               $ifNull: ['$fareSnapshot.destinationStopRef', '$destinationStopRef'],
             },
@@ -334,7 +335,7 @@ router.get(
         {
           $group: {
             _id: '$label',
-            count: { $sum: 1 },
+            count: { $sum: '$seatCount' },
             longitude: { $avg: { $arrayElemAt: ['$coordinates', 0] } },
             latitude: { $avg: { $arrayElemAt: ['$coordinates', 1] } },
           },

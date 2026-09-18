@@ -7,6 +7,21 @@ class PassengerService {
 
   final ApiClient _client;
 
+  Future<bool> groupBookingsEnabled() async {
+    final response = await _client.request(
+        method: 'GET', path: '/pickup-requests/capabilities', useCache: false);
+    return (response['data'] as Map?)?['groupBookingsEnabled'] == true;
+  }
+
+  Future<PickupRequestModel> signalGroupReady(String requestId) async {
+    final response = await _client.request(
+        method: 'POST',
+        path: '/pickup-requests/$requestId/group-ready',
+        body: {});
+    return PickupRequestModel.fromJson(
+        response['data'] as Map<String, dynamic>);
+  }
+
   Future<void> decideTransfer(PickupRequestModel request, bool accept) async {
     await _client.request(
         method: 'POST',
@@ -29,8 +44,9 @@ class PassengerService {
 
   Future<PickupRequestModel> createPickupRequest({
     required String routeId,
-    required double currentLat,
-    required double currentLng,
+    int partySize = 1,
+    double? currentLat,
+    double? currentLng,
     required String pickupType,
     double? pickupLat,
     double? pickupLng,
@@ -42,6 +58,7 @@ class PassengerService {
   }) async {
     final body = <String, dynamic>{
       'routeId': routeId,
+      'partySize': partySize,
       'pickupType': pickupType,
       'stopRef': stopRef,
       'destinationStopRef': destinationStopRef,
@@ -51,10 +68,6 @@ class PassengerService {
           'type': 'Point',
           'coordinates': [pickupLng, pickupLat],
         },
-      'currentLocation': {
-        'type': 'Point',
-        'coordinates': [currentLng, currentLat],
-      },
       'destinationLocation': {
         'type': 'Point',
         'coordinates': [destinationLng, destinationLat],
@@ -143,7 +156,8 @@ class PassengerService {
       body: {
         'lat': lat,
         'lng': lng,
-        if (capturedAt != null) 'capturedAt': capturedAt.toUtc().toIso8601String(),
+        if (capturedAt != null)
+          'capturedAt': capturedAt.toUtc().toIso8601String(),
       },
       useCache: false,
     );
@@ -157,11 +171,19 @@ class PassengerService {
     );
   }
 
-  Future<RideSessionModel> completeRideSession(String rideSessionId) async {
+  Future<RideSessionModel> completeRideSession(String rideSessionId,
+      {RideSessionModel? ride}) async {
     final response = await _client.request(
       method: 'PATCH',
       path: '/ride-sessions/$rideSessionId/complete',
-      body: const <String, dynamic>{},
+      body: ride?.isGroup == true
+          ? {
+              'count': ride!.remainingCount,
+              'revision': ride.revision,
+              'requestId':
+                  'passenger-$rideSessionId-${ride.revision}-${ride.remainingCount}',
+            }
+          : const <String, dynamic>{},
     );
     return RideSessionModel.fromJson(response['data'] as Map<String, dynamic>);
   }

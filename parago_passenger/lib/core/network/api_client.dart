@@ -436,11 +436,15 @@ class ApiClient {
 
       return payload;
     } on DioException catch (error) {
-      if (error.response?.statusCode == 401 && !path.startsWith('/auth/') &&
-          error.requestOptions.headers['Authorization'] == _dio.options.headers['Authorization']) {
+      if (error.response?.statusCode == 401 &&
+          !path.startsWith('/auth/') &&
+          error.requestOptions.headers['Authorization'] ==
+              _dio.options.headers['Authorization']) {
         final body = error.response?.data;
-        authenticationRejectionMessage = body is Map && body['code'] == 'SESSION_REPLACED'
-            ? 'Your account was signed in on another device' : null;
+        authenticationRejectionMessage =
+            body is Map && body['code'] == 'SESSION_REPLACED'
+                ? 'Your account was signed in on another device'
+                : null;
         await onAuthenticationRejected?.call();
       }
       if (error.response?.statusCode == 429) {
@@ -477,7 +481,16 @@ class ApiClient {
         success: false,
         statusCode: status,
       );
-      throw ApiException(status, message);
+      final uncertain = !isGet && error.response == null;
+      final errorBody = error.response?.data;
+      throw ApiException(
+          status,
+          uncertain
+              ? 'We could not confirm the result. Check your booking or ride status before trying again.'
+              : message,
+          code: uncertain
+              ? 'MUTATION_RESULT_UNKNOWN'
+              : (errorBody is Map ? errorBody['code']?.toString() : null));
     }
   }
 

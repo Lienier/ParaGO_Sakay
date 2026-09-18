@@ -270,7 +270,7 @@ router.get(
     const [activeTrips, pendingRequests, ongoingRides, activeAlerts, routeModeTrips, activeTerminalTrips] = await Promise.all([
       TripSession.countDocuments({ status: 'active' }),
       PickupRequest.countDocuments({ status: 'pending' }),
-      RideSession.countDocuments({ status: 'onboard' }),
+      require('../services/seatAccounting.service').sumSeats(RideSession, { status: 'onboard' }, 'remainingCount'),
       StopAlert.countDocuments({ status: { $in: ['sent', 'seen'] } }),
       TripSession.countDocuments({
         status: 'active',

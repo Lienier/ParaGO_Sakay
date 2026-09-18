@@ -50,6 +50,17 @@ const rideSessionSchema = new Schema(
       coordinates: { type: [Number] },
     },
     fareSnapshot: fareSnapshotSchema,
+    partySize: { type: Number, default: 1, min: 1, validate: Number.isSafeInteger },
+    boardedCount: { type: Number, default: 1, min: 1, validate: Number.isSafeInteger },
+    remainingCount: { type: Number, default: 1, min: 0, validate: Number.isSafeInteger },
+    revision: { type: Number, default: 0, min: 0, validate: Number.isSafeInteger },
+    regularTotal: { type: Number, min: 0 },
+    boardingMutationId: String,
+    unloadMutations: { type: [new Schema({
+      requestId: String, actorId: String, count: Number, revision: Number,
+      actorRole: String, method: String,
+      remainingCount: Number, at: Date,
+    }, { _id: false })], default: [] },
     status: {
       type: String,
       enum: ['waiting', 'onboard', 'completed'],

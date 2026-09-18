@@ -20,6 +20,15 @@ const {
 const { serializeRideSession } = require('../utils/realtimePayloads');
 
 const router = express.Router();
+const savedPlaces = require('../services/savedPlaces.service');
+router.get('/me/saved-places', authenticate, authorize(PASSENGER), asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  return ok(res, await savedPlaces.list(req.user._id), 'Saved places');
+}));
+router.post('/me/saved-places', authenticate, authorize(PASSENGER), asyncHandler(async (req, res) =>
+  ok(res, await savedPlaces.add(req.user._id, req.body), 'Place saved')));
+router.delete('/me/saved-places/:placeId', authenticate, authorize(PASSENGER), asyncHandler(async (req, res) =>
+  ok(res, await savedPlaces.remove(req.user._id, req.params.placeId), 'Place removed')));
 
 router.get(
   '/me',

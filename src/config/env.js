@@ -31,6 +31,7 @@ const positiveInteger = (value, fallback, name) => {
 };
 
 module.exports = {
+  groupBookingsEnabled: booleanValue(process.env.GROUP_BOOKINGS_ENABLED, false),
   nodeEnv: process.env.NODE_ENV || 'development',
   deploymentEnvironment:
     process.env.DEPLOYMENT_ENV || process.env.NODE_ENV || 'development',

@@ -80,9 +80,15 @@ const checkAndReassignPassedRequests = async () => {
       });
 
       if (hasPassed) {
-        // Mark current request as expired
-        request.status = 'expired';
-        await request.save();
+        // Boarding may have completed since this worker read the request.
+        // Only release a reservation that still belongs to this active booking.
+        const expired = await PickupRequest.findOneAndUpdate({
+          _id: request._id,
+          tripSessionId: trip._id,
+          status: { $in: ['pending', 'acknowledged'] },
+          expiresAt: { $gt: new Date() },
+        }, { $set: { status: 'expired' } });
+        if (!expired) continue;
 
         // Notify passenger that jeep passed by
         const passenger = await Passenger.findById(request.passengerId).select('userId');

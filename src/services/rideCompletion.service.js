@@ -45,18 +45,25 @@ const completeRideSession = async ({
   actorRole = 'system',
   actorUserId = null,
   completionMethod = 'manual',
+  groupAction = null,
 }) => {
   actorRole = String(actorRole).toLowerCase();
-  if (session.status === 'completed') {
+  const isGroup = (session.partySize ?? 1) > 1;
+  if (isGroup && completionMethod === 'auto_separation') return session;
+  if (isGroup && (!groupAction || !Number.isSafeInteger(groupAction.revision) ||
+      typeof groupAction.requestId !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(groupAction.requestId))) {
+    throw new ApiError(409, 'Update the application to confirm the group unloading count.', [], 'GROUP_ACTION_REQUIRED');
+  }
+  if (session.status === 'completed' && !isGroup) {
     return session;
   }
-  if (session.status !== 'onboard') {
+  if (session.status !== 'onboard' && !isGroup) {
     throw new ApiError(409, 'Only onboard ride sessions can be completed');
   }
 
   const previousStatus = session.status;
   const endedAt = new Date();
-  const update = {
+  const completionUpdate = {
     $set: {
       status: 'completed',
       endedAt,
@@ -67,22 +74,51 @@ const completeRideSession = async ({
     },
   };
   if (!hasValidGeoPoint(session.destinationLocation)) {
-    update.$unset = { destinationLocation: 1 };
+    completionUpdate.$unset = { destinationLocation: 1 };
   }
 
   let completedSession;
   let changed = false;
+  let releasedCount = 1;
   const transaction = await mongoose.startSession();
   try {
     await transaction.withTransaction(async () => {
       changed = false;
+      // A transaction callback may run again after a write conflict. Never reuse
+      // the partial-unloading update from a previous attempt.
+      const update = { ...completionUpdate, $set: { ...completionUpdate.$set } };
       if (actorRole === 'driver') {
         const driver = actorUserId && await Driver.findOne({ userId: actorUserId, status: 'active' }).session(transaction);
         const assigned = driver && await TripSession.findOne({ _id: session.tripSessionId, driverId: driver._id }).session(transaction);
         if (!assigned) throw new ApiError(403, 'You are no longer assigned to this trip');
       }
+      const fresh = await RideSession.findById(session._id).session(transaction);
+      if (!fresh) throw new ApiError(404, 'Ride not found. Refresh your trip.');
+      if (actorRole === 'passenger') {
+        const owner = actorUserId && await Passenger.exists({ _id: fresh.passengerId, userId: actorUserId }).session(transaction);
+        if (!owner) throw new ApiError(403, 'You can only complete your own ride session');
+      }
+      if (isGroup) {
+        const prior = fresh.unloadMutations.find(m => m.requestId === groupAction.requestId);
+        if (prior) {
+          if (prior.actorId !== String(actorUserId) || prior.count !== groupAction.count) throw new ApiError(409, 'This action reference was already used. Refresh the ride.');
+          completedSession = fresh; return;
+        }
+        if (fresh.status !== 'onboard' || (fresh.revision ?? 0) !== groupAction.revision) throw new ApiError(409, 'The group count changed. Refresh before confirming unloading.', [], 'RIDE_REVISION_CONFLICT');
+        releasedCount = groupAction.count;
+        if (!Number.isSafeInteger(releasedCount) || releasedCount < 1 || releasedCount > fresh.remainingCount || (actorRole === 'passenger' && releasedCount !== fresh.remainingCount)) throw new ApiError(400, 'Select a valid unloading count. The organizer must confirm everyone remaining has got off.');
+        const remaining = fresh.remainingCount - releasedCount;
+        update.$set = { remainingCount: remaining, ...(remaining === 0 ? update.$set : { status: 'onboard' }) };
+        update.$inc = { revision: 1 };
+        update.$push = { unloadMutations: { requestId: groupAction.requestId, actorId: String(actorUserId), count: releasedCount,
+          actorRole, method: completionMethod,
+          revision: fresh.revision, remainingCount: remaining, at: endedAt } };
+      } else {
+        update.$set.remainingCount = 0;
+        update.$inc = { revision: 1 };
+      }
       completedSession = await RideSession.findOneAndUpdate(
-        { _id: session._id, status: 'onboard' }, update,
+        { _id: session._id, status: 'onboard', ...(isGroup ? { revision: groupAction.revision } : {}) }, update,
         { new: true, session: transaction }
       );
       if (!completedSession) {
@@ -92,11 +128,12 @@ const completeRideSession = async ({
         }
         return;
       }
-      await TripSession.updateOne(
-        { _id: session.tripSessionId, occupancyCount: { $gt: 0 } },
-        { $inc: { occupancyCount: -1 } }, { session: transaction }
+      const occupancyChange = await TripSession.updateOne(
+        { _id: session.tripSessionId, occupancyCount: { $gte: releasedCount } },
+        { $inc: { occupancyCount: -releasedCount } }, { session: transaction }
       );
-      await StopAlert.updateMany(
+      if (isGroup && occupancyChange.modifiedCount !== 1) throw new ApiError(409, 'The jeep count needs reconciliation. Refresh and contact support if this continues.');
+      if (completedSession.status === 'completed') await StopAlert.updateMany(
         { rideSessionId: session._id, status: { $in: ['sent', 'seen', 'acknowledged'] } },
         { $set: { status: 'dismissed', acknowledgedAt: endedAt } },
         { session: transaction }
@@ -112,9 +149,9 @@ const completeRideSession = async ({
     const passenger = await Passenger.findById(session.passengerId).select('userId');
     await publishNotification({
       userId: passenger?.userId,
-      type: 'ride_completed',
-      title: 'Ride completed',
-      body: passengerCompletionBody({ actorRole, completionMethod }),
+      type: completedSession.status === 'completed' ? 'ride_completed' : 'ride_count_updated',
+      title: completedSession.status === 'completed' ? 'Ride completed' : 'Group count updated',
+      body: completedSession.status === 'completed' ? passengerCompletionBody({ actorRole, completionMethod }) : `${completedSession.remainingCount} people remain onboard in your group.`,
       payload: {
         rideSessionId: completedSession._id.toString(),
         tripSessionId: completedSession.tripSessionId.toString(),

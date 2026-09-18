@@ -58,7 +58,7 @@ const processAutomaticOffboardingForRide = async ({
   jeepneyLocation,
   now = new Date(),
 }) => {
-  if (!ride || ride.status !== 'onboard') {
+  if (!ride || (ride.partySize ?? 1) > 1 || ride.status !== 'onboard') {
     return null;
   }
   if (!trip || trip.status !== 'active') {

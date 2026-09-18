@@ -362,17 +362,18 @@ class PassengerSecondaryActionCard extends StatelessWidget {
                           color: enabled ? null : const Color(0xFF8D9591),
                         ),
                   ),
-                  const SizedBox(height: 3),
-                  Text(
-                    subtitle,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: enabled
-                              ? const Color(0xFF67726E)
-                              : const Color(0xFF9AA29F),
-                        ),
-                  ),
+                  if (subtitle.isNotEmpty) const SizedBox(height: 3),
+                  if (subtitle.isNotEmpty)
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: enabled
+                                ? const Color(0xFF67726E)
+                                : const Color(0xFF9AA29F),
+                          ),
+                    ),
                 ],
               ),
             ),
@@ -477,15 +478,16 @@ class PassengerActivityTile extends StatelessWidget {
                           fontWeight: FontWeight.w800,
                         ),
                   ),
-                  const SizedBox(height: 3),
-                  Text(
-                    subtitle,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: const Color(0xFF67726E),
-                        ),
-                  ),
+                  if (subtitle.isNotEmpty) const SizedBox(height: 3),
+                  if (subtitle.isNotEmpty)
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: const Color(0xFF67726E),
+                          ),
+                    ),
                 ],
               ),
             ),

@@ -9,6 +9,8 @@
     "npm": "11.x"
   },
   "scripts": {
+    "test:booking-revision": "node --test tests/booking-revision.integration.test.js tests/group-bookings.integration.test.js tests/terminal-loading.integration.test.js tests/boarding-notifications.integration.test.js tests/manual-unloading.integration.test.js",
+    "test:saved-places": "node --test tests/saved-places.integration.test.js",
     "test:mobile-releases": "node --test tests/mobile-releases.integration.test.js",
     "test:manual-unloading": "node --test tests/manual-unloading.integration.test.js",
     "test:passenger-state": "node --test tests/boarding-notifications.integration.test.js tests/para-push.integration.test.js tests/firebase-admin-config.test.js",

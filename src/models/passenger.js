@@ -15,6 +15,12 @@ const passengerSchema = new Schema(
     phone: { type: String, trim: true },
     photoUrl: { type: String },
     journeyRevision: { type: Number, default: 0 },
+    savedPlaces: { type: [new Schema({
+      name: { type: String, required: true, maxlength: 60 },
+      key: { type: String, required: true },
+      lat: { type: Number, required: true, min: -90, max: 90 },
+      lng: { type: Number, required: true, min: -180, max: 180 },
+    })], default: [] },
     emergencyContact: {
       name: { type: String, trim: true },
       phone: { type: String, trim: true },

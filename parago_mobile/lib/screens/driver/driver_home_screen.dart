@@ -1,4 +1,5 @@
 import '../../widgets/driver_action_toast.dart';
+import '../../core/utils/navigation_follow.dart';
 import 'dart:async';
 import '../../widgets/terminal_loading_clock.dart';
 import 'dart:math' as math;
@@ -76,11 +77,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   static const Duration _vehicleProjectionMaxDuration = Duration(seconds: 1);
   static const double _vehicleProjectionMaxDistanceMeters = 8;
   static const double _vehicleProjectionMinSpeedMetersPerSecond = 0.8;
-  static const Duration _driverMapFollowPause = Duration(seconds: 8);
   static const Duration _driverMapFollowThrottle = Duration(milliseconds: 150);
-  static const double _driverMapFollowLerpFactor = 0.22;
-  static const double _driverMapFollowJitterMeters = 10;
-  static const double _driverMapFollowSnapMeters = 45;
+  static const double _driverMapFollowJitterMeters = 2;
   static const double _vehicleTeleportSnapMeters = 90;
 
   List<TripSession> _trips = [];
@@ -149,7 +147,21 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   bool _driverMapReady = false;
   LatLng? _lastDriverMapCenter;
   DateTime? _lastDriverMapFollowAt;
-  DateTime? _driverMapFollowPausedUntil;
+  final _mapFollow = NavigationFollow();
+  LatLng? _lastDriverFollowTarget;
+  bool get _driverFollowLocationFresh => NavigationFollow.isFresh(
+      _vehicleLastAuthoritativeSampleAt, DateTime.now());
+  String get _driverFollowStatus => !_driverFollowLocationFresh
+      ? 'Location unavailable or old. View retained.'
+      : _mapFollow.following
+          ? 'Following'
+          : 'Free view';
+  void _recenterDriverMap() {
+    _mapFollow.recenter();
+    final target = _vehicleLocation ?? _vehicleTargetLocation;
+    if (target != null) _syncDriverMapCamera(target, force: true);
+    if (mounted) setState(() {});
+  }
 
   TripSession? get _focusedTrip {
     for (final trip in _trips) {
@@ -630,6 +642,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
     final alreadyKnown = _knownNotificationIds.contains(notification.id) ||
         _notifications.any((item) => item.id == notification.id);
+    _loadGeneration++;
     _applyRealtimeDriverNotification(notification);
     _knownNotificationIds = {..._knownNotificationIds, notification.id};
     _realtimePrimed = true;
@@ -1179,6 +1192,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
             _knownActiveStopAlertIds = {..._knownActiveStopAlertIds, alert.id};
           }
           break;
+        case 'ride_count_updated':
+          final updatedRide = _readDriverRideSession(notification.payload);
+          if (updatedRide == null) {
+            needsFallback = true;
+            return;
+          }
+          _tripRides = _upsertTripRides(_tripRides, updatedRide);
+          break;
         case 'ride_completed':
           final ride = _readDriverRideSession(notification.payload);
           if (ride == null) {
@@ -1271,6 +1292,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     );
     final existingIndex = tripRides.indexWhere((item) => item.id == ride.id);
     if (existingIndex >= 0) {
+      final previous = tripRides[existingIndex];
+      if (previous.revision > ride.revision ||
+          (previous.status == 'completed' && ride.status != 'completed'))
+        return next;
       tripRides[existingIndex] = ride;
     } else {
       tripRides.insert(0, ride);
@@ -1424,6 +1449,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(successMessage)));
     } catch (error) {
+      if (!mounted) return;
+      if (reloadAfter) await _load(silent: true);
       if (!mounted) return;
       final message = ActionFeedback.messageOf(error);
       setState(() => _statusMessage = message);
@@ -1787,14 +1814,27 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Future<void> _completeRideDestination(RideSessionModel ride) async {
     if (ride.status != 'onboard' || !_pendingUnloads.add(ride.id)) return;
     try {
-      if (!await confirmPassengerUnload(context, ride) || !mounted) return;
+      int? count;
+      if (ride.isGroup) {
+        count = await confirmPassengerCount(context,
+            title: 'How many got off?',
+            identity:
+                '${ride.passengerLabel} | Booking ${ride.bookingLabel}\n${ride.destinationStopRef ?? "Saved destination"}\n${ride.remainingCount} remaining onboard',
+            maximum: ride.remainingCount,
+            actionLabel: 'Confirm unloaded');
+      } else {
+        count = await confirmPassengerUnload(context, ride) ? 1 : null;
+      }
+      if (!mounted) return;
+      if (count == null) return;
       final session = context.read<SessionController>();
       final rideService = RideSessionService(session.apiClient);
       await _runDriverAction(
         loadingMessage: 'Closing ride session...',
         successMessage:
-            '${ride.passengerLabel} marked unloaded. Ride session closed.',
-        action: () => rideService.completeRideSession(ride.id),
+            '$count unloaded. ${ride.remainingCount - count} remain in this booking.',
+        action: () =>
+            rideService.completeRideSession(ride.id, ride: ride, count: count),
       );
     } finally {
       _pendingUnloads.remove(ride.id);
@@ -1954,63 +1994,56 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     return storedLocation ?? _vehicleLocation ?? _vehicleTargetLocation;
   }
 
-  void _syncDriverMapCamera(LatLng target) {
+  void _syncDriverMapCamera(LatLng target, {bool force = false}) {
+    if (!_mapFollow.following || !_driverFollowLocationFresh) return;
     final now = DateTime.now();
-    final pausedUntil = _driverMapFollowPausedUntil;
-    if (pausedUntil != null && now.isBefore(pausedUntil)) {
-      return;
-    }
-
+    _mapFollow.updateHeading(
+        target: _focusedTripId ?? 'driver',
+        sample: _vehicleLastAuthoritativeSampleAt,
+        now: now,
+        bearing: _vehicleLastReliableBearingDegrees,
+        speed: _vehicleLastReliableSpeedMetersPerSecond);
     if (!_driverMapReady) {
       _lastDriverMapCenter = target;
       return;
     }
-
-    final currentZoom = _driverMapController.camera.zoom;
-    final previous = _lastDriverMapCenter ??
-        (currentZoom == 0 ? target : _driverMapController.camera.center);
-    final distanceMeters = Geolocator.distanceBetween(
-      previous.latitude,
-      previous.longitude,
-      target.latitude,
-      target.longitude,
-    );
-    if (distanceMeters < _driverMapFollowJitterMeters) {
+    final previous = _lastDriverFollowTarget;
+    final distance = previous == null
+        ? double.infinity
+        : Geolocator.distanceBetween(previous.latitude, previous.longitude,
+            target.latitude, target.longitude);
+    if (!force && previous != null && distance < _driverMapFollowJitterMeters)
       return;
-    }
-    if (distanceMeters < _driverMapFollowSnapMeters &&
+    if (!force &&
         _lastDriverMapFollowAt != null &&
-        now.difference(_lastDriverMapFollowAt!) < _driverMapFollowThrottle) {
+        now.difference(_lastDriverMapFollowAt!) < _driverMapFollowThrottle)
       return;
-    }
-
-    final nextCenter = distanceMeters >= _driverMapFollowSnapMeters
-        ? target
-        : _lerpLatLng(previous, target, _driverMapFollowLerpFactor);
-    _lastDriverMapCenter = nextCenter;
+    _lastDriverFollowTarget = target;
     _lastDriverMapFollowAt = now;
+    final generation = _mapFollow.generation;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final zoom = _driverMapController.camera.zoom == 0
-          ? 14.2
-          : _driverMapController.camera.zoom;
-      _driverMapController.move(nextCenter, zoom);
+      if (!mounted ||
+          !_driverMapReady ||
+          !_mapFollow.following ||
+          generation != _mapFollow.generation ||
+          !_driverFollowLocationFresh) return;
+      final zoom = math.max(17.5, _driverMapController.camera.zoom);
+      _driverMapController.rotate(-_mapFollow.heading);
+      _driverMapController.move(target, zoom,
+          offset:
+              Offset(0, _driverMapController.camera.nonRotatedSize.y * 0.16));
     });
   }
 
   void _handleDriverMapReady() {
     _driverMapReady = true;
-    final target = _lastDriverMapCenter;
-    if (target == null) {
-      return;
+    if (_mapFollow.following) {
+      final target = _vehicleLocation ?? _vehicleTargetLocation;
+      if (target != null) _syncDriverMapCamera(target, force: true);
+    } else if (_lastDriverMapCenter != null) {
+      _driverMapController.move(
+          _lastDriverMapCenter!, _driverMapController.camera.zoom);
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_driverMapReady) return;
-      final zoom = _driverMapController.camera.zoom == 0
-          ? 14.2
-          : _driverMapController.camera.zoom;
-      _driverMapController.move(target, zoom);
-    });
   }
 
   void _handleDriverMapPositionChanged(MapCamera camera, bool hasGesture) {
@@ -2018,7 +2051,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (!hasGesture) {
       return;
     }
-    _driverMapFollowPausedUntil = DateTime.now().add(_driverMapFollowPause);
+    _mapFollow.freeView();
   }
 
   void _startVehicleMotion(
@@ -2801,13 +2834,43 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
               (trip.manualOccupancyCount ?? 0) +
               _manualOnboardCount(trip));
     }
-    return rides.where((ride) => ride.status == 'onboard').length;
+    return rides.fold<int>(0, (total, ride) => total + ride.onboardCount);
   }
 
   List<DriverToastAction> _driverToastActions() {
     final actions = <DriverToastAction>[];
     for (final trip in _trips.where((t) => t.status == 'active')) {
       for (final request in _tripRequests[trip.id] ?? <PickupRequestModel>[]) {
+        if (request.partySize > 1 &&
+            request.status == 'acknowledged' &&
+            request.groupReadyAt != null &&
+            (DateTime.tryParse(request.expiresAt ?? '')
+                    ?.isAfter(DateTime.now()) ??
+                false)) {
+          actions.add(DriverToastAction(
+            id: 'group-board:${request.id}',
+            title: 'Group ready to board',
+            detail:
+                '${request.partySize} reserved | Booking ${ParagoFormat.shortId(request.id)}',
+            label: 'Confirm count',
+            run: () async {
+              final count = await confirmPassengerCount(context,
+                  title: 'How many boarded?',
+                  identity:
+                      'Booking ${ParagoFormat.shortId(request.id)}\n${request.partySize} reserved. Unused seats are released; late companions need a new booking.',
+                  maximum: request.partySize,
+                  actionLabel: 'Confirm boarding');
+              if (count == null || !mounted) return;
+              await _runDriverAction(
+                  loadingMessage: 'Confirming group...',
+                  successMessage: '$count people boarded.',
+                  action: () => RideSessionService(
+                          context.read<SessionController>().apiClient)
+                      .confirmGroupBoarding(request.id, count));
+            },
+          ));
+          continue;
+        }
         if (request.status != 'pending' ||
             !(DateTime.tryParse(request.expiresAt ?? '')
                     ?.isAfter(DateTime.now()) ??
@@ -2818,7 +2881,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           id: 'pickup:${request.id}',
           title: 'Passenger pickup request',
           detail:
-              '${request.stopRef ?? "Selected stop"} | Booking ${ParagoFormat.shortId(request.id)}',
+              '${request.partySize} people | ${request.stopRef ?? "Selected stop"} | Booking ${ParagoFormat.shortId(request.id)}',
           label: 'Acknowledge',
           run: () async {
             _loadGeneration++;
@@ -2842,7 +2905,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           id: '${hasPara ? "para" : "ride"}:${ride.id}',
           title: hasPara ? 'Passenger para alert' : 'Passenger onboard',
           detail:
-              '${ride.passengerLabel} | ${ride.bookingLabel} | ${ride.destinationStopRef ?? "Saved destination"}',
+              '${ride.remainingCount} onboard | ${ride.passengerLabel} | ${ride.bookingLabel} | ${ride.destinationStopRef ?? "Saved destination"}',
           label: 'Mark unloaded',
           run: () => _completeRideDestination(ride),
         ));
@@ -3116,6 +3179,8 @@ class _DriveMapPanel extends StatefulWidget {
     required this.onDismissStatusMessage,
     required this.onMapReady,
     required this.onPositionChanged,
+    required this.onRecenter,
+    required this.readFollowStatus,
     required this.readLiveData,
     this.height,
   });
@@ -3147,6 +3212,8 @@ class _DriveMapPanel extends StatefulWidget {
   final VoidCallback? onDismissStatusMessage;
   final VoidCallback onMapReady;
   final PositionCallback onPositionChanged;
+  final VoidCallback onRecenter;
+  final String Function() readFollowStatus;
   final _DrivePanelLiveData Function() readLiveData;
   final double? height;
 
@@ -3669,6 +3736,7 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                         markers: markers
                             .map(
                               (entry) => Marker(
+                                rotate: true,
                                 point: entry.position,
                                 width: 150,
                                 height: 92,
@@ -3951,6 +4019,27 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                       ],
                     ),
                   ),
+                Positioned(
+                  right: 16,
+                  left: 16,
+                  bottom: 112,
+                  child: StreamBuilder<int>(
+                      stream: Stream<int>.periodic(
+                          const Duration(seconds: 2), (i) => i),
+                      builder: (context, _) => Row(children: [
+                            Expanded(
+                                child: IgnorePointer(
+                                    child: Card(
+                                        child: Padding(
+                                            padding: const EdgeInsets.all(8),
+                                            child: Text(
+                                                widget.readFollowStatus()))))),
+                            FilledButton.icon(
+                                onPressed: widget.onRecenter,
+                                icon: const Icon(Icons.my_location),
+                                label: const Text('Recenter')),
+                          ])),
+                ),
                 Positioned(
                   left: 16,
                   right: 16,
@@ -4715,7 +4804,9 @@ class _DriveMapMarker extends StatelessWidget {
     final icon = Icon(entry.icon, color: Colors.white, size: 20);
     final markerIcon = entry.rotateWithHeading && entry.headingDegrees != null
         ? Transform.rotate(
-            angle: entry.headingDegrees! * math.pi / 180,
+            angle: (entry.headingDegrees! + MapCamera.of(context).rotation) *
+                math.pi /
+                180,
             child: icon,
           )
         : icon;

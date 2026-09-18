@@ -45,6 +45,8 @@ const serializePickupRequest = (request) => {
     tripSessionId: request.tripSessionId?.toString() || '',
     routeId: request.routeId?.toString() || '',
     status: request.status?.toString() || '',
+    partySize: request.partySize ?? 1,
+    groupReadyAt: toIsoString(request.groupReadyAt),
     transferOfferId: request.transferOfferId || null,
     pickupType: request.pickupType?.toString() || 'roadside',
     stopRef: request.stopRef?.toString() || null,
@@ -80,6 +82,11 @@ const serializeRideSession = (session) => {
       'destinationLocation'
     ),
     status: session.status?.toString() || '',
+    partySize: session.partySize ?? 1,
+    boardedCount: session.boardedCount ?? 1,
+    remainingCount: session.status === 'completed' ? 0 : session.remainingCount ?? 1,
+    revision: session.revision ?? 0,
+    regularTotal: session.regularTotal ?? session.fareSnapshot?.amount ?? 0,
     canSendStopAlert:
       typeof session.canSendStopAlert === 'boolean'
         ? session.canSendStopAlert

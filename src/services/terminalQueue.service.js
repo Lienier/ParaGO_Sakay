@@ -181,16 +181,12 @@ async function change({ tripId, actor, action, requestId, reason, direction }) {
     return Trip.findById(trip._id).session(session);
   });
 }
-async function reserve(trip, session) {
+async function reserve(trip, session, size = 1) {
   if (operatingRules.loadingTiming(trip).departureRequired)
     throw new ApiError(409, 'The 10-minute loading period has ended. Wait for departure and the next loading jeep.');
   if (trip.operatingMode !== 'terminal_queue' || trip.terminalQueueStatus !== 'loading' || !trip.acceptRequests || !await eligible(trip, session))
     throw new ApiError(409, 'This jeep is not loading terminal passengers');
-  const vehicle = await Jeepney.findById(trip.jeepneyId).session(session);
-  const onboard = await Ride.countDocuments({ tripSessionId: trip._id, status: { $in: ['waiting', 'onboard'] } }).session(session);
-  const reserved = await Pickup.countDocuments({ tripSessionId: trip._id, status: { $in: ['pending', 'acknowledged'] }, expiresAt: { $gt: new Date() } }).session(session);
-  if (Math.max(trip.occupancyCount || 0, onboard + (trip.manualOccupancyCount || 0)) + reserved >= vehicle.capacity)
-    throw new ApiError(409, 'The loading jeep is full. Wait for the next departure');
+  await require('./seatAccounting.service').assertCapacity(trip, size, session);
   // Also conflict with manual occupancy and non-queue lifecycle writes.
   await Trip.updateOne({ _id: trip._id }, { $inc: { lifecycleRevision: 1 } }, { session });
 }
@@ -210,9 +206,10 @@ async function transfer({ requestId, passengerId, offerId, accept }) {
       await journey.assertCanBook(passengerId, session, request._id);
       const trip = await promote(request.routeId, session);
       if (!trip) throw new ApiError(409, 'No loading jeep is available. Your offer remains pending');
-      await reserve(trip, session);
+      await reserve(trip, session, request.partySize ?? 1);
       request.tripSessionId = trip._id; request.status = 'pending'; request.acceptedTransferOfferId = offerId;
       request.acknowledgedAt = undefined; request.acknowledgedBy = undefined; request.autoBoarding = undefined;
+      request.groupReadyAt = undefined;
     }
     await request.save({ session }); return request;
   });
@@ -248,11 +245,12 @@ async function describe(value) {
   const trip = value.toObject ? value.toObject() : value;
   if (trip.operatingMode !== 'terminal_queue') return trip;
   const vehicle = await Jeepney.findById(trip.jeepneyId?._id || trip.jeepneyId).select('capacity lastSeenAt');
-  const reservedSeats = await Pickup.countDocuments({ tripSessionId: trip._id, status: { $in: ['pending', 'acknowledged'] }, expiresAt: { $gt: new Date() } });
-  const occupied = trip.occupancyCount || 0;
+  const { reserved: reservedSeats, occupied } = await require('./seatAccounting.service').counts(trip);
+  const bookings = await Pickup.find({ tripSessionId: trip._id, status: { $in: ['pending', 'acknowledged'] }, expiresAt: { $gt: new Date() } }).select('partySize').lean();
   const queuePosition = trip.terminalQueueStatus === 'skipped' ? null : trip.terminalQueueStatus === 'loading' ? 1 : 1 + await Trip.countDocuments({ ...activeQueue, routeId: trip.routeId?._id || trip.routeId,
     $or: [{ terminalQueueStatus: 'loading' }, { terminalQueueStatus: 'waiting', terminalQueueNumber: { $lt: trip.terminalQueueNumber } }] });
   return { ...trip, terminalSummary: { queuePosition, reservedSeats, onboardSeats: occupied,
+    reservationCount: bookings.length, reservationPartySizes: bookings.map(booking => booking.partySize ?? 1),
     ...operatingRules.loadingTiming(trip),
     availableSeats: Math.max(0, (vehicle?.capacity || 0) - occupied - reservedSeats),
     gpsWarning: !vehicle?.lastSeenAt || Date.now() - vehicle.lastSeenAt.getTime() > 300000,
