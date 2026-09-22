@@ -1,6 +1,6 @@
 # ParaGO Complete System Process And Capabilities
 
-Last updated: 2026-08-11
+Last updated: 2026-09-22
 
 ## 1. Purpose Of This Document
 
@@ -8,22 +8,34 @@ This document is the main end-to-end guide for the ParaGO system. It explains wh
 
 Use this document when you need to understand the full ParaGO workflow from admin setup to passenger ride completion.
 
+Current release notes: normal mobile updates are optional and are managed as
+versioned APK releases. A major-update policy can be enabled by the local
+super-admin without cancelling active trips. Group booking creation is gated by
+`GROUP_BOOKINGS_ENABLED=false` by default; existing count-aware records remain
+compatible with legacy one-passenger records.
+
 For focused implementation details, see the related documents listed at the end of this file.
 
 ## 2. System Overview
 
-ParaGO is a jeepney transportation operations system. It connects three user groups:
+ParaGO (SAKAY) is a jeepney transportation operations system. It connects three user groups:
 
 - Admins, who configure and monitor the transport operation, publish service announcements, and answer support threads.
 - Drivers, who operate jeepney trips, handle passenger requests, receive announcements, and contact admin support.
 - Passengers, who book and track rides, view live jeep details and ETA, receive announcements, and contact admin support.
 
-The repository contains one backend and three Flutter clients:
+The repository contains one backend and three clients:
 
 - `src/`: Node.js and Express backend.
 - `parago_admin_web/`: Flutter web app for admins.
 - `parago_mobile/`: Flutter mobile app for drivers.
 - `parago_passenger/`: Flutter mobile app for passengers.
+
+The passenger and driver apps support remote route-based pickup pins, terminal
+queues, saved places, live jeep tracking, ETA, boarding and unloading workflows,
+para alerts, and clearer recovery from stale or uncertain requests. The admin
+web app manages operational records, reports, announcements, support, and
+versioned Android releases through the local super-admin tool.
 
 The backend is the source of truth. The apps display and update backend state through REST API calls and optional realtime events.
 
@@ -32,11 +44,13 @@ The backend is the source of truth. The apps display and update backend state th
 The current thesis deployment is AWS-first:
 
 - Backend API: AWS EC2 in `ap-southeast-1`, reached through CloudFront.
-- Current staging API base URL: `https://d3fvarohzwiubo.cloudfront.net/api/v1`.
+- The API is exposed through the configured HTTPS domain and CloudFront-backed
+  deployment; do not hard-code a temporary CloudFront hostname in clients.
 - Database: MongoDB Atlas using the configured `MONGO_URI`.
 - Realtime cache and queue support: AWS ElastiCache/Valkey using the configured TLS `REDIS_URL`.
 - Admin web app: Vercel deployment, configured to call the AWS API.
-- DigitalOcean: archived fallback only; its app and managed Valkey must be checked separately for ongoing charges.
+- DigitalOcean may remain as an archived fallback or legacy environment. It is
+  not the source of truth for the current AWS deployment.
 
 CloudFront distributions receive a new hostname when the AWS staging stack is destroyed and recreated. Update both mobile clients and rebuild their APKs whenever that hostname changes.
 
@@ -47,12 +61,16 @@ The system is designed to support a jeepney ride lifecycle:
 1. Admin prepares drivers, jeepneys, routes, terminals, landmarks, and fares.
 2. Driver logs in, goes online, and starts a route or terminal queue trip.
 3. Passenger logs in, selects a route, and sends a roadside or terminal pickup request.
-4. Backend validates the request and assigns it to an eligible trip.
+4. Backend validates the route pins, direction, expiry, capacity, and account
+   state, then assigns the request to an eligible trip.
 5. Driver acknowledges the request.
-6. Passenger boards manually or is automatically marked onboard when near the jeepney long enough.
+6. Passenger boards manually or is automatically marked onboard when the
+   configured acknowledgement, fresh-location, and proximity checks pass.
 7. Backend creates or updates the ride session and increases passenger count.
 8. Passenger rides, watches route/trip status, and can send a digital para/stop alert.
-9. Passenger unloads manually or is automatically marked offboard after separation from the jeepney.
+9. Passenger unloads manually or is automatically marked offboard after the
+   configured separation checks. Group rides require explicit count-aware
+   completion and are not automatically unloaded.
 10. Backend completes the ride session and decreases passenger count.
 11. Passenger or driver can contact admin support when an issue needs assistance.
 12. Admin can publish targeted service announcements and manage support conversations.
@@ -108,8 +126,11 @@ Before a passenger can ride, the system generally needs:
 - An active or scheduled trip that can accept requests.
 - A driver operating the trip.
 - A passenger account.
-- Passenger location permission.
-- Pickup and destination/unload information.
+- Pickup and destination/unload information, either from route pins or a
+  configured terminal.
+- Passenger location permission for live following, boarding proximity, and
+  location-based automation. Location permission is not required to create a
+  remote pinned booking.
 
 Before automatic onboarding/offboarding can work, the system needs:
 
@@ -119,6 +140,12 @@ Before automatic onboarding/offboarding can work, the system needs:
 - Recent driver/jeepney location.
 - Stable enough network to send location updates.
 - GPS values that are not stale or invalid.
+
+Remote booking and actual boarding are intentionally separate. A passenger may
+choose a pickup away from their current phone location, but the assigned
+passenger and jeep must still provide fresh, valid location evidence for
+proximity-based boarding. If GPS is unavailable, the passenger can use the
+manual workflow where permitted; booking data and fare snapshots are retained.
 
 ## 5. High-Level Architecture
 
