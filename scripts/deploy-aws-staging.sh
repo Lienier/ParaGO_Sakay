@@ -204,7 +204,7 @@ if origin_header and nginx_path.exists():
     text = nginx_path.read_text()
     updated = re.sub(
         r'(\$http_x_parago_origin\s*!=\s*")[^"]+(")',
-        r'\1' + origin_header + r'\2',
+        lambda match: match.group(1) + origin_header + match.group(2),
         text,
     )
     if updated != text:

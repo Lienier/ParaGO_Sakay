@@ -19,11 +19,17 @@ Build numbers come from Android's installed package metadata. The header is a co
 - Database: new `mobilereleases`, `mobilereleasepolicies` and `mobilereleaseaudits` collections. The local publisher initializes them and the unique app/build index. An absent policy means optional updates. Back up these collections with normal MongoDB backups.
 - Hosting: private, encrypted, versioned S3 bucket behind CloudFront origin access control, read-only public distribution, HTTPS, immutable APK caching, short-lived page caching and a restrictive content security policy.
 
-## Live activation — certificate DNS pending
+## Live activation — website and API active
 
-AWS access was verified on 2026-09-16 for account `793140950230`, using `parago-terraform-admin`. The reviewed bootstrap plan was applied: **12 resources created, none changed or destroyed**. The private bucket, page assets, CloudFront access/header policies and uploader IAM policy now exist. The CloudFront distribution and public domain await certificate DNS validation. No APKs or mandatory update policies have been published, and the API changes have not yet been deployed.
+AWS access was verified on 2026-09-16 for account `793140950230`, using `parago-terraform-admin`. Bootstrap created 12 resources; activation added the CloudFront distribution and updated only the new bucket policy. HTTPS is live at **https://downloads.sakaygaray.com**. CloudFront distribution `E3DAEWQQ4OL0GA` serves the private bucket using origin access control. No existing infrastructure was deleted.
 
-In Namecheap Advanced DNS, add this certificate record (TTL Automatic):
+The API was deployed from local commit `8cc6eff` through the existing SSM deployment script (command `af39e83c-190c-4c01-88c3-a04afcbe05f0`). API and worker activation, health and readiness passed. This deployment did not push the local commit to GitHub. Both live release catalogs return `latest: null` and `minimumBuild: 0`: **no APK is published and no required update is enabled**.
+
+Verified: download page HTTPS 200, direct S3 object access 403, driver/passenger release API 200, CORS accepts the download website, MongoDB and Redis healthy, and the desktop Node AWS SDK can access the bucket. The current local AWS principal already has AdministratorAccess, so no additional grant was attached. The separate limited uploader policy is available for a future dedicated principal.
+
+To publish the first apps: reopen the local super admin, sign in, select the intended database, open **Mobile app releases**, and reload. Upload the build-10 driver and passenger APKs listed below as drafts, check their versioned downloads and installation, then select each draft and choose **Publish optional**. The desktop's existing local sign-in is required; no password is needed in chat.
+
+The following certificate record was added in Namecheap and verified by AWS (TTL Automatic):
 
 | Field | Value |
 | --- | --- |
@@ -31,7 +37,9 @@ In Namecheap Advanced DNS, add this certificate record (TTL Automatic):
 | Host | `_4fb2c218ffa2863794a0c886531a8f3a.downloads` |
 | Value | `_a922e18c3b6f587f115f14f32114670c.wzccmgtwzk.acm-validations.aws` |
 
-The certificate ARN is `arn:aws:acm:us-east-1:793140950230:certificate/9ce46994-02b9-41d9-be02-f1123ba8e4c1`. Keep the validation record for certificate renewal. The separate **downloads** CNAME target will be generated after certificate validation and CloudFront creation. The local uploader configuration has been written to `.tools/local-super-admin/release-config.json`.
+The certificate ARN is `arn:aws:acm:us-east-1:793140950230:certificate/9ce46994-02b9-41d9-be02-f1123ba8e4c1` and its status is ISSUED. Keep the validation record for renewal. The separate **downloads** CNAME now points to **d3i5tdsa99vak8.cloudfront.net** and resolves publicly. The uploader configuration is saved in `.tools/local-super-admin/release-config.json`. The ignored local `deployment.auto.tfvars` keeps `certificate_ready=true` for subsequent Terraform operations.
+
+The following steps document the activation/recovery procedure; infrastructure, DNS, uploader configuration and API deployment steps are complete:
 
 1. Authenticate AWS CLI on this PC. Verify `aws sts get-caller-identity` identifies account `793140950230`. Do not paste access keys or tokens into chat.
 2. From `infra/aws/downloads`, run `terraform init`, then `terraform plan`. Review and apply the initial plan with `certificate_ready=false`. Keep this stack's state separate from staging; protect/back up its local state or migrate it to the established private Terraform backend before operational use.
@@ -67,4 +75,4 @@ Run `npm run test:mobile-releases`, `npm test`, both Flutter suites, both Flutte
 - Driver APK: `parago_mobile/build/app/outputs/flutter-apk/app-release.apk`, SHA-256 `48f527d8c0650d251236f8faa2d762e26faf2ea720b9e4afa4d799a5bbb38664`.
 - Passenger APK: `parago_passenger/build/app/outputs/flutter-apk/app-release.apk`, SHA-256 `ccad447912330b430817bf67a0b7ff7a3efcb028d89958e0fd3f88a348c60b0f`.
 
-AWS/DNS activation, real uploads/public downloads and physical-device installation/update checks remain blocked or unverified. No mandatory policy has been activated. These local checks do not certify the live deployment.
+AWS/DNS and API activation have now passed the live checks described above. Actual APK upload, public APK download and physical-device installation/update checks remain outstanding until the first draft releases are uploaded through the signed-in local super admin. No mandatory policy has been activated.

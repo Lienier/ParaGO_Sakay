@@ -405,6 +405,7 @@ resource "aws_cloudfront_origin_request_policy" "api" {
         "Authorization",
         "CloudFront-Forwarded-Proto",
         "Content-Type",
+        "X-App-Build",
         "Origin",
         "Sec-WebSocket-Key",
         "Sec-WebSocket-Protocol",
