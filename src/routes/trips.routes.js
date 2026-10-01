@@ -270,7 +270,14 @@ router.post(
     if (route.status !== 'active') {
       throw new ApiError(409, 'Route is not active');
     }
-    const operatingMode = normalizeTripOperatingMode(payload.operatingMode);
+    const requestedOperatingMode = String(payload.operatingMode || '').trim().toLowerCase();
+    if (requestedOperatingMode === 'route') {
+      throw new ApiError(
+        409,
+        'Drivers must arrive at the terminal and complete terminal departure before route operation'
+      );
+    }
+    const operatingMode = 'terminal_queue';
     if (
       operatingMode === 'terminal_queue' &&
       !resolveRouteTerminalStop(route)
@@ -301,10 +308,53 @@ router.post(
     }
     if (operatingMode === 'terminal_queue') {
       const terminal = resolveRouteTerminalStop(route);
-      const document = { jeepneyId: jeepney._id, driverId: payload.driverId, routeId: route._id,
-        routePathSnapshot: buildRoutePathSnapshot(route), terminalStopRef: terminal.stopRef, terminalLocation: terminal.location };
-      const queued = await terminalQueue.checkIn({ document, actor: req.user, requestId: payload.requestId, reason: payload.reason });
-      return ok(res, queued, 'Terminal check-in complete', 201);
+      if (!payload.driverId) {
+        throw new ApiError(400, 'driverId is required for terminal entry');
+      }
+      const activeTrip = await TripSession.findOne({
+        $or: [{ driverId: payload.driverId }, { jeepneyId: jeepney._id }],
+        status: 'active',
+      });
+      if (activeTrip) {
+        throw new ApiError(409, 'Driver or jeepney already has an active trip');
+      }
+      const existingIntent = await TripSession.findOne({
+        driverId: payload.driverId,
+        jeepneyId: jeepney._id,
+        status: { $in: ['scheduled', 'active'] },
+        operatingMode: 'terminal_queue',
+      });
+      if (existingIntent) {
+        return ok(res, existingIntent, 'Terminal arrival already pending');
+      }
+      let intent;
+      try {
+        intent = await TripSession.create({
+          jeepneyId: jeepney._id,
+          driverId: payload.driverId,
+          routeId: route._id,
+          routePathSnapshot: buildRoutePathSnapshot(route),
+          status: 'scheduled',
+          active: false,
+          acceptRequests: false,
+          operatingMode: 'terminal_queue',
+          terminalQueueStatus: 'off_queue',
+          terminalStopRef: terminal.stopRef,
+          terminalLocation: terminal.location,
+          terminalRadiusMeters: terminal.radiusMeters,
+        });
+      } catch (error) {
+        if (error.code === 11000) {
+          intent = await TripSession.findOne({
+            driverId: payload.driverId,
+            jeepneyId: jeepney._id,
+            status: { $in: ['scheduled', 'active'] },
+            operatingMode: 'terminal_queue',
+          });
+        }
+        if (!intent) throw error;
+      }
+      return ok(res, intent, 'Drive to the configured terminal; arrival will be detected automatically', 201);
     }
     const trip = await createTripSession({
       payload,
@@ -355,13 +405,13 @@ router.patch(
       }
     }
     if (trip.operatingMode === 'terminal_queue') {
-      const terminalRoute = await Route.findById(trip.routeId);
-      const terminal = resolveRouteTerminalStop(terminalRoute);
-      if (!terminal) throw new ApiError(409, 'Terminal is unavailable');
-      const queued = await terminalQueue.checkIn({ existingId: trip._id, actor: req.user,
-        requestId: req.body.requestId, reason: req.body.reason, document: { driverId: trip.driverId, jeepneyId: trip.jeepneyId, routeId: trip.routeId,
-          terminalStopRef: terminal.stopRef, terminalLocation: terminal.location, routePathSnapshot: buildRoutePathSnapshot(terminalRoute) } });
-      return ok(res, queued, 'Terminal check-in complete');
+      if (trip.status === 'scheduled' && trip.terminalQueueStatus === 'off_queue') {
+        throw new ApiError(
+          409,
+          'Drive to the configured terminal. Terminal check-in is detected automatically from fresh GPS.'
+        );
+      }
+      throw new ApiError(409, 'Terminal check-in is already being processed');
     }
     await assertVehicleAllowed(await Jeepney.findById(trip.jeepneyId));
     trip.status = 'active';
@@ -478,11 +528,15 @@ router.patch(
     const delta = req.body?.delta;
     const operationId = req.body?.operationId;
     const isAdjustment = delta !== undefined;
+    const supportedDeltas = new Set([-5, -3, -2, -1, 1, 2, 3, 5]);
     let requestedManualOccupancy = Number(req.body?.manualOccupancyCount);
-    if (isAdjustment && (![-1, 1].includes(delta) ||
+    if (isAdjustment && (!Number.isInteger(delta) || !supportedDeltas.has(delta) ||
         typeof operationId !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(operationId) ||
         req.body.manualOccupancyCount !== undefined)) {
-      throw new ApiError(400, 'A +1 or -1 delta and a unique operationId are required');
+      throw new ApiError(
+        400,
+        'Use a supported passenger adjustment (-5, -3, -2, -1, +1, +2, +3, or +5) with a unique operationId'
+      );
     }
     if (!isAdjustment && (!Number.isInteger(requestedManualOccupancy) || requestedManualOccupancy < 0)) {
       throw new ApiError(

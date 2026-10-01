@@ -31,4 +31,13 @@ void main() {
     expect(api.lastBody['requestId'], isNotEmpty);
     expect(trip.status, 'active');
   });
+
+  test('new driver trips enter terminal flow by default', () async {
+    final api = RecordingApi();
+    final service = TripService(api);
+    await service.createTrip(jeepneyId: 'jeep', routeId: 'route');
+    expect(api.lastPath, '/trips');
+    expect(api.lastBody['operatingMode'], 'terminal_queue');
+    expect(api.lastBody['status'], 'scheduled');
+  });
 }

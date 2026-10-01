@@ -33,6 +33,8 @@
     "audit:phase5:production": "node scripts/audit-phase5-database.js --environment=production",
     "audit:phase5:staging": "node scripts/audit-phase5-database.js --environment=staging",
     "audit:phase5:production:forensics": "node scripts/audit-phase5-database.js --environment=production --forensics",
+    "audit:terminal-first": "node scripts/terminal-first-cutover-audit.js",
+    "audit:terminal-first:staging": "node scripts/terminal-first-cutover-audit.js --environment=staging",
     "migrate:phase5:production:dry-run": "node scripts/migrate-phase5-database.js --environment=production",
     "migrate:phase5:staging:dry-run": "node scripts/migrate-phase5-database.js --environment=staging",
     "test:security": "node --test tests/security-repair.integration.test.js tests/security-counters.test.js tests/auth-email-transport.test.js"

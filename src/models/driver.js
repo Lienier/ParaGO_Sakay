@@ -16,6 +16,7 @@ const driverSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
     licenseNumber: { type: String, trim: true },
+    licenseNumberNormalized: { type: String, trim: true, uppercase: true, select: false },
     employeeNumber: { type: String, trim: true },
     phone: { type: String, trim: true },
     licenseDocuments: {
@@ -51,5 +52,15 @@ const driverSchema = new Schema(
 
 driverSchema.index({ assignedRouteId: 1, status: 1 });
 driverSchema.index({ assignedRouteId: 1, operatingMode: 1, terminalQueueStatus: 1 });
+driverSchema.index(
+  { licenseNumberNormalized: 1 },
+  {
+    unique: true,
+    name: 'unique_driver_license_number_normalized',
+    partialFilterExpression: {
+      licenseNumberNormalized: { $exists: true, $type: 'string' },
+    },
+  }
+);
 
 module.exports = mongoose.model('Driver', driverSchema);

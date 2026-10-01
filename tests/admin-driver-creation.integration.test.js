@@ -42,9 +42,13 @@ before(async () => {
   } });
 });
 after(async () => { await mongoose.disconnect(); if (repl) await repl.stop(); });
-const create = (email, plate = 'TEST1234') => request(app).post('/admin/drivers')
+const create = (
+  email,
+  plate = 'TEST1234',
+  { phone = '09000000000', licenseNumber = 'TEST-LICENSE' } = {}
+) => request(app).post('/admin/drivers')
   .set('Authorization', `Bearer ${token}`)
-  .field('payload', JSON.stringify({ email, password: 'Local-Only-Test-2026!', fullName: 'Test Driver', phone: '09000000000', licenseNumber: 'TEST-LICENSE', jeepney: { plateNumber: plate, capacity: 20 } }))
+  .field('payload', JSON.stringify({ email, password: 'Local-Only-Test-2026!', fullName: 'Test Driver', phone, licenseNumber, jeepney: { plateNumber: plate, capacity: 20 } }))
   .attach('licenseFront', picture, { filename: 'front.png', contentType: 'image/png' })
   .attach('licenseBack', picture, { filename: 'back.png', contentType: 'image/png' });
 
@@ -61,17 +65,21 @@ test('fully populated form creates driver and jeep without a GPS location', asyn
 test('duplicate and storage failure do not leave partial accounts', async () => {
   await create('created@example.test', 'OTHER5678').expect(409);
   failStorage = true;
-  const failed = await create('failed@example.test', 'FAIL5678');
+  const failed = await create('failed@example.test', 'FAIL5678', {
+    licenseNumber: 'FAIL-LICENSE',
+  });
+  failStorage = false;
   assert.ok(failed.status >= 500);
   assert.equal(await User.countDocuments({ email: 'failed@example.test' }), 0);
   assert.equal(await Jeepney.countDocuments({ plateNumber: 'FAIL5678' }), 0);
-  failStorage = false;
 });
 
 
 test('second image failure cleans the first upload without creating any account', async () => {
   commands.length = 0; putCount = 0; failOnPut = 2;
-  const result = await create('back-failed@example.test', 'BACK1234');
+  const result = await create('back-failed@example.test', 'BACK1234', {
+    licenseNumber: 'BACK-LICENSE',
+  });
   assert.equal(result.status, 503);
   assert.match(result.body.message, /storage is unavailable/);
   assert.equal(await User.countDocuments({ email: 'back-failed@example.test' }), 0);
@@ -82,7 +90,9 @@ test('second image failure cleans the first upload without creating any account'
 test('corrupt image is a validation failure, not an unexplained server error', async () => {
   const saved = picture;
   picture = Buffer.from('not an actual PNG');
-  const result = await create('corrupt@example.test', 'BAD1234');
+  const result = await create('corrupt@example.test', 'BAD1234', {
+    licenseNumber: 'CORRUPT-LICENSE',
+  });
   picture = saved;
   assert.equal(result.status, 400);
   assert.match(result.body.message, /image could not be read/);
@@ -91,9 +101,60 @@ test('corrupt image is a validation failure, not an unexplained server error', a
 
 
 test('concurrent creation and lost-response retry cannot duplicate driver or vehicle', async () => {
-  const results = await Promise.all([create('race@example.test', 'RACE1234'), create('race@example.test', 'RACE1234')]);
+  const results = await Promise.all([
+    create('race@example.test', 'RACE1234', { licenseNumber: 'RACE-LICENSE' }),
+    create('race@example.test', 'RACE1234', { licenseNumber: 'RACE-LICENSE' }),
+  ]);
   assert.deepEqual(results.map(r => r.status).sort(), [201, 409]);
-  await create('race@example.test', 'RACE1234').expect(409);
+  await create('race@example.test', 'RACE1234', { licenseNumber: 'RACE-LICENSE' }).expect(409);
   assert.equal(await User.countDocuments({ email: 'race@example.test' }), 1);
   assert.equal(await Jeepney.countDocuments({ plateNumber: 'RACE1234' }), 1);
+});
+
+test('driver CP number follows the exact 09 plus nine digits rule', async () => {
+  for (const [index, phone] of [
+    ['short', '0900000000'],
+    ['prefix', '08000000000'],
+    ['letters', '09ABC000000'],
+    ['spaces', '09 000000000'],
+    ['symbols', '09-000000000'],
+  ]) {
+    const result = await create(
+      `invalid-cp-${index}@example.test`,
+      `CP${index}1234`,
+      { phone, licenseNumber: `CP-${index}` }
+    );
+    assert.equal(result.status, 400, `${index}: ${result.text}`);
+    assert.match(result.body.message, /CP number/i);
+  }
+  const valid = await create(
+    'valid-cp@example.test',
+    'CPVALID1234',
+    { phone: '09123456789', licenseNumber: 'CP VALID' }
+  );
+  assert.equal(valid.status, 201, valid.text);
+});
+
+test('license numbers are normalized and unique across driver accounts', async () => {
+  const duplicate = await create(
+    'duplicate-license@example.test',
+    'LICDUP1234',
+    { licenseNumber: ' test-license ' }
+  );
+  assert.equal(duplicate.status, 409, duplicate.text);
+  assert.match(duplicate.body.message, /license number/i);
+
+  const first = await create(
+    'normalized-license@example.test',
+    'LICNORM1234',
+    { licenseNumber: 'Unique  License' }
+  );
+  assert.equal(first.status, 201, first.text);
+  const second = await create(
+    'normalized-license-2@example.test',
+    'LICNORM2234',
+    { licenseNumber: ' unique license ' }
+  );
+  assert.equal(second.status, 409, second.text);
+  assert.match(second.body.message, /license number/i);
 });

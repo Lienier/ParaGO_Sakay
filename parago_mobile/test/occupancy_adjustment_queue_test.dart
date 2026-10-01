@@ -123,4 +123,14 @@ void main() {
     });
     expect(applied, isTrue);
   });
+
+  test('group adjustments keep projected count and operation order', () async {
+    final queue = OccupancyAdjustmentQueue();
+    final applied = <int>[];
+    await queue.add((_) async => applied.add(5), delta: 5, manualCount: 0);
+    expect(queue.projectedManualCount, isNull);
+    await queue.add((_) async => applied.add(-3), delta: -3, manualCount: 5);
+    expect(applied, [5, -3]);
+    expect(queue.projectedManualCount, isNull);
+  });
 }

@@ -48,6 +48,11 @@ const {
   presentLicenseDocuments,
   uploadLicenseDocument,
 } = require('../services/driverLicenseDocuments.service');
+const {
+  normalizeLicenseNumber,
+  validateCpNumber,
+  validateLicenseNumber,
+} = require('../utils/driverIdentity');
 
 const router = express.Router();
 
@@ -369,6 +374,8 @@ router.post(
     if (missingText.length) {
       throw new ApiError(400, `${missingText.join(', ')} ${missingText.length === 1 ? 'is' : 'are'} required`);
     }
+    const licenseNumber = validateLicenseNumber(body.licenseNumber);
+    const phone = validateCpNumber(body.phone);
     if (!frontFile || !backFile) {
       throw new ApiError(400, 'Driver license front and back images are required');
     }
@@ -410,6 +417,9 @@ router.post(
     if (existingJeepney) {
       throw new ApiError(409, 'Jeepney plate number already exists');
     }
+    if (await Driver.exists({ licenseNumberNormalized: normalizeLicenseNumber(licenseNumber) })) {
+      throw new ApiError(409, 'License number already belongs to another driver');
+    }
 
     const preparedDriverId = new mongoose.Types.ObjectId();
     const uploadedDocuments = [];
@@ -435,9 +445,11 @@ router.post(
           email: body.email,
           password: body.password,
           fullName: body.fullName,
-          phone: body.phone,
+          phone,
           role: 'DRIVER',
           driverProfileId: preparedDriverId,
+          driverLicenseNumber: licenseNumber,
+          driverPhone: phone,
           status: accountStatus,
           session,
       });
@@ -447,9 +459,10 @@ router.post(
         .session(session);
       if (!driver) throw new ApiError(500, 'Driver profile could not be created');
 
-      driver.licenseNumber = String(body.licenseNumber).trim();
+      driver.licenseNumber = licenseNumber;
+      driver.licenseNumberNormalized = normalizeLicenseNumber(licenseNumber);
       driver.employeeNumber = String(body.employeeNumber || '').trim();
-      driver.phone = String(body.phone).trim();
+      driver.phone = phone;
       driver.assignedRouteId = normalizedRouteId || undefined;
       driver.operatingMode = operatingMode;
       driver.terminalQueueStatus = normalizeTerminalQueueStatus(undefined, {
@@ -471,7 +484,13 @@ router.post(
       const persisted = await Driver.exists({ _id: preparedDriverId }).catch(() => undefined);
       if (persisted === null) await Promise.allSettled(uploadedDocuments.map(deleteLicenseDocument));
       if (persisted !== null) throw new ApiError(503, 'Could not confirm creation. Refresh the driver list before trying again');
-      if (error.code === 11000) throw new ApiError(409, 'Driver email or jeepney plate number already exists');
+      if (error.code === 11000) {
+        const duplicatePath = Object.keys(error.keyPattern || {})[0];
+        if (duplicatePath === 'licenseNumberNormalized') {
+          throw new ApiError(409, 'License number already belongs to another driver');
+        }
+        throw new ApiError(409, 'Driver email or jeepney plate number already exists');
+      }
       throw error;
     } finally {
       await session.endSession();
@@ -552,9 +571,13 @@ router.patch(
     let assignedRouteSnapshot;
     let accountStatus;
 
-    if (hasOwn(body, 'licenseNumber')) updates.licenseNumber = String(body.licenseNumber || '').trim();
+    if (hasOwn(body, 'licenseNumber')) {
+      const licenseNumber = validateLicenseNumber(body.licenseNumber);
+      updates.licenseNumber = licenseNumber;
+      updates.licenseNumberNormalized = normalizeLicenseNumber(licenseNumber);
+    }
     if (hasOwn(body, 'employeeNumber')) updates.employeeNumber = String(body.employeeNumber || '').trim();
-    if (hasOwn(body, 'phone')) updates.phone = String(body.phone || '').trim();
+    if (hasOwn(body, 'phone')) updates.phone = validateCpNumber(body.phone);
     if (hasOwn(body, 'accountStatus') || hasOwn(body, 'status')) {
       const requestedAccountStatus = String(
         body.accountStatus ?? body.status ?? ''
@@ -636,7 +659,15 @@ router.patch(
     if (Object.keys(updatesToUnset).length) updateAction.$unset = updatesToUnset;
     if (!Object.keys(updateAction).length) throw new ApiError(400, 'No valid driver fields provided');
 
-    let profile = await Driver.findByIdAndUpdate(req.params.id, updateAction, { new: true });
+    let profile;
+    try {
+      profile = await Driver.findByIdAndUpdate(req.params.id, updateAction, { new: true });
+    } catch (error) {
+      if (error.code === 11000 && error.keyPattern?.licenseNumberNormalized) {
+        throw new ApiError(409, 'License number already belongs to another driver');
+      }
+      throw error;
+    }
     if (!profile) throw new ApiError(404, 'Driver not found');
 
     if (accountStatus) {

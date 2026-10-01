@@ -589,12 +589,9 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               )
               .length,
           activeDestinationAlerts: liveActiveAlerts,
-          onIncrement: liveTrip == null
+          onAdjustManualCount: liveTrip == null
               ? null
-              : () => _changePassengerCount(liveTrip.id, 1),
-          onDecrement: liveTrip == null
-              ? null
-              : () => _changePassengerCount(liveTrip.id, -1),
+              : (delta) => _changePassengerCount(liveTrip.id, delta),
           onStartTrip: _loading ||
                   (liveTrip != null && liveTrip.status == 'active') ||
                   liveStartRequirement != null

@@ -2,7 +2,10 @@ node_modules/
 .env
 dist/
 coverage/
-artifacts/
+!artifacts/
+artifacts/*
+!artifacts/system_flowchart_documentation_2026-09-27/
+!artifacts/system_flowchart_documentation_2026-09-27/**
 *.log
 .do/*.local.yaml
 .do/*.local.json

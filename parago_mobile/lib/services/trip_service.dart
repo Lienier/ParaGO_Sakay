@@ -24,8 +24,8 @@ class TripService {
   Future<TripSession> createTrip({
     required String jeepneyId,
     required String routeId,
-    String operatingMode = 'route',
-    String status = 'active',
+    String operatingMode = 'terminal_queue',
+    String status = 'scheduled',
   }) async {
     final response = await _client.request(
       method: 'POST',

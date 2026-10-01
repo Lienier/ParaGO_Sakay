@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ParaGO -- Full system flow documentation</title>
+  <style>
+    :root { color-scheme: light; --ink:#17324d; --muted:#5c7185; --line:#d3dde5; --surface:#fff; --workspace:#f4f7f9; --teal:#2c7285; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--workspace); color:var(--ink); font:15px/1.45 Arial, Helvetica, sans-serif; }
+    header { background:var(--surface); border-bottom:1px solid var(--line); padding:28px clamp(20px, 5vw, 72px) 22px; }
+    h1 { margin:0 0 8px; font-size:clamp(24px, 3vw, 38px); letter-spacing:-.02em; }
+    header p { max-width:900px; margin:0; color:var(--muted); }
+    main { max-width:1600px; margin:0 auto; padding:24px clamp(16px, 4vw, 56px) 64px; }
+    .toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:16px; }
+    .tab { border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); padding:10px 14px; cursor:pointer; font:inherit; }
+    .tab:hover, .tab:focus-visible { border-color:var(--teal); outline:3px solid rgba(44,114,133,.18); outline-offset:1px; }
+    .tab[aria-selected="true"] { background:var(--teal); border-color:var(--teal); color:#fff; }
+    .sheet { background:#fff; border:1px solid var(--line); border-radius:8px; padding:10px; box-shadow:0 8px 24px rgba(23,50,77,.07); }
+    .sheet[hidden] { display:none; }
+    .sheet img { display:block; width:100%; height:auto; }
+    .caption { color:var(--muted); font-size:13px; margin:10px 4px 2px; }
+    details { background:#fff; border:1px solid var(--line); border-radius:8px; margin-top:18px; padding:14px 18px; }
+    summary { cursor:pointer; font-weight:700; }
+    code { background:#edf1f4; border-radius:4px; padding:1px 4px; }
+    a { color:var(--teal); }
+    @media print { body { background:#fff; } header, .toolbar, details { display:none; } main { padding:0; max-width:none; } .sheet { border:0; box-shadow:none; padding:0; break-after:page; } .sheet[hidden] { display:block; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ParaGO full system flow documentation</h1>
+    <p>Editable diagrams.net source plus one primary process map and five supporting documentation sheets. Select a sheet to review the current passenger, driver, administrator, backend, data, and exception flows. Updated 2026-09-27.</p>
+  </header>
+  <main>
+    <nav class="toolbar" aria-label="Diagram sheets">
+      <button class="tab" type="button" data-sheet="end-to-end-process-map" aria-selected="true">00 -- Standard process map</button>
+      <button class="tab" type="button" data-sheet="system-map" aria-selected="false">01 -- System map</button>
+      <button class="tab" type="button" data-sheet="passenger-ride" aria-selected="false">02 -- Passenger ride</button>
+      <button class="tab" type="button" data-sheet="driver-terminal" aria-selected="false">03 -- Driver terminal</button>
+      <button class="tab" type="button" data-sheet="admin-operations" aria-selected="false">04 -- Admin operations</button>
+      <button class="tab" type="button" data-sheet="shared-exceptions" aria-selected="false">05 -- Shared services</button>
+      <a class="tab" href="ParaGO_full_system_flow.drawio">Open editable Drawio file</a>
+    </nav>
+    <section id="end-to-end-process-map" class="sheet" aria-label="00 standard process map">
+      <img src="end_to_end_process_map.svg" alt="ParaGO standard process map from administrator setup and driver terminal arrival through passenger booking, acknowledgement, boarding, travel, unloading, and explicit trip closure.">
+      <p class="caption">Primary process map. The arrows show the standard procedure; side branches show validation failures, expiry, cancellation, and retry behavior. Terminal booking and roadside booking converge at the authoritative booking and ride flow.</p>
+    </section>
+    <section id="system-map" class="sheet" aria-label="01 system map" hidden>
+      <img src="system_map.svg" alt="ParaGO system map showing passenger, driver, and administrator clients connected to the Node.js API, MongoDB, Valkey, realtime services, and external services.">
+      <p class="caption">Actors and system boundaries. The API and MongoDB state are authoritative; realtime channels deliver updates and clients reconcile on reconnect.</p>
+    </section>
+    <section id="passenger-ride" class="sheet" aria-label="02 passenger ride" hidden>
+      <img src="passenger_ride.svg" alt="Passenger ride lifecycle swimlane from route and pin selection through validation, assignment, driver acknowledgement, boarding, travel, para alert, and unloading.">
+      <p class="caption">Remote pickup booking does not require passenger GPS. Actual boarding still requires the configured fresh-location and proximity checks.</p>
+    </section>
+    <section id="driver-terminal" class="sheet" aria-label="03 driver terminal" hidden>
+      <img src="driver_terminal.svg" alt="Driver terminal-to-route swimlane showing terminal intent, two GPS fixes, queue loading, ten-minute timer, explicit departure, roadside operation, inactivity pause, and trip end.">
+      <p class="caption">Direct route start is rejected for new flows. Departure is explicit and does not automatically unload onboard passengers.</p>
+    </section>
+    <section id="admin-operations" class="sheet" aria-label="04 administrator operations" hidden>
+      <img src="admin_operations.svg" alt="Administrator operations swimlane showing OTP login, setup, dispatch, reports, support, announcements, account management, and committed notifications.">
+      <p class="caption">Mobile APK catalog publication remains a separate PC-only local super-admin operation.</p>
+    </section>
+    <section id="shared-exceptions" class="sheet" aria-label="05 shared services and exception paths" hidden>
+      <img src="shared_exceptions.svg" alt="Shared service exception flow showing session and authorization checks, validation, transactions, idempotency, uncertain results, reconciliation, notifications, GPS limits, and dependency failures.">
+      <p class="caption">Failed or uncertain mutations are not automatically replayed. The client reloads authoritative state before offering a retry.</p>
+    </section>
+    <details>
+      <summary>Scope and source notes</summary>
+      <p>This documentation describes the current repository implementation as of 2026-09-27. Group booking paths exist but remain disabled by default behind <code>GROUP_BOOKINGS_ENABLED=false</code>. Existing terminal-first changes still have audit, maintenance-window, client/device, and deployment gates; this folder does not claim production readiness.</p>
+      <p>Source references are listed in <a href="README.md">README.md</a>. Existing diagram folders were not modified.</p>
+    </details>
+  </main>
+  <script>
+    const tabs = [...document.querySelectorAll('.tab[data-sheet]')];
+    const sheets = [...document.querySelectorAll('.sheet')];
+    for (const tab of tabs) {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.sheet;
+        for (const item of tabs) item.setAttribute('aria-selected', String(item === tab));
+        for (const sheet of sheets) sheet.hidden = sheet.id !== target;
+        history.replaceState(null, '', `#${target}`);
+      });
+    }
+    const initial = location.hash.slice(1);
+    const initialTab = tabs.find(tab => tab.dataset.sheet === initial);
+    if (initialTab) initialTab.click();
+  </script>
+</body>
+</html>

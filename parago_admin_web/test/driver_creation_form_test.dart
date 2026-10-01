@@ -98,8 +98,8 @@ void main() {
         'Email *': 'driver@example.test',
         'Password *': 'Local-Test-2026!',
         'Full name *': 'Test Driver',
-        'License number *': 'TEST-LICENSE',
-        'Phone *': '09000000000',
+        'Cooperative / driver reference *': 'TEST-LICENSE',
+        'CP number *': '09000000000',
         'Plate number *': 'TEST1234',
         'Capacity *': '20',
       }.entries) {

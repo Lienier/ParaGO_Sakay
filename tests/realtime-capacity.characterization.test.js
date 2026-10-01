@@ -1898,6 +1898,24 @@ test('manual adjustments protect last seat, ownership, and concurrent first retr
 });
 
 
+test('manual group adjustments apply supported batch deltas exactly once', async () => {
+  const fixture = await seedCoreFixture();
+  await Jeepney.updateOne({ _id: fixture.jeepney._id }, { capacity: 10 });
+  const adjust = (delta, operationId) => request(app)
+    .patch(`/api/v1/trips/${fixture.trip._id}/occupancy`)
+    .set(auth(fixture.tokens.driver)).send({ delta, operationId });
+
+  assert.equal((await adjust(5, 'manual-group-add-five')).status, 200);
+  assert.equal((await TripSession.findById(fixture.trip._id)).manualOccupancyCount, 5);
+  assert.equal((await adjust(-3, 'manual-group-remove-three')).status, 200);
+  assert.equal((await TripSession.findById(fixture.trip._id)).manualOccupancyCount, 2);
+  assert.equal((await adjust(-3, 'manual-group-remove-three')).status, 200);
+  assert.equal((await TripSession.findById(fixture.trip._id)).manualOccupancyCount, 2);
+  assert.equal((await adjust(2, 'manual-group-remove-three')).status, 409);
+  assert.equal((await adjust(4, 'manual-group-invalid-four')).status, 400);
+});
+
+
 test('one passenger cannot reserve competing trips; cancellation and expiry permit a new booking', async () => {
   const f = await seedCoreFixture();
   const { createTripRecord } = require('../src/services/tripLifecycle.service');

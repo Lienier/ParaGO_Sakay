@@ -81,14 +81,16 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                     TextFormField(
                       controller: _createLicenseCtrl,
                       decoration: const InputDecoration(
-                        labelText: 'License number *',
+                        labelText: 'Cooperative / driver reference *',
+                        helperText:
+                            'Stored in the existing driver-license record for compatibility.',
                       ),
                       textInputAction: TextInputAction.next,
                       onTapOutside: (_) =>
                           FocusManager.instance.primaryFocus?.unfocus(),
                       onSaved: (value) => _createLicense = value,
                       validator: (value) => _textOf(value).isEmpty
-                          ? 'License number is required'
+                          ? 'A cooperative / driver reference is required'
                           : null,
                     ),
                     TextFormField(
@@ -102,33 +104,39 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                     ),
                     TextFormField(
                       controller: _createPhoneCtrl,
-                      decoration: const InputDecoration(labelText: 'Phone *'),
+                      decoration: const InputDecoration(labelText: 'CP number *'),
                       keyboardType: TextInputType.phone,
                       textInputAction: TextInputAction.next,
                       onTapOutside: (_) =>
                           FocusManager.instance.primaryFocus?.unfocus(),
                       onSaved: (value) => _createPhone = value,
-                      validator: (value) =>
-                          _textOf(value).isEmpty ? 'Phone is required' : null,
+                      validator: (value) {
+                        final cp = _textOf(value);
+                        if (cp.isEmpty) return 'CP number is required';
+                        if (!RegExp(r'^09\d{9}$').hasMatch(cp)) {
+                          return 'Use exactly 11 digits starting with 09';
+                        }
+                        return null;
+                      },
                     ),
                     const SizedBox(height: 16),
                     Text(
-                      'Driver license',
+                      'Driver credential documents',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Upload clear JPEG or PNG images up to 5 MB each.',
+                      'Upload the existing license-record images as clear JPEG or PNG files up to 5 MB each.',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(height: 10),
                     FormField<_SelectedLicenseImage>(
                       initialValue: _createLicenseFront,
                       validator: (value) => value == null
-                          ? 'License front image is required'
+                          ? 'The front credential image is required'
                           : null,
                       builder: (field) => _LicenseImageField(
-                        label: 'License front *',
+                        label: 'Front credential image *',
                         image: _createLicenseFront,
                         errorText: field.errorText,
                         onSelect: () async {
@@ -153,10 +161,10 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                     FormField<_SelectedLicenseImage>(
                       initialValue: _createLicenseBack,
                       validator: (value) => value == null
-                          ? 'License back image is required'
+                          ? 'The back credential image is required'
                           : null,
                       builder: (field) => _LicenseImageField(
-                        label: 'License back *',
+                        label: 'Back credential image *',
                         image: _createLicenseBack,
                         errorText: field.errorText,
                         onSelect: () async {
@@ -353,8 +361,11 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _editLicenseCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'License number'),
+                  decoration: const InputDecoration(
+                    labelText: 'Cooperative / driver reference',
+                    helperText:
+                        'Stored in the existing driver-license record for compatibility.',
+                  ),
                   textInputAction: TextInputAction.next,
                   onTapOutside: (_) =>
                       FocusManager.instance.primaryFocus?.unfocus(),
@@ -629,7 +640,9 @@ class _StoredLicenseDocumentsPanelState
   Widget _sideCard(String side, dynamic value) {
     final data = value is Map<String, dynamic> ? value : null;
     final url = data?['url']?.toString() ?? '';
-    final title = side == 'front' ? 'License front' : 'License back';
+    final title = side == 'front'
+        ? 'Front credential image'
+        : 'Back credential image';
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -687,7 +700,7 @@ class _StoredLicenseDocumentsPanelState
           children: [
             Expanded(
               child: Text(
-                'Driver license documents',
+                'Driver credential documents',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),

@@ -48,6 +48,7 @@ const tripSessionSchema = new Schema(
     terminalLoadingWarnedAt: { type: Date },
     terminalLoadingExpiredAt: { type: Date },
     terminalStopRef: { type: String, trim: true },
+    terminalRadiusMeters: { type: Number, min: 1, default: 75 },
     terminalLocation: {
       type: {
         type: String,
@@ -56,16 +57,28 @@ const tripSessionSchema = new Schema(
       },
       coordinates: { type: [Number] },
     },
+    terminalArrivalFixCount: { type: Number, min: 0, max: 2, default: 0 },
+    terminalArrivalLastAt: { type: Date },
+    terminalArrivalLastStreamId: { type: String, trim: true },
+    terminalArrivalLastSequence: { type: Number, min: 1 },
   },
   { timestamps: true }
 );
 
 tripSessionSchema.index({ status: 1, startedAt: -1 });
 for (const field of ['driverId', 'jeepneyId']) {
-  tripSessionSchema.index({ [field]: 1 }, { unique: true,
-    name: `unique_terminal_${field}`, partialFilterExpression: {
-      operatingMode: 'terminal_queue', status: 'active', [field]: { $type: 'objectId' },
-    } });
+  tripSessionSchema.index(
+    { [field]: 1 },
+    {
+      unique: true,
+      name: `unique_terminal_${field}`,
+      partialFilterExpression: {
+        operatingMode: 'terminal_queue',
+        status: { $in: ['scheduled', 'active'] },
+        [field]: { $type: 'objectId' },
+      },
+    }
+  );
 }
 tripSessionSchema.index({ routeId: 1 }, { unique: true, name: 'unique_terminal_loading',
   partialFilterExpression: { operatingMode: 'terminal_queue', status: 'active', terminalQueueStatus: 'loading' } });

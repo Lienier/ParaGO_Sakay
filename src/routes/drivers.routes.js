@@ -48,6 +48,14 @@ const { apiRateLimiters } = require('../middlewares/rateLimits');
 const {
   presentLicenseDocuments,
 } = require('../services/driverLicenseDocuments.service');
+const {
+  processTerminalArrival,
+} = require('../services/terminalArrival.service');
+const {
+  normalizeLicenseNumber,
+  validateCpNumber,
+  validateLicenseNumber,
+} = require('../utils/driverIdentity');
 
 const router = express.Router();
 
@@ -144,23 +152,33 @@ router.put(
   asyncHandler(async (req, res) => {
     const updates = {};
     if (hasOwn(req.body, 'licenseNumber')) {
-      updates.licenseNumber = String(req.body.licenseNumber || '').trim();
+      const licenseNumber = validateLicenseNumber(req.body.licenseNumber);
+      updates.licenseNumber = licenseNumber;
+      updates.licenseNumberNormalized = normalizeLicenseNumber(licenseNumber);
     }
     if (hasOwn(req.body, 'employeeNumber')) {
       updates.employeeNumber = String(req.body.employeeNumber || '').trim();
     }
     if (hasOwn(req.body, 'phone')) {
-      updates.phone = String(req.body.phone || '').trim();
+      updates.phone = validateCpNumber(req.body.phone);
     }
     if (!Object.keys(updates).length) {
       throw new ApiError(400, 'No valid driver profile fields provided');
     }
 
-    const profile = await Driver.findOneAndUpdate(
-      { userId: req.user._id },
-      { $set: updates },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
-    );
+    let profile;
+    try {
+      profile = await Driver.findOneAndUpdate(
+        { userId: req.user._id },
+        { $set: updates },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+    } catch (error) {
+      if (error.code === 11000 && error.keyPattern?.licenseNumberNormalized) {
+        throw new ApiError(409, 'License number already belongs to another driver');
+      }
+      throw error;
+    }
     return ok(res, profile, 'Driver profile updated');
   })
 );
@@ -210,6 +228,20 @@ const updateDriverJeepneyLocation = async (req, res) => {
           jeepneyId,
           status: 'active',
         }).select('_id routeId');
+
+  if (orderedLocation) {
+    await processTerminalArrival({
+      actor: req.user,
+      jeepneyId,
+      latitude,
+      longitude,
+      accuracyMeters: orderedLocation.accuracyMeters,
+      streamId: orderedLocation.streamId,
+      sequence: orderedLocation.sequence,
+      capturedAt: orderedLocation.capturedAt,
+      now: serverReceivedAt,
+    });
+  }
 
   if (
     asyncLocationProcessingEnabled &&

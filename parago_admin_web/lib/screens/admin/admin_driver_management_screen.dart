@@ -306,7 +306,8 @@ class _AdminDriverManagementScreenState
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Each license image must be 5 MB or smaller.')),
+              content: Text(
+                  'Each credential image must be 5 MB or smaller.')),
         );
       }
       return null;
