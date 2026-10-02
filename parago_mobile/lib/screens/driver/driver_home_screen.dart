@@ -4053,10 +4053,12 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                                             padding: const EdgeInsets.all(8),
                                             child: Text(
                                                 widget.readFollowStatus()))))),
-                            FilledButton.icon(
-                                onPressed: widget.onRecenter,
-                                icon: const Icon(Icons.my_location),
-                                label: const Text('Recenter')),
+                            SizedBox(
+                                width: 132,
+                                child: FilledButton.icon(
+                                    onPressed: widget.onRecenter,
+                                    icon: const Icon(Icons.my_location),
+                                    label: const Text('Recenter'))),
                           ])),
                 ),
                 Positioned(
@@ -4781,6 +4783,7 @@ class _PassengerAdjustmentChip extends StatelessWidget {
         style: OutlinedButton.styleFrom(
           foregroundColor: Colors.white,
           disabledForegroundColor: Colors.white38,
+          minimumSize: const Size(60, 52),
           side: BorderSide(
             color: Colors.white.withValues(alpha: enabled ? 0.42 : 0.14),
           ),
