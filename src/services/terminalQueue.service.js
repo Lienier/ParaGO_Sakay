@@ -33,6 +33,13 @@ async function eligible(trip, session) {
 }
 async function sync(trip, session) {
   if (!trip.driverId) return;
+  if (trip.operatingMode === 'route') {
+    await Driver.updateOne({ _id: trip.driverId }, {
+      $set: { operatingMode: 'route', terminalQueueStatus: 'off_queue' },
+      $unset: { terminalQueueNumber: '', terminalCheckedInAt: '', terminalStopRef: '' },
+    }, { session });
+    return;
+  }
   await Driver.updateOne({ _id: trip.driverId }, { $set: {
     operatingMode: trip.operatingMode, terminalQueueStatus: trip.terminalQueueStatus,
     terminalQueueNumber: trip.terminalQueueNumber, terminalCheckedInAt: trip.terminalCheckedInAt,
@@ -155,6 +162,20 @@ async function change({ tripId, actor, action, requestId, reason, direction }) {
       await offerTransfers(trip, session);
       trip.operatingMode = 'route'; trip.terminalQueueStatus = 'departed'; trip.resumedAt = new Date();
       trip.inactivityPausedAt = undefined;
+      // Queue metadata is only meaningful while the trip is in terminal mode.
+      // Keep the departed status for audit/history, but remove active queue state
+      // so driver and admin consumers cannot mistake this trip for a queued one.
+      trip.terminalQueueNumber = undefined;
+      trip.terminalCheckedInAt = undefined;
+      trip.terminalLoadingStartedAt = undefined;
+      trip.terminalLoadingWarnedAt = undefined;
+      trip.terminalLoadingExpiredAt = undefined;
+      trip.terminalStopRef = undefined;
+      trip.terminalLocation = undefined;
+      trip.terminalArrivalFixCount = 0;
+      trip.terminalArrivalLastAt = undefined;
+      trip.terminalArrivalLastStreamId = undefined;
+      trip.terminalArrivalLastSequence = undefined;
       const vehicle = await Jeepney.findById(trip.jeepneyId).session(session);
       trip.acceptRequests = trip.occupancyCount < vehicle.capacity;
     } else if (action === 'skip' || action === 'restore') {

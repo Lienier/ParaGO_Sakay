@@ -265,7 +265,8 @@ class _AdminOperationsPage extends StatelessWidget {
             .where((t) => selected == null || _routeKey(t) == selected))
           ListTile(
               title: Text(_dispatchTripLabel(trip)),
-              subtitle: Text('${trip['occupancyCount'] ?? '-'} onboard')),
+              subtitle: Text(
+                  'Departed terminal · Route operation · ${trip['occupancyCount'] ?? '-'} onboard')),
       ],
     ]);
   }

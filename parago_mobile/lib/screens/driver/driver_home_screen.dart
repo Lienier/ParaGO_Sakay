@@ -3666,8 +3666,12 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                                         label: 'Trip status',
                                         value: trip == null
                                             ? (isOnline ? 'Ready' : 'Offline')
-                                            : ParagoFormat.statusLabel(
-                                                trip.status),
+                                            : trip.operatingMode == 'route' &&
+                                                    trip.terminalQueueStatus ==
+                                                        'departed'
+                                                ? 'Active · Departed terminal'
+                                                : ParagoFormat.statusLabel(
+                                                    trip.status),
                                       ),
                                       _SummaryRow(
                                         label: 'Route ride alerts',
