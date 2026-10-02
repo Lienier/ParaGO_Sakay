@@ -3273,6 +3273,7 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.18),
       builder: (context) => DraggableScrollableSheet(
         initialChildSize: 0.45,
         minChildSize: 0.35,
@@ -3333,8 +3334,8 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                       decoration: const BoxDecoration(
                         gradient: LinearGradient(
                           colors: [
-                            Color(0xC4132F2E),
-                            Color(0xC40F6A5F),
+                            Color(0x80132F2E),
+                            Color(0x800F6A5F),
                           ],
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
@@ -4728,23 +4729,28 @@ class _PassengerAdjustmentControls extends StatelessWidget {
               ),
         ),
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final delta in negative)
-              _PassengerAdjustmentChip(
-                delta: delta,
-                enabled: _canApply(delta),
-                onTap: onAdjust == null ? null : () => onAdjust!(delta),
-              ),
-            for (final delta in positive)
-              _PassengerAdjustmentChip(
-                delta: delta,
-                enabled: _canApply(delta),
-                onTap: onAdjust == null ? null : () => onAdjust!(delta),
-              ),
-          ],
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (final delta in negative) ...[
+                _PassengerAdjustmentChip(
+                  delta: delta,
+                  enabled: _canApply(delta),
+                  onTap: onAdjust == null ? null : () => onAdjust!(delta),
+                ),
+                const SizedBox(width: 8),
+              ],
+              for (final delta in positive) ...[
+                _PassengerAdjustmentChip(
+                  delta: delta,
+                  enabled: _canApply(delta),
+                  onTap: onAdjust == null ? null : () => onAdjust!(delta),
+                ),
+                const SizedBox(width: 8),
+              ],
+            ],
+          ),
         ),
       ],
     );

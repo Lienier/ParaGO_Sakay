@@ -4,8 +4,8 @@ import 'package:flutter/foundation.dart';
 class AppConfig {
   static const String awsApiBaseUrl =
       'https://api.sakaygaray.com/api/v1';
-  static const String digitalOceanApiBaseUrl =
-      'https://paragosakay-app-qulmw.ondigitalocean.app/api/v1';
+  static const String awsCloudFrontApiBaseUrl =
+      'https://d3f9uwhh18xrzf.cloudfront.net/api/v1';
 
   static const String _apiBaseUrlFallback = String.fromEnvironment(
     'PARAGO_API_BASE_URL',
@@ -13,7 +13,7 @@ class AppConfig {
   );
   static const String _apiBaseUrlsFallback = String.fromEnvironment(
     'PARAGO_API_BASE_URLS',
-    defaultValue: digitalOceanApiBaseUrl,
+    defaultValue: awsCloudFrontApiBaseUrl,
   );
   static const String googleFallbackClientId =
       String.fromEnvironment('PARAGO_GOOGLE_CLIENT_ID', defaultValue: '');
@@ -82,11 +82,6 @@ class AppConfig {
       candidates.add(normalized);
     }
 
-    if (kIsWeb) {
-      addCandidate('http://localhost:5000/api/v1');
-      addCandidate('http://127.0.0.1:5000/api/v1');
-    }
-
     addCandidate(_apiBaseUrlFallback);
 
     final configuredList = _apiBaseUrlsFallback.trim();
@@ -94,6 +89,11 @@ class AppConfig {
       for (final item in configuredList.split(',')) {
         addCandidate(item);
       }
+    }
+
+    if (kIsWeb) {
+      addCandidate('http://localhost:5000/api/v1');
+      addCandidate('http://127.0.0.1:5000/api/v1');
     }
 
     if (kIsWeb) {

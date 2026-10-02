@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $distDirectory = Join-Path $repoRoot 'dist'
 $primaryApi = 'https://api.sakaygaray.com/api/v1'
-$fallbackApi = 'https://paragosakay-app-qulmw.ondigitalocean.app/api/v1'
+$fallbackApi = 'https://d3f9uwhh18xrzf.cloudfront.net/api/v1'
 $apiCandidates = "$primaryApi,$fallbackApi"
 
 if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
@@ -49,7 +49,7 @@ foreach ($application in $applications) {
     }
 
     $source = Join-Path $application.Project 'build\app\outputs\flutter-apk\app-release.apk'
-    $fileName = "SAKAY-$($application.Name)-Tester-v$BuildName-build$BuildNumber-AWS-DO-Fallback.apk"
+    $fileName = "SAKAY-$($application.Name)-Tester-v$BuildName-build$BuildNumber-AWS-CloudFront-Fallback.apk"
     $destination = Join-Path $distDirectory $fileName
     Copy-Item -LiteralPath $source -Destination $destination -Force
     $hash = Get-FileHash -LiteralPath $destination -Algorithm SHA256

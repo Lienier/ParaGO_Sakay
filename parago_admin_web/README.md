@@ -45,8 +45,8 @@ Run the app with the AWS backend URL:
 
 ```bash
 flutter run -d chrome \
-  --dart-define=PARAGO_API_BASE_URL=https://d1d7vl5uwus519.cloudfront.net/api/v1 \
-  --dart-define=PARAGO_API_BASE_URLS=https://paragosakay-app-qulmw.ondigitalocean.app/api/v1 \
+  --dart-define=PARAGO_API_BASE_URL=https://api.sakaygaray.com/api/v1 \
+  --dart-define=PARAGO_API_BASE_URLS=https://d3f9uwhh18xrzf.cloudfront.net/api/v1 \
   --dart-define=PARAGO_ENABLE_REALTIME=false
 ```
 
@@ -60,8 +60,8 @@ In Vercel, configure only these values:
 
 1. Root Directory: `parago_admin_web`
 2. Environment Variables:
-  - `PARAGO_API_BASE_URL` = `https://d1d7vl5uwus519.cloudfront.net/api/v1`
-  - `PARAGO_API_BASE_URLS` = `https://paragosakay-app-qulmw.ondigitalocean.app/api/v1`
+  - `PARAGO_API_BASE_URL` = `https://api.sakaygaray.com/api/v1`
+  - `PARAGO_API_BASE_URLS` = `https://d3f9uwhh18xrzf.cloudfront.net/api/v1`
   - `PARAGO_ENABLE_REALTIME` = `false`
 
 Then deploy. Vercel will run `bash ./vercel-build.sh` and publish `build/web`.

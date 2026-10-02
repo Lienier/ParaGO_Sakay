@@ -51,15 +51,14 @@ Run the app with the AWS backend URL:
 
 ```bash
 flutter run -d <device> \
-  --dart-define=PARAGO_API_BASE_URL=https://d1d7vl5uwus519.cloudfront.net/api/v1 \
-  --dart-define=PARAGO_API_BASE_URLS=https://paragosakay-app-qulmw.ondigitalocean.app/api/v1 \
+  --dart-define=PARAGO_API_BASE_URL=https://api.sakaygaray.com/api/v1 \
+  --dart-define=PARAGO_API_BASE_URLS=https://d3f9uwhh18xrzf.cloudfront.net/api/v1 \
   --dart-define=ORS_API_KEY=<your-openrouteservice-key> \
   --dart-define=PARAGO_ENABLE_REALTIME=false
 ```
 
 The app no longer uses a bundled `.env`. Pass app config through `--dart-define`.
-DigitalOcean remains available as a fallback URL; set `PARAGO_API_BASE_URL`
-back to the DigitalOcean URL when you need to temporarily restore it.
+The custom AWS domain is primary; the AWS CloudFront hostname is the fallback.
 
 Backend note:
 
