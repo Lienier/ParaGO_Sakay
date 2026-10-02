@@ -193,6 +193,41 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     return LatLng(lat, lng);
   }
 
+  List<_DriveMarkerData> _terminalMarkers(RouteSummaryModel? route,
+      {TripSession? trip}) {
+    // Active trips keep the terminal snapshot used by arrival validation.
+    final departure = trip?.terminalLatitude != null &&
+            trip?.terminalLongitude != null
+        ? RouteStopPoint(
+            name: trip!.terminalStopRef ?? 'Route terminal',
+            order: 0,
+            position: LatLng(trip.terminalLatitude!, trip.terminalLongitude!))
+        : route?.departureTerminal;
+    final end = route?.endTerminal;
+    final combined =
+        departure != null && end != null && departure.position == end.position;
+    return [
+      if (departure != null)
+        _DriveMarkerData(
+            label: departure.name,
+            detail: combined
+                ? 'Departure terminal and route end'
+                : 'Departure terminal',
+            position: departure.position,
+            icon: Icons.local_parking,
+            markerColor: const Color(0xFF075E54),
+            kind: _DriveMarkerKind.terminal),
+      if (end != null && !combined)
+        _DriveMarkerData(
+            label: end.name,
+            detail: 'Route end terminal',
+            position: end.position,
+            icon: Icons.flag,
+            markerColor: const Color(0xFF334155),
+            kind: _DriveMarkerKind.endTerminal),
+    ];
+  }
+
   List<_DriveMarkerData> _buildMarkers(
     TripSession trip,
     List<PickupRequestModel> requests,
@@ -208,18 +243,21 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     final jeepneyPosition = vehiclePosition ?? routePath[2];
     final routeSummary = _effectiveRouteSummaryForTrip(trip);
 
+    final terminals = _terminalMarkers(routeSummary, trip: trip);
     final markers = <_DriveMarkerData>[
       for (var index = 0;
           index < (routeSummary?.stopPoints.length ?? 0);
           index += 1)
-        _DriveMarkerData(
-          label: '${index + 1}. ${routeSummary!.stopPoints[index].name}',
-          detail: 'Route landmark',
-          position: routeSummary.stopPoints[index].position,
-          icon: Icons.place,
-          markerColor: const Color(0xFF8A3B5D),
-          kind: _DriveMarkerKind.landmark,
-        ),
+        if (!terminals.any((terminal) =>
+            terminal.position == routeSummary!.stopPoints[index].position))
+          _DriveMarkerData(
+            label: '${index + 1}. ${routeSummary!.stopPoints[index].name}',
+            detail: 'Route landmark',
+            position: routeSummary.stopPoints[index].position,
+            icon: Icons.place,
+            markerColor: const Color(0xFF8A3B5D),
+            kind: _DriveMarkerKind.landmark,
+          ),
       _DriveMarkerData(
         label: trip.jeepneyLabel,
         detail: 'Current jeepney location',
@@ -330,6 +368,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       );
     }
 
+    markers.addAll(terminals);
     return markers;
   }
 
@@ -431,7 +470,9 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         : (assignedCachedPreview.isNotEmpty
             ? assignedCachedPreview
             : (assignedRoute?.mapPath ?? const <LatLng>[]));
-    final markers = <_DriveMarkerData>[];
+    final markers = <_DriveMarkerData>[
+      if (focusedTrip == null) ..._terminalMarkers(assignedRoute),
+    ];
 
     if (liveVehicleLocation != null && focusedTrip == null) {
       markers.add(

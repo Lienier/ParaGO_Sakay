@@ -1,3 +1,4 @@
+import '../../widgets/terminal_map_marker.dart';
 import '../../widgets/booking_fare_reference.dart';
 import '../../core/utils/navigation_follow.dart';
 import 'saved_places_screen.dart';
@@ -2813,48 +2814,91 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     return _estimateFarePreview(route, _draftPickupPoint, _draftUnloadPoint);
   }
 
+  List<Marker> _routeTerminalMarkers(RouteSummaryModel? route) {
+    final departure = route?.departureTerminal;
+    final end = route?.endTerminal;
+    final combined =
+        departure != null && end != null && departure.position == end.position;
+    return [
+      if (departure != null)
+        Marker(
+            rotate: true,
+            point: departure.position,
+            width: 160,
+            height: 92,
+            child:
+                TerminalMapMarker(name: departure.name, isCombined: combined)),
+      if (end != null && !combined)
+        Marker(
+            rotate: true,
+            point: end.position,
+            width: 160,
+            height: 92,
+            child: TerminalMapMarker(name: end.name, isEnd: true)),
+    ];
+  }
+
+  List<Marker> _tripTerminalMarkers(TripSession? trip) {
+    if (trip?.terminalLatitude == null || trip?.terminalLongitude == null) {
+      return const <Marker>[];
+    }
+    return [
+      Marker(
+        rotate: true,
+        point: LatLng(trip!.terminalLatitude!, trip.terminalLongitude!),
+        width: 160,
+        height: 92,
+        child: TerminalMapMarker(
+          name: trip.terminalStopRef ?? 'Route terminal',
+        ),
+      ),
+    ];
+  }
+
   List<Marker> _routeLandmarkMarkers(RouteSummaryModel? route) {
     final stops = route?.stopPoints ?? const <RouteStopPoint>[];
     return [
       for (var index = 0; index < stops.length; index += 1)
-        Marker(
-          rotate: true,
-          point: stops[index].position,
-          width: 32,
-          height: 32,
-          alignment: Alignment.center,
-          child: GestureDetector(
-            onTap: () {
-              _showLandmarkDetails(stops[index], index + 1);
-            },
-            child: Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: const Color(0xFF8A3B5D),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 3),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.20),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Center(
-                child: Text(
-                  '${index + 1}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
+        if (stops[index].position != route?.departureTerminal?.position &&
+            stops[index].position != route?.endTerminal?.position)
+          Marker(
+            rotate: true,
+            point: stops[index].position,
+            width: 32,
+            height: 32,
+            alignment: Alignment.center,
+            child: GestureDetector(
+              onTap: () {
+                _showLandmarkDetails(stops[index], index + 1);
+              },
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF8A3B5D),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 3),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.20),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Center(
+                  child: Text(
+                    '${index + 1}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
     ];
   }
 
@@ -3030,12 +3074,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   }
 
   RouteStopPoint? _routeTerminalStop(RouteSummaryModel? route) {
-    if (route == null || route.stopPoints.isEmpty) {
-      return null;
-    }
-    final stops = List<RouteStopPoint>.from(route.stopPoints)
-      ..sort((left, right) => left.order.compareTo(right.order));
-    return stops.first;
+    return route?.departureTerminal;
   }
 
   String _rideStatusMessage(RideSessionModel ride) {
@@ -3334,6 +3373,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     final routePath = _routeMapPath(selectedRoute, selectedTrip);
     final tripMarkers = [
       ..._routeLandmarkMarkers(selectedRoute),
+      ..._routeTerminalMarkers(selectedRoute),
+      if (selectedRoute?.departureTerminal == null)
+        ..._tripTerminalMarkers(selectedTrip),
       ..._tripVehicleMarkers(routeTrips, selectedTrip),
     ];
 
@@ -3462,6 +3504,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     final routePath = _routeMapPath(selectedRoute, selectedTrip);
     final tripMarkers = [
       ..._routeLandmarkMarkers(selectedRoute),
+      ..._routeTerminalMarkers(selectedRoute),
+      if (selectedRoute?.departureTerminal == null)
+        ..._tripTerminalMarkers(selectedTrip),
       ..._tripVehicleMarkers(routeTrips, selectedTrip),
     ];
 

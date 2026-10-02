@@ -8,6 +8,8 @@ class RouteSummaryModel {
     required this.direction,
     required this.status,
     this.description,
+    this.terminalEnabled = true,
+    this.configuredTerminal,
     this.pathPoints = const <LatLng>[],
     this.waypointPoints = const <LatLng>[],
     this.stopPoints = const <RouteStopPoint>[],
@@ -27,6 +29,8 @@ class RouteSummaryModel {
   final String direction;
   final String status;
   final String? description;
+  final bool terminalEnabled;
+  final RouteStopPoint? configuredTerminal;
   final List<LatLng> pathPoints;
   final List<LatLng> waypointPoints;
   final List<RouteStopPoint> stopPoints;
@@ -40,6 +44,8 @@ class RouteSummaryModel {
   final RouteFareConfig fareConfig;
 
   factory RouteSummaryModel.fromJson(Map<String, dynamic> json) {
+    final terminal = _asMap(json['terminal']);
+    final terminalPosition = _parseLatLng(terminal?['location']);
     final stops = json['stops'];
     final stopPoints = _parseStopPoints(stops);
     final pathPoints = _parseLinePoints(json['path']);
@@ -57,6 +63,14 @@ class RouteSummaryModel {
       direction: json['direction']?.toString() ?? 'circular',
       status: json['status']?.toString() ?? 'inactive',
       description: json['description']?.toString(),
+      terminalEnabled: terminal?['enabled'] != false,
+      configuredTerminal: terminalPosition == null
+          ? null
+          : RouteStopPoint(
+              name: _terminalName(terminal),
+              order: 0,
+              position: terminalPosition,
+            ),
       pathPoints: pathPoints,
       waypointPoints: waypointPoints,
       stopPoints: stopPoints,
@@ -70,6 +84,15 @@ class RouteSummaryModel {
       fareConfig: RouteFareConfig.fromJson(json['fareConfig']),
     );
   }
+
+  // Match the backend: disabled means unavailable, then configured location,
+  // then the first ordered valid route stop. Never infer it from the path.
+  RouteStopPoint? get departureTerminal => terminalEnabled
+      ? configuredTerminal ?? (stopPoints.isEmpty ? null : stopPoints.first)
+      : null;
+
+  RouteStopPoint? get endTerminal =>
+      stopPoints.isEmpty ? null : stopPoints.last;
 
   String get label => code.isEmpty ? name : '$code - $name';
 
@@ -258,7 +281,12 @@ LatLng? _parseLatLng(dynamic value) {
   }
   final lng = _toDouble(coordinates[0]);
   final lat = _toDouble(coordinates[1]);
-  if (lat == null || lng == null) {
+  if (lat == null ||
+      lng == null ||
+      !lat.isFinite ||
+      !lng.isFinite ||
+      lat.abs() > 90 ||
+      lng.abs() > 180) {
     return null;
   }
   return LatLng(lat, lng);
@@ -270,7 +298,12 @@ LatLng? _parseLineCoordinate(dynamic value) {
   }
   final lng = _toDouble(value[0]);
   final lat = _toDouble(value[1]);
-  if (lat == null || lng == null) {
+  if (lat == null ||
+      lng == null ||
+      !lat.isFinite ||
+      !lng.isFinite ||
+      lat.abs() > 90 ||
+      lng.abs() > 180) {
     return null;
   }
   return LatLng(lat, lng);
@@ -312,4 +345,12 @@ LatLng? _lastPoint(
   if (waypointPoints.isNotEmpty) return waypointPoints.last;
   if (stopPoints.isNotEmpty) return stopPoints.last.position;
   return null;
+}
+
+String _terminalName(Map? terminal) {
+  for (final value in [terminal?['stopRef'], terminal?['name']]) {
+    final name = value?.toString().trim() ?? '';
+    if (name.isNotEmpty) return name;
+  }
+  return 'Route terminal';
 }

@@ -1,3 +1,4 @@
+import '../../widgets/terminal_map_marker.dart';
 import '../../widgets/driver_action_toast.dart';
 import '../../core/utils/navigation_follow.dart';
 import 'dart:async';
@@ -172,7 +173,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   bool _routeHasTerminalStop(RouteSummaryModel route) {
-    return route.stopPoints.isNotEmpty;
+    return route.departureTerminal != null;
   }
 
   @override
@@ -4956,6 +4957,13 @@ class _DriveMapMarker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (entry.kind == _DriveMarkerKind.terminal ||
+        entry.kind == _DriveMarkerKind.endTerminal) {
+      return TerminalMapMarker(
+          name: entry.label,
+          isEnd: entry.kind == _DriveMarkerKind.endTerminal,
+          isCombined: entry.detail == 'Departure terminal and route end');
+    }
     final icon = Icon(entry.icon, color: Colors.white, size: 20);
     final markerIcon = entry.rotateWithHeading && entry.headingDegrees != null
         ? Transform.rotate(
@@ -5031,6 +5039,8 @@ class _DriveMapMarker extends StatelessWidget {
 
 enum _DriveMarkerKind {
   landmark,
+  terminal,
+  endTerminal,
   vehicle,
   pickup,
   unload,
