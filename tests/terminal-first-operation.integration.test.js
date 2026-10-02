@@ -100,6 +100,8 @@ before(async () => {
   app = express();
   app.use(express.json());
   app.use('/trips', require('../src/routes/trips.routes'));
+  app.use('/admin', require('../src/routes/admin.routes'));
+  await Promise.all(Object.values(mongoose.models).map(model => model.init()));
   app.use((error, _req, res, _next) =>
     res.status(error.statusCode || 500).json({
       message: error.message,
@@ -138,6 +140,9 @@ test('direct route starts are rejected and terminal intent waits for arrival', a
   assert.equal(intent.status, 201, intent.text);
   assert.equal(intent.body.data.status, 'scheduled');
   assert.equal(intent.body.data.terminalQueueStatus, 'off_queue');
+  const synchronizedDriver = await Driver.findById(driver._id);
+  assert.equal(synchronizedDriver.operatingMode, 'terminal_queue');
+  assert.equal(synchronizedDriver.terminalQueueStatus, 'off_queue');
 
   const manualStart = await request(app)
     .patch(`/trips/${intent.body.data._id}/start`)
@@ -182,7 +187,10 @@ test('two fresh in-geofence fixes check in once and departure enables route oper
     capturedAt: new Date(),
   });
   assert.equal(poorAccuracy.detected, false);
+  assert.equal(poorAccuracy.status, 'poor_accuracy');
+  assert.equal(poorAccuracy.reason, 'GPS accuracy is too low');
   assert.equal(await Trip.findById(pending._id).then((trip) => trip.terminalArrivalFixCount), 0);
+  assert.equal(await Trip.findById(pending._id).then((trip) => trip.terminalArrivalStatus), 'poor_accuracy');
 
   const outside = await processTerminalArrival({
     ...base,
@@ -192,6 +200,8 @@ test('two fresh in-geofence fixes check in once and departure enables route oper
     capturedAt: new Date(),
   });
   assert.equal(outside.detected, false);
+  assert.equal(outside.status, 'outside_terminal_radius');
+  assert.match(outside.reason, /meters from the terminal/);
   assert.equal(await Trip.findById(pending._id).then((trip) => trip.terminalArrivalFixCount), 0);
 
   const first = await processTerminalArrival({
@@ -201,6 +211,11 @@ test('two fresh in-geofence fixes check in once and departure enables route oper
   });
   assert.equal(first.detected, false);
   assert.equal(first.fixes, 1);
+  assert.equal(first.status, 'insufficient_valid_fixes');
+  assert.equal(first.reason, 'Only one valid GPS fix received');
+  const awaiting = await Trip.findById(pending._id);
+  assert.equal(awaiting.status, 'scheduled');
+  assert.equal(awaiting.terminalQueueNumber, undefined);
 
   const second = await processTerminalArrival({
     ...base,
@@ -221,4 +236,79 @@ test('two fresh in-geofence fixes check in once and departure enables route oper
   });
   assert.equal(departed.operatingMode, 'route');
   assert.equal(departed.terminalQueueStatus, 'departed');
+});
+
+test('arrival survives stream restart, rejects duplicate time and serializes concurrent fixes', async () => {
+  await Trip.updateMany({ driverId: driver._id }, { $set: { status: 'completed', active: false } });
+  const pending = await Trip.create({ driverId: driver._id, jeepneyId: jeepney._id,
+    routeId: route._id, status: 'scheduled', active: false, acceptRequests: false,
+    operatingMode: 'terminal_queue', terminalQueueStatus: 'off_queue',
+    terminalLocation: point(121, 14), terminalRadiusMeters: 100 });
+  const base = { actor: { _id: user._id, role: 'DRIVER' }, jeepneyId: jeepney._id,
+    latitude: 14, longitude: 121, accuracyMeters: 8, streamId: crypto.randomUUID() };
+  const now = new Date();
+  const at = seconds => new Date(now.getTime() - seconds * 1000);
+  const send = overrides => processTerminalArrival({ ...base, now, ...overrides });
+  assert.equal((await send({ sequence: 90, capturedAt: at(70) })).status, 'stale_location');
+  assert.equal((await send({ sequence: 91, capturedAt: at(10) })).fixes, 1);
+  assert.equal((await send({ sequence: 92, capturedAt: at(10) })).ignored, true);
+  // Restarting the app resets its sequence, but not to an older GPS sample.
+  base.streamId = crypto.randomUUID();
+  assert.equal((await send({ sequence: 1, capturedAt: at(9) })).fixes, 1);
+  assert.equal((await send({ sequence: 2, capturedAt: at(8), latitude: null })).status, 'invalid_coordinates');
+  assert.equal((await send({ sequence: 3, capturedAt: at(7), accuracyMeters: -1 })).status, 'poor_accuracy');
+  assert.equal((await send({ sequence: 4, capturedAt: at(6) })).fixes, 1);
+  await Promise.all([5, 6, 7].map(sequence => send({ sequence, capturedAt: at(10 - sequence) })));
+  const queued = await Trip.findById(pending._id);
+  assert.equal(queued.status, 'active');
+  assert.equal(queued.terminalQueueStatus, 'loading');
+  const Action = require('../src/models/terminalQueueAction');
+  assert.equal(await Action.countDocuments({ tripId: pending._id, action: 'check_in' }), 1);
+  assert.equal(await Action.countDocuments({ tripId: pending._id, action: 'promote' }), 1);
+  assert.equal(await Trip.countDocuments({ driverId: driver._id, status: 'active' }), 1);
+});
+
+test('admin assignment is authorized, deduplicated and preserves queued and departed trips', async () => {
+  await Trip.updateMany({ driverId: driver._id }, { $set: { status: 'completed', active: false } });
+  await Driver.updateOne({ _id: driver._id }, { $set: { assignedRouteId: route._id } });
+  const admin = await User.create({ email: 'terminal-admin@example.test', fullName: 'Terminal Admin', role: 'ADMIN', status: 'active' });
+  const sid = crypto.randomUUID();
+  await AuthSession.create({ _id: sid, userId: admin._id, authVersion: 0, expiresAt: new Date(Date.now() + 600000) });
+  const adminToken = signToken({ sub: String(admin._id), role: admin.role, sid });
+  const assign = (body = {}, bearer = adminToken) => request(app).post(`/admin/drivers/${driver._id}/terminal-intent`)
+    .set('Authorization', `Bearer ${bearer}`).send(body);
+  assert.equal((await assign({}, token)).status, 403);
+  assert.equal((await assign({ jeepneyId: String(new mongoose.Types.ObjectId()) })).status, 409);
+  assert.equal((await assign({ routeId: String(new mongoose.Types.ObjectId()) })).status, 409);
+  await User.updateOne({ _id: user._id }, { $set: { status: 'suspended' } });
+  assert.equal((await assign()).status, 409);
+  await User.updateOne({ _id: user._id }, { $set: { status: 'active' } });
+  const responses = await Promise.all([assign(), assign(), assign()]);
+  responses.forEach(result => assert.equal(result.status, 200, result.text));
+  const id = responses[0].body.data._id;
+  assert.ok(responses.every(r => r.body.data._id === id));
+  assert.equal(await Trip.countDocuments({ driverId: driver._id, status: 'scheduled' }), 1);
+  assert.equal(responses[0].body.data.terminalSummary.queuePosition, null);
+  assert.equal(responses[0].body.data.acceptRequests, false);
+  const board = await request(app).get('/admin/hybrid-dispatch').set('Authorization', `Bearer ${adminToken}`);
+  assert.equal(board.status, 200, board.text);
+  assert.equal(board.body.data.awaitingTerminalArrival.length, 1);
+  assert.equal(board.body.data.terminalQueue.length, 0);
+  assert.equal(board.body.data.awaitingTerminalArrival[0].driverId.userId.fullName, 'Terminal First Driver');
+  assert.equal(board.body.data.awaitingTerminalArrival[0].terminalSummary.terminalArrival.endTerminal.name, 'Terminal First End');
+  const base = { actor: { _id: user._id, role: 'DRIVER' }, jeepneyId: jeepney._id,
+    latitude: 14, longitude: 121, accuracyMeters: 8, streamId: crypto.randomUUID() };
+  const now = new Date();
+  await processTerminalArrival({ ...base, sequence: 1, capturedAt: new Date(now.getTime() - 1000), now });
+  await processTerminalArrival({ ...base, sequence: 2, capturedAt: now, now });
+  const retry = await assign();
+  assert.equal(retry.status, 200, retry.text);
+  assert.equal(retry.body.data.terminalQueueStatus, 'loading');
+  assert.equal((await Driver.findById(driver._id)).terminalQueueStatus, 'loading');
+  await terminalQueue.change({ tripId: id, actor: base.actor, action: 'depart', requestId: 'admin-test-depart' });
+  const departed = await assign();
+  assert.equal(departed.status, 200, departed.text);
+  assert.equal(departed.body.data.operatingMode, 'route');
+  assert.equal((await Driver.findById(driver._id)).operatingMode, 'route');
+  assert.equal(await Trip.countDocuments({ driverId: driver._id, status: { $in: ['scheduled', 'active'] } }), 1);
 });

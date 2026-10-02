@@ -63,7 +63,7 @@ async function promote(routeId, session) {
   return null;
 }
 async function publish(routeId) {
-  const trips = await Trip.find({ routeId, status: 'active' }).select('driverId');
+  const trips = await Trip.find({ routeId, status: { $in: ['scheduled', 'active'] } }).select('driverId');
   await Promise.all(trips.map(trip => invalidateDriverActiveContext(trip.driverId)));
   const { emitOperationsChanged } = require('../realtime/socketServer');
   for (const role of ['driver', 'passenger', 'admin']) emitOperationsChanged({ type: 'terminal.queue.updated', routeId: String(routeId), role });
@@ -100,9 +100,9 @@ async function nextPosition(routeId, session) {
   await Queue.updateOne({ _id: routeId }, { $max: { nextPosition: max?.terminalQueueNumber || 0 } }, { session });
   return (await Queue.findOneAndUpdate({ _id: routeId }, { $inc: { nextPosition: 1 } }, { new: true, session })).nextPosition;
 }
-async function checkIn({ document, actor, requestId, reason, existingId }) {
+async function checkIn({ document, actor, requestId, reason, existingId, session: existingSession }) {
   validateActor(actor, requestId, reason);
-  return transaction(document.routeId, async session => {
+  const operation = async session => {
     const prior = await replay(actor, requestId, 'check_in', session);
     if (prior) {
       if (String(prior.routeId) !== String(document.routeId)) throw new ApiError(409, 'requestId belongs to another route');
@@ -123,7 +123,8 @@ async function checkIn({ document, actor, requestId, reason, existingId }) {
     await sync(trip, session); await promote(trip.routeId, session);
     await audit(trip, actor, 'check_in', requestId, reason, session);
     return Trip.findById(trip._id).session(session);
-  });
+  };
+  return existingSession ? operation(existingSession) : transaction(document.routeId, operation);
 }
 async function offerTransfers(trip, session) {
   const requests = await Pickup.find({ tripSessionId: trip._id, pickupType: 'terminal',
@@ -265,16 +266,34 @@ async function reconcile() {
 async function describe(value) {
   const trip = value.toObject ? value.toObject() : value;
   if (trip.operatingMode !== 'terminal_queue') return trip;
-  const vehicle = await Jeepney.findById(trip.jeepneyId?._id || trip.jeepneyId).select('capacity lastSeenAt');
+  const vehicle = await Jeepney.findById(trip.jeepneyId?._id || trip.jeepneyId).select('capacity lastSeenAt lastKnownLocation latestLocationOrder');
   const { reserved: reservedSeats, occupied } = await require('./seatAccounting.service').counts(trip);
   const bookings = await Pickup.find({ tripSessionId: trip._id, status: { $in: ['pending', 'acknowledged'] }, expiresAt: { $gt: new Date() } }).select('partySize').lean();
-  const queuePosition = trip.terminalQueueStatus === 'skipped' ? null : trip.terminalQueueStatus === 'loading' ? 1 : 1 + await Trip.countDocuments({ ...activeQueue, routeId: trip.routeId?._id || trip.routeId,
+  const routeStops = Array.isArray(trip.routeId?.stops) ? [...trip.routeId.stops] : [];
+  routeStops.sort((left, right) => Number(left?.order || 0) - Number(right?.order || 0));
+  const endTerminal = routeStops.length ? routeStops[routeStops.length - 1] : null;
+  const queuePosition = trip.status !== 'active' || trip.terminalQueueStatus === 'off_queue' ? null : trip.terminalQueueStatus === 'skipped' ? null : trip.terminalQueueStatus === 'loading' ? 1 : 1 + await Trip.countDocuments({ ...activeQueue, routeId: trip.routeId?._id || trip.routeId,
     $or: [{ terminalQueueStatus: 'loading' }, { terminalQueueStatus: 'waiting', terminalQueueNumber: { $lt: trip.terminalQueueNumber } }] });
   return { ...trip, terminalSummary: { queuePosition, reservedSeats, onboardSeats: occupied,
     reservationCount: bookings.length, reservationPartySizes: bookings.map(booking => booking.partySize ?? 1),
     ...operatingRules.loadingTiming(trip),
     availableSeats: Math.max(0, (vehicle?.capacity || 0) - occupied - reservedSeats),
     gpsWarning: !vehicle?.lastSeenAt || Date.now() - vehicle.lastSeenAt.getTime() > 300000,
-    lastSeenAt: vehicle?.lastSeenAt || null } };
+    lastSeenAt: vehicle?.lastSeenAt || null,
+    terminalArrival: {
+      status: trip.terminalArrivalStatus || 'no_ordered_update',
+      reason: trip.terminalArrivalReason || 'Driver has not provided an ordered location update',
+      distanceMeters: trip.terminalArrivalLastDistanceMeters ?? null,
+      accuracyMeters: trip.terminalArrivalLastAccuracyMeters ?? null,
+      validFixes: Number(trip.terminalArrivalFixCount || 0),
+      requiredValidFixes: 2,
+      lastUpdateAt: trip.terminalArrivalLastAt || null,
+      terminalLocation: trip.terminalLocation || null,
+      terminalRadiusMeters: trip.terminalRadiusMeters || null,
+      endTerminal: endTerminal
+        ? { name: endTerminal.name || endTerminal.code || 'Route end', location: endTerminal.location || null }
+        : null,
+    },
+  } };
 }
 module.exports = { audit, validateActor, reconcile, describe, prepare, lock, promote, publish, transaction, checkIn, change, reserve, transfer, activeQueue };

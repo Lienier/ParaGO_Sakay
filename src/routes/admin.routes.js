@@ -125,18 +125,25 @@ const terminalQueueActiveStatuses = ['waiting', 'loading', 'skipped'];
 
 const populateDispatchTrip = (query) =>
   query
-    .populate('driverId', 'userId')
+    .populate({ path: 'driverId', select: 'userId', populate: { path: 'userId', select: 'email fullName status role' } })
     .populate('jeepneyId', 'plateNumber jeepneyName capacity')
-    .populate('routeId', 'name code direction');
+    .populate('routeId', 'name code direction terminal stops');
 
 const buildHybridDispatchBoard = async () => {
-  const [terminalTrips, routeTrips] = await Promise.all([
+  const [terminalTrips, awaitingTrips, routeTrips] = await Promise.all([
     populateDispatchTrip(
       TripSession.find({
         status: 'active',
         operatingMode: 'terminal_queue',
       })
     ).sort({ terminalQueueNumber: 1, terminalCheckedInAt: 1, createdAt: 1 }),
+    populateDispatchTrip(
+      TripSession.find({
+        status: 'scheduled',
+        operatingMode: 'terminal_queue',
+        terminalQueueStatus: 'off_queue',
+      })
+    ).sort({ createdAt: 1 }),
     populateDispatchTrip(
       TripSession.find({
         status: 'active',
@@ -157,6 +164,7 @@ const buildHybridDispatchBoard = async () => {
 
   return {
     terminalQueue: await Promise.all(terminalTrips.map(terminalQueue.describe)),
+    awaitingTerminalArrival: await Promise.all(awaitingTrips.map(terminalQueue.describe)),
     waitingTerminalPassengers: terminalRequests,
     routeDrivers: routeTrips,
   };
@@ -786,6 +794,30 @@ router.post(
     const jeepneyId = normalizeOptionalObjectId(req.body?.jeepneyId, 'jeepneyId');
     const assigned = await syncJeepneyAssignment(targetDriver, jeepneyId);
     return ok(res, assigned, 'Driver jeepney assignment updated');
+  })
+);
+
+router.post(
+  '/drivers/:id/terminal-intent',
+  asyncHandler(async (req, res) => {
+    ensureObjectId(req.params.id, 'driver id');
+    const driver = await Driver.findById(req.params.id);
+    if (!driver) throw new ApiError(404, 'Driver not found');
+    if (driver.status !== 'active') throw new ApiError(409, 'Driver must be active');
+
+    const routeId = req.body?.routeId || driver.assignedRouteId;
+    const jeepneyId = req.body?.jeepneyId || driver.assignedJeepneyId;
+    if (!routeId || !jeepneyId) {
+      throw new ApiError(409, 'Assign an active route and jeepney before adding the driver to a terminal');
+    }
+    ensureObjectId(routeId, 'routeId');
+    ensureObjectId(jeepneyId, 'jeepneyId');
+    const intent = await require('../services/terminalIntent.service').createTerminalIntent({
+      driverId: driver._id, routeId, jeepneyId, assignedRouteOnly: true,
+    });
+    const message = intent.status === 'scheduled'
+      ? 'Driver is awaiting terminal arrival' : 'Existing trip retained';
+    return ok(res, await terminalQueue.describe(intent), message);
   })
 );
 

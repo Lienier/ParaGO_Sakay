@@ -62,6 +62,10 @@ const initializeRedis = async () => {
 
   client = createClient({
     url: redisUrl,
+    // Keep the wire protocol explicit so local Redis 5 and managed Redis/Valkey
+    // deployments share the same command behavior. The counters and cache
+    // operations used by ParaGO do not require RESP3-only features.
+    RESP: 2,
     socket: {
       connectTimeout: redisConnectTimeoutMs,
       reconnectStrategy: (retries) => Math.min(250 * 2 ** retries, 5000),

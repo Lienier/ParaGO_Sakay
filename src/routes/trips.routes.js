@@ -307,55 +307,14 @@ router.post(
       }
     }
     if (operatingMode === 'terminal_queue') {
-      const terminal = resolveRouteTerminalStop(route);
-      if (!payload.driverId) {
-        throw new ApiError(400, 'driverId is required for terminal entry');
-      }
-      const activeTrip = await TripSession.findOne({
-        $or: [{ driverId: payload.driverId }, { jeepneyId: jeepney._id }],
-        status: 'active',
+      if (!payload.driverId) throw new ApiError(400, 'driverId is required for terminal entry');
+      const intent = await require('../services/terminalIntent.service').createTerminalIntent({
+        driverId: payload.driverId, routeId: route._id, jeepneyId: jeepney._id,
       });
-      if (activeTrip) {
-        throw new ApiError(409, 'Driver or jeepney already has an active trip');
-      }
-      const existingIntent = await TripSession.findOne({
-        driverId: payload.driverId,
-        jeepneyId: jeepney._id,
-        status: { $in: ['scheduled', 'active'] },
-        operatingMode: 'terminal_queue',
-      });
-      if (existingIntent) {
-        return ok(res, existingIntent, 'Terminal arrival already pending');
-      }
-      let intent;
-      try {
-        intent = await TripSession.create({
-          jeepneyId: jeepney._id,
-          driverId: payload.driverId,
-          routeId: route._id,
-          routePathSnapshot: buildRoutePathSnapshot(route),
-          status: 'scheduled',
-          active: false,
-          acceptRequests: false,
-          operatingMode: 'terminal_queue',
-          terminalQueueStatus: 'off_queue',
-          terminalStopRef: terminal.stopRef,
-          terminalLocation: terminal.location,
-          terminalRadiusMeters: terminal.radiusMeters,
-        });
-      } catch (error) {
-        if (error.code === 11000) {
-          intent = await TripSession.findOne({
-            driverId: payload.driverId,
-            jeepneyId: jeepney._id,
-            status: { $in: ['scheduled', 'active'] },
-            operatingMode: 'terminal_queue',
-          });
-        }
-        if (!intent) throw error;
-      }
-      return ok(res, intent, 'Drive to the configured terminal; arrival will be detected automatically', 201);
+      return ok(res, await terminalQueue.describe(intent),
+        intent.status === 'scheduled' ? 'Drive to the configured terminal; arrival will be detected automatically' : 'Existing trip retained', 201);
     }
+
     const trip = await createTripSession({
       payload,
       route,

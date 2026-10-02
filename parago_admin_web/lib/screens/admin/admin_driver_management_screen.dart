@@ -411,6 +411,43 @@ class _AdminDriverManagementScreenState
     }
   }
 
+  Future<void> _addDriverToTerminal(Map<String, dynamic> driver) async {
+    if (_saving) return;
+    final driverId = driver['_id']?.toString();
+    if (driverId == null || driverId.isEmpty) return;
+    final jeepney = driver['assignedJeepneyId'];
+    final jeepneyId = _nullableIdOf(jeepney);
+    final routeId = _routeSelection.value ?? _nullableIdOf(driver['assignedRouteId']);
+    if (jeepneyId == null || routeId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Assign an active route and jeepney first.')),
+      );
+      return;
+    }
+    final admin = AdminService(context.read<SessionController>().apiClient);
+    setState(() => _saving = true);
+    try {
+      await ActionFeedback.run<dynamic>(
+        context: context,
+        loadingMessage: 'Adding driver to terminal arrival...',
+        successMessage: 'Driver is now awaiting terminal arrival.',
+        action: () => admin.createTerminalIntent(
+          driverId: driverId,
+          routeId: routeId,
+          jeepneyId: jeepneyId,
+        ),
+        onSuccess: (_) async {
+          if (!mounted) return;
+          Navigator.of(context).pop();
+          await _load();
+          widget.onChanged?.call();
+        },
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final searchQuery = _searchCtrl.text.trim().toLowerCase();

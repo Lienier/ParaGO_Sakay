@@ -61,6 +61,22 @@ const tripSessionSchema = new Schema(
     terminalArrivalLastAt: { type: Date },
     terminalArrivalLastStreamId: { type: String, trim: true },
     terminalArrivalLastSequence: { type: Number, min: 1 },
+    terminalArrivalStatus: {
+      type: String,
+      enum: [
+        'no_ordered_update',
+        'stale_location',
+        'poor_accuracy',
+        'invalid_coordinates',
+        'outside_terminal_radius',
+        'insufficient_valid_fixes',
+        'accepted',
+      ],
+      default: 'no_ordered_update',
+    },
+    terminalArrivalReason: { type: String, trim: true },
+    terminalArrivalLastDistanceMeters: { type: Number, min: 0 },
+    terminalArrivalLastAccuracyMeters: { type: Number, min: 0 },
   },
   { timestamps: true }
 );

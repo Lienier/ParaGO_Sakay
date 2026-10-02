@@ -411,6 +411,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       );
 
       if (!mounted || loadGeneration != _dashboardLoadGeneration) return;
+      final hasCompletedRide = rides.any((ride) => ride.status == 'completed');
       setState(() {
         if (_passengerEtaTripId != null && _passengerEtaTripId != nextTripId) {
           _clearPassengerEtaSelection();
@@ -433,6 +434,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         _syncMessage = usedStaleCache
             ? 'Showing cached trip data while reconnecting.'
             : null;
+        if (hasCompletedRide &&
+            _statusMessage == 'Stop alert sent successfully.') {
+          _statusMessage = null;
+        }
       });
       _reconcileTripVehicleStates(trips);
       _pruneTripMarkerAnimations();
@@ -759,6 +764,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
             return;
           }
           _rides = _upsertRideSessions(_rides, ride);
+          if (ride.status == 'completed' &&
+              _statusMessage == 'Stop alert sent successfully.') {
+            _statusMessage = null;
+          }
           break;
       }
     });

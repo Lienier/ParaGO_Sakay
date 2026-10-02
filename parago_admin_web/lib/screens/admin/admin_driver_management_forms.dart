@@ -473,6 +473,12 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                   onPressed: _saving ? null : () => _updateDriver(driver),
                   child: const Text('Save changes'),
                 ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: _saving ? null : () => _addDriverToTerminal(driver),
+                  icon: const Icon(Icons.location_on_outlined),
+                  label: const Text('Add to terminal'),
+                ),
                 const SizedBox(height: 12),
               ],
             ),

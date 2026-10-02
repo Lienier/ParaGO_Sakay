@@ -135,6 +135,23 @@ class AdminService {
     return data is List<dynamic> ? data : <dynamic>[];
   }
 
+  Future<Map<String, dynamic>> createTerminalIntent({
+    required String driverId,
+    String? routeId,
+    String? jeepneyId,
+  }) async {
+    final response = await _client.request(
+      method: 'POST',
+      path: '/admin/drivers/$driverId/terminal-intent',
+      body: {
+        if (routeId != null) 'routeId': routeId,
+        if (jeepneyId != null) 'jeepneyId': jeepneyId,
+      },
+      useCache: false,
+    );
+    return response['data'] as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> createDriverAccount({
     required String email,
     required String password,

@@ -57,6 +57,8 @@ class _AdminOperationsPage extends StatelessWidget {
       ]));
 
   List<dynamic> get _queue => _readDynamicList(board?['terminalQueue']);
+  List<dynamic> get _awaiting =>
+      _readDynamicList(board?['awaitingTerminalArrival']);
   String _routeKey(dynamic trip) {
     final r = _readDynamicMap(_readDynamicMap(trip)['routeId']);
     return r['_id']?.toString() ?? r['name']?.toString() ?? 'unassigned';
@@ -179,7 +181,7 @@ class _AdminOperationsPage extends StatelessWidget {
   }
 
   Widget _dispatch(BuildContext context) {
-    final allTrips = [..._queue, ..._readDynamicList(board?['routeDrivers'])];
+    final allTrips = [..._awaiting, ..._queue, ..._readDynamicList(board?['routeDrivers'])];
     final routes = <String, String>{
       for (final t in allTrips)
         _routeKey(t): _readDynamicMap(_readDynamicMap(t)['routeId'])['name']
@@ -207,6 +209,26 @@ class _AdminOperationsPage extends StatelessWidget {
         _state('dispatch'),
       ])),
       if (board != null) ...[
+        const SizedBox(height: 20),
+        Text('Awaiting terminal arrival',
+            style: Theme.of(context)
+                .textTheme
+                .titleLarge
+                ?.copyWith(color: const Color(0xFF142C46))),
+        const SizedBox(height: 4),
+        const Text(
+            'Scheduled trips remain out of the queue until two valid GPS fixes arrive.',
+            style: TextStyle(color: AppColors.textSecondary)),
+        const SizedBox(height: 10),
+        if (_awaiting.where((t) => selected == null || _routeKey(t) == selected).isEmpty)
+          const OperationsPanel(
+              child: Text('No drivers are awaiting terminal arrival.'))
+        else
+          for (final trip in _awaiting.where((t) => selected == null || _routeKey(t) == selected))
+            Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _AwaitingTerminalArrivalRow(
+                    trip: _readDynamicMap(trip))),
         for (final status in ['loading', 'waiting', 'skipped']) ...[
           const SizedBox(height: 20),
           Row(children: [
@@ -521,6 +543,50 @@ class _TerminalDispatchRow extends StatelessWidget {
                             children: actions),
                       ],
                     ])));
+  }
+}
+
+class _AwaitingTerminalArrivalRow extends StatelessWidget {
+  const _AwaitingTerminalArrivalRow({required this.trip});
+  final Map<String, dynamic> trip;
+
+  @override
+  Widget build(BuildContext context) {
+    final summary = _readDynamicMap(trip['terminalSummary']);
+    final arrival = _readDynamicMap(summary['terminalArrival']);
+    final driver = _readDynamicMap(_readDynamicMap(trip['driverId'])['userId']);
+    final vehicle = _readDynamicMap(trip['jeepneyId']);
+    final route = _readDynamicMap(trip['routeId']);
+    final location = _readDynamicMap(arrival['terminalLocation']);
+    final coordinates = location['coordinates'];
+    final terminalLocation = coordinates is List && coordinates.length >= 2
+        ? '${coordinates[1]}, ${coordinates[0]}'
+        : 'Location unavailable';
+    final distance = arrival['distanceMeters'];
+    final distanceLabel = distance == null
+        ? 'Distance unavailable'
+        : '${(double.tryParse(distance.toString()) ?? 0).round()} m from terminal';
+    final lastUpdate = arrival['lastUpdateAt']?.toString();
+    return OperationsPanel(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(driver['fullName']?.toString() ?? 'Driver unavailable',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 4),
+      Text(vehicle['plateNumber']?.toString() ?? 'Jeepney unavailable'),
+      const SizedBox(height: 12),
+      Wrap(spacing: 24, runSpacing: 12, children: [
+        Text('Route: ${route['name'] ?? 'Unassigned route'}'),
+        Text('Terminal: ${trip['terminalStopRef'] ?? 'Unassigned'}'),
+        Text('Terminal location: $terminalLocation'),
+        Text('GPS: ${arrival['status'] ?? 'Unknown'}'),
+        Text(distanceLabel),
+        Text('Valid fixes: ${arrival['validFixes'] ?? 0} / ${arrival['requiredValidFixes'] ?? 2}'),
+        Text('Last update: ${lastUpdate == null ? 'None' : DateTime.tryParse(lastUpdate)?.toLocal().toString().split('.').first ?? lastUpdate}'),
+      ]),
+      const SizedBox(height: 12),
+      Text(arrival['reason']?.toString() ?? 'Driver has not provided an ordered location update',
+          style: const TextStyle(color: AppColors.warning, fontWeight: FontWeight.w600)),
+    ]));
   }
 }
 

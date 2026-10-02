@@ -2971,7 +2971,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                       child: SingleChildScrollView(
                           child:
                               Column(mainAxisSize: MainAxisSize.min, children: [
-                        DriverActionToast(actions: _driverToastActions()),
+                        if (focusedTrip != null &&
+                            focusedTrip.operatingMode == 'terminal_queue' &&
+                            focusedTrip.terminalQueueStatus == 'off_queue')
+                          _TerminalArrivalCard(trip: focusedTrip),
+                        // The Requests and Alerts tabs already render the same
+                        // actions inline. Keeping the toast on those tabs too
+                        // put its button over the inline card, so a tap on
+                        // Acknowledge could activate Depart terminal instead.
+                        // Drive is the compact operating surface where the
+                        // persistent toast is intended to be used.
+                        if (_tabIndex == 0)
+                          DriverActionToast(actions: _driverToastActions()),
                         if (_tabIndex == 0 && _announcements.isNotEmpty)
                           AnnouncementCard(
                               announcement: _announcements.first,
@@ -3017,6 +3028,64 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
             label: 'Notifications',
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _TerminalArrivalCard extends StatelessWidget {
+  const _TerminalArrivalCard({required this.trip});
+
+  final TripSession trip;
+
+  String _coordinateLabel(dynamic point) {
+    final coordinates = point is Map ? point['coordinates'] : null;
+    if (coordinates is! List || coordinates.length < 2) {
+      return 'Location unavailable';
+    }
+    return '${coordinates[1]}, ${coordinates[0]}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final arrival = trip.terminalSummary?['terminalArrival'];
+    final data = arrival is Map
+        ? Map<String, dynamic>.from(arrival)
+        : const <String, dynamic>{};
+    final endTerminal = data['endTerminal'];
+    final endData =
+        endTerminal is Map ? Map<String, dynamic>.from(endTerminal) : null;
+    final distance = data['distanceMeters'];
+    final distanceLabel = distance == null
+        ? 'Distance unavailable'
+        : '${(double.tryParse(distance.toString()) ?? 0).round()} m from terminal';
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      color: const Color(0xFFF7FBFA),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Awaiting terminal arrival',
+              style: TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          Text(
+              'Arrival terminal: ${trip.terminalStopRef ?? 'Configured terminal'}'),
+          Text(
+              'Terminal location: ${_coordinateLabel(data['terminalLocation'])}'),
+          if (endData != null)
+            Text(
+                'End terminal: ${endData['name'] ?? 'Route end'} · ${_coordinateLabel(endData['location'])}'),
+          const SizedBox(height: 6),
+          Text(
+              'GPS progress: ${data['validFixes'] ?? 0} / ${data['requiredValidFixes'] ?? 2} valid fixes'),
+          Text(distanceLabel),
+          Text('Status: ${data['status'] ?? 'no_ordered_update'}'),
+          const SizedBox(height: 6),
+          Text(
+              data['reason']?.toString() ??
+                  'Driver has not provided an ordered location update',
+              style: const TextStyle(fontWeight: FontWeight.w600)),
+        ]),
       ),
     );
   }
@@ -3622,13 +3691,13 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                               if (!hasTrip) ...[
                                 const SizedBox(height: 10),
                                 const Text(
-                                  'No active trip selected yet. You can stay online and still share your jeepney location while on route.',
+                                  'No active trip selected yet. Start terminal entry when you are ready; passenger alerts become available after terminal departure.',
                                   style: TextStyle(color: Colors.white70),
                                 ),
                               ] else if (!isTripActive) ...[
                                 const SizedBox(height: 10),
                                 const Text(
-                                  'Start the trip when you are ready to receive ride alerts along your fixed route.',
+                                  'Drive to the configured terminal. Fresh GPS arrival is required before queue loading begins.',
                                   style: TextStyle(color: Colors.white70),
                                 ),
                               ],
@@ -3649,7 +3718,7 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                                       const SizedBox(height: 8),
                                       Text(
                                         trip == null
-                                            ? 'This driver screen handles route-based ride alerts, not direct passenger pickups.'
+                                            ? 'Start terminal entry to join the queue. After departure, passenger pickup alerts appear here.'
                                             : 'Passengers can alert along the route, and multiple riders can already be onboard.',
                                         style: Theme.of(context)
                                             .textTheme
