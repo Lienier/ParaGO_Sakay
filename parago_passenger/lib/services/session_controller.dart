@@ -219,9 +219,16 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> acceptLegalPolicies() async {
+    final epoch = _sessionEpoch;
+    final accountId = _user?.userId;
     final user = await AuthService(_apiClient).acceptLegalPolicies();
+    if (epoch != _sessionEpoch ||
+        accountId != _user?.userId ||
+        !isAuthenticated) {
+      return;
+    }
     _user = user;
-    _requiresLegalAcceptance = false;
+    _requiresLegalAcceptance = !user.legalAccepted;
     notifyListeners();
   }
 

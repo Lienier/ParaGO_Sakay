@@ -1,4 +1,5 @@
 import '../../widgets/terminal_map_marker.dart';
+import '../../widgets/map_follow_control.dart';
 import '../../widgets/driver_action_toast.dart';
 import '../../core/utils/navigation_follow.dart';
 import 'dart:async';
@@ -4122,26 +4123,14 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                   ),
                 Positioned(
                   right: 16,
-                  left: 16,
                   bottom: 112,
                   child: StreamBuilder<int>(
                       stream: Stream<int>.periodic(
                           const Duration(seconds: 2), (i) => i),
-                      builder: (context, _) => Row(children: [
-                            Expanded(
-                                child: IgnorePointer(
-                                    child: Card(
-                                        child: Padding(
-                                            padding: const EdgeInsets.all(8),
-                                            child: Text(
-                                                widget.readFollowStatus()))))),
-                            SizedBox(
-                                width: 132,
-                                child: FilledButton.icon(
-                                    onPressed: widget.onRecenter,
-                                    icon: const Icon(Icons.my_location),
-                                    label: const Text('Recenter'))),
-                          ])),
+                      builder: (context, _) => MapFollowControl(
+                            status: widget.readFollowStatus(),
+                            onRecenter: widget.onRecenter,
+                          )),
                 ),
                 Positioned(
                   left: 16,

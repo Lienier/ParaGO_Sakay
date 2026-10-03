@@ -1,4 +1,5 @@
 import '../../widgets/terminal_map_marker.dart';
+import '../../widgets/map_follow_control.dart';
 import '../../widgets/booking_fare_reference.dart';
 import '../../core/utils/navigation_follow.dart';
 import 'saved_places_screen.dart';
@@ -3472,21 +3473,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                     child: StreamBuilder<int>(
                       stream: Stream<int>.periodic(
                           const Duration(seconds: 2), (i) => i),
-                      builder: (context, _) => Card(
-                          child: Padding(
-                              padding: const EdgeInsets.all(8),
-                              child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    SizedBox(
-                                        width: 150,
-                                        child: Text(_passengerFollowStatus,
-                                            textAlign: TextAlign.center)),
-                                    TextButton.icon(
-                                        onPressed: _recenterPassengerMap,
-                                        icon: const Icon(Icons.my_location),
-                                        label: const Text('Recenter')),
-                                  ]))),
+                      builder: (context, _) => MapFollowControl(
+                        status: _passengerFollowStatus,
+                        onRecenter: _recenterPassengerMap,
+                      ),
                     ),
                   )),
             ],
@@ -7193,8 +7183,19 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                           message:
                               'Terminal loading: 4:30 AM to 7:30 PM. Departures depend on available jeeps; roadside trips may continue.',
                           triggerMode: TooltipTriggerMode.tap,
-                          child: Text('Terminal hours  4:30 AM to 7:30 PM',
-                              style: Theme.of(context).textTheme.labelSmall),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xF7FFFFFF),
+                              borderRadius: BorderRadius.circular(16),
+                              border:
+                                  Border.all(color: const Color(0x22075E54)),
+                            ),
+                            child: const Text('Terminal · 4:30 AM–7:30 PM',
+                                style: TextStyle(
+                                    color: Color(0xFF19363A), fontSize: 11)),
+                          ),
                         ),
                       ),
                     ),
