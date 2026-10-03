@@ -47,14 +47,17 @@ class UserProfile {
   final bool legalAccepted;
 
   factory UserProfile.fromJson(Map<String, dynamic> json) {
+    final role = UserRole.fromString(json['role']?.toString());
     return UserProfile(
       userId: json['_id']?.toString(),
       fullName: json['fullName']?.toString() ?? '',
       email: json['email']?.toString() ?? '',
-      role: UserRole.fromString(json['role']?.toString()),
+      role: role,
       passengerId: json['passengerId']?.toString(),
       driverId: json['driverId']?.toString(),
-      legalAccepted: json['legalAccepted'] != false,
+      legalAccepted: json.containsKey('legalAccepted')
+          ? json['legalAccepted'] == true
+          : role != UserRole.passenger && role != UserRole.driver,
     );
   }
 }
