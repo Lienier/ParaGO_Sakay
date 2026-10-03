@@ -35,6 +35,7 @@ class _AuthScreenState extends State<AuthScreen> {
   bool _isRegisterMode = false;
   bool _loading = false;
   bool _obscurePassword = true;
+  bool _legalAccepted = false;
   String? _error;
 
   @override
@@ -51,6 +52,11 @@ class _AuthScreenState extends State<AuthScreen> {
 
   Future<void> _submit() async {
     _dismissKeyboard();
+    if (_isRegisterMode && !_legalAccepted) {
+      setState(
+          () => _error = 'Accept both policies before creating your account.');
+      return;
+    }
     final session = context.read<SessionController>();
     final auth = AuthService(session.apiClient);
 
@@ -271,7 +277,11 @@ class _AuthScreenState extends State<AuthScreen> {
                                   fontWeight: FontWeight.w700,
                                 ),
                           ),
-                          if ((_error ?? context.watch<SessionController>().signedOutMessage) != null) ...[
+                          if ((_error ??
+                                  context
+                                      .watch<SessionController>()
+                                      .signedOutMessage) !=
+                              null) ...[
                             Container(
                               padding: const EdgeInsets.all(14),
                               decoration: BoxDecoration(
@@ -279,7 +289,10 @@ class _AuthScreenState extends State<AuthScreen> {
                                 borderRadius: BorderRadius.circular(18),
                               ),
                               child: Text(
-                                (_error ?? context.watch<SessionController>().signedOutMessage)!,
+                                (_error ??
+                                    context
+                                        .watch<SessionController>()
+                                        .signedOutMessage)!,
                                 style: TextStyle(
                                   color: scheme.onErrorContainer,
                                   fontWeight: FontWeight.w600,
@@ -477,6 +490,24 @@ class _AuthScreenState extends State<AuthScreen> {
                             ),
                           ),
                           const SizedBox(height: 22),
+                          if (_isRegisterMode) ...[
+                            CheckboxListTile(
+                              value: _legalAccepted,
+                              onChanged: _loading
+                                  ? null
+                                  : (value) => setState(
+                                      () => _legalAccepted = value == true),
+                              title: const Text(
+                                'I accept the Terms & Conditions and Privacy Policy.',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                              controlAffinity: ListTileControlAffinity.leading,
+                              contentPadding: EdgeInsets.zero,
+                              activeColor: actionColor,
+                              checkColor: scheme.onSecondary,
+                            ),
+                            const SizedBox(height: 8),
+                          ],
                           FilledButton(
                             onPressed: _loading ? null : _submit,
                             style: FilledButton.styleFrom(
@@ -504,6 +535,7 @@ class _AuthScreenState extends State<AuthScreen> {
                                 ? null
                                 : () => setState(() {
                                       _isRegisterMode = !_isRegisterMode;
+                                      _legalAccepted = false;
                                     }),
                             child: Text(
                               _isRegisterMode

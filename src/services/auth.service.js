@@ -30,6 +30,19 @@ const GENERIC_PASSENGER_REGISTRATION_FAILURE_MESSAGE =
   'Unable to create passenger account with the provided details';
 const ADMIN_OTP_EXPIRY_MS = 5 * 60 * 1000;
 const ADMIN_OTP_MAX_ATTEMPTS = 5;
+const LEGAL_POLICY_VERSION = '2026-10-03';
+
+const ensureCurrentLegalAcceptance = ({ termsVersion, privacyVersion }) => {
+  if (String(termsVersion || '') !== LEGAL_POLICY_VERSION ||
+      String(privacyVersion || '') !== LEGAL_POLICY_VERSION) {
+    throw new ApiError(400, 'Please accept the current Terms & Conditions and Privacy Policy');
+  }
+};
+
+const hasCurrentLegalAcceptance = (user) =>
+  ['PASSENGER', 'DRIVER'].includes(user?.role) &&
+  user?.legalAcceptance?.termsVersion === LEGAL_POLICY_VERSION &&
+  user?.legalAcceptance?.privacyVersion === LEGAL_POLICY_VERSION;
 
 const buildProfile = async (user) => {
   if (!user) return null;
@@ -39,6 +52,7 @@ const buildProfile = async (user) => {
     fullName: user.fullName,
     email: user.email,
     phone: user.phone || null,
+    legalAccepted: hasCurrentLegalAcceptance(user),
   };
   if (user.role === 'PASSENGER') {
     const passenger = await Passenger.findOne({ userId: user._id });
@@ -147,7 +161,31 @@ const issueSession = async (user, existingSession = null, dbSession = null) => {
   const refreshToken = signToken({ ...claims, exp: Math.floor(expiresAt.getTime() / 1000) }, 'refresh');
   await RefreshToken.create([{ userId: user._id, sessionId: sid,
     tokenHash: tokenHash(refreshToken), expiresAt }], { session: dbSession });
-  return { token, refreshToken, user: await buildProfile(user) };
+  return {
+    token,
+    refreshToken,
+    user: await buildProfile(user),
+    requiresLegalAcceptance: !hasCurrentLegalAcceptance(user) &&
+      ['PASSENGER', 'DRIVER'].includes(user.role),
+    legalPolicyVersion: LEGAL_POLICY_VERSION,
+  };
+};
+
+const acceptLegalPolicies = async ({ userId, termsVersion, privacyVersion }) => {
+  ensureCurrentLegalAcceptance({ termsVersion, privacyVersion });
+  const user = await User.findOneAndUpdate(
+    { _id: userId, role: { $in: ['PASSENGER', 'DRIVER'] }, status: 'active' },
+    { $set: {
+      legalAcceptance: {
+        termsVersion: LEGAL_POLICY_VERSION,
+        privacyVersion: LEGAL_POLICY_VERSION,
+        acceptedAt: new Date(),
+      },
+    } },
+    { new: true }
+  );
+  if (!user) throw new ApiError(404, 'Active passenger or driver account not found');
+  return { user: await buildProfile(user), legalPolicyVersion: LEGAL_POLICY_VERSION };
 };
 
 const authenticateLocalUser = async ({ email, password, role }) => {
@@ -182,9 +220,14 @@ const authenticateLocalUser = async ({ email, password, role }) => {
   return user;
 };
 
-const registerEmail = async ({ email, password, fullName, role = 'PASSENGER' }) => {
+const registerEmail = async ({
+  email, password, fullName, role = 'PASSENGER', termsVersion, privacyVersion,
+}) => {
   const normalizedEmail = normalizeEmail(email);
   const normalizedRole = ensureAllowedRequestedRole(role) || 'PASSENGER';
+  if (normalizedRole === 'PASSENGER') {
+    ensureCurrentLegalAcceptance({ termsVersion, privacyVersion });
+  }
   const existing = await User.findOne({ email: normalizedEmail });
   if (existing) {
     if (normalizedRole === 'PASSENGER') {
@@ -208,6 +251,15 @@ const registerEmail = async ({ email, password, fullName, role = 'PASSENGER' }) 
             role: normalizedRole,
             authProvider: 'local',
             status: 'active',
+            ...(normalizedRole === 'PASSENGER'
+              ? {
+                  legalAcceptance: {
+                    termsVersion: LEGAL_POLICY_VERSION,
+                    privacyVersion: LEGAL_POLICY_VERSION,
+                    acceptedAt: new Date(),
+                  },
+                }
+              : {}),
           },
         ],
         { session }
@@ -639,4 +691,6 @@ module.exports = {
   requestPasswordReset,
   resetPassword,
   buildProfile,
+  acceptLegalPolicies,
+  LEGAL_POLICY_VERSION,
 };

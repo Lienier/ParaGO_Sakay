@@ -224,6 +224,45 @@ test('simultaneous logins leave one session; replacement rejects HTTP and refres
   }
 });
 
+test('passenger legal acceptance is required once and is version-bound', async () => {
+  await User.updateOne({ _id: passenger._id }, { $unset: { legalAcceptance: 1 } });
+  const initial = await auth.loginEmail({ email: passenger.email, password: 'Replacement-password-42' });
+  assert.equal(initial.requiresLegalAcceptance, true);
+  await assert.rejects(
+    auth.acceptLegalPolicies({ userId: passenger._id, termsVersion: 'old', privacyVersion: 'old' }),
+    /current Terms & Conditions and Privacy Policy/,
+  );
+  const accepted = await auth.acceptLegalPolicies({
+    userId: passenger._id,
+    termsVersion: auth.LEGAL_POLICY_VERSION,
+    privacyVersion: auth.LEGAL_POLICY_VERSION,
+  });
+  assert.equal(accepted.user.legalAccepted, true);
+  const next = await auth.loginEmail({ email: passenger.email, password: 'Replacement-password-42' });
+  assert.equal(next.requiresLegalAcceptance, false);
+});
+
+test('new passenger registration requires and records the current policies', async () => {
+  await assert.rejects(
+    auth.registerEmail({
+      email: 'legal-new@example.test',
+      password: 'Legal-test-password-42',
+      fullName: 'Legal New',
+    }),
+    /current Terms & Conditions and Privacy Policy/,
+  );
+  const created = await auth.registerEmail({
+    email: 'legal-new@example.test',
+    password: 'Legal-test-password-42',
+    fullName: 'Legal New',
+    termsVersion: auth.LEGAL_POLICY_VERSION,
+    privacyVersion: auth.LEGAL_POLICY_VERSION,
+  });
+  assert.equal(created.requiresLegalAcceptance, false);
+  assert.equal((await User.findOne({ email: 'legal-new@example.test' })).legalAcceptance.termsVersion,
+    auth.LEGAL_POLICY_VERSION);
+});
+
 test('failed login preserves session; refresh retains session and absolute expiry', async () => {
   const first = await auth.loginEmail({ email: passenger.email, password: 'Replacement-password-42' });
   await assert.rejects(auth.loginEmail({ email: passenger.email, password: 'wrong-password' }));

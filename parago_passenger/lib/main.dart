@@ -10,6 +10,7 @@ import 'core/storage/token_storage.dart';
 import 'firebase_options.dart';
 import 'models/user_role.dart';
 import 'screens/auth_screen.dart';
+import 'screens/legal_acceptance_screen.dart';
 import 'screens/passenger/passenger_home_screen.dart';
 import 'services/session_controller.dart';
 import 'theme/app_theme.dart';
@@ -54,7 +55,8 @@ class ParagoApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'ParaGO Passenger',
       theme: AppTheme.light(),
-      builder: (context, child) => AppUpdateGate(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) =>
+          AppUpdateGate(child: child ?? const SizedBox.shrink()),
       home: Consumer<SessionController>(
         builder: (context, session, _) {
           if (session.isLoading) {
@@ -63,6 +65,10 @@ class ParagoApp extends StatelessWidget {
 
           if (!session.isAuthenticated) {
             return const AuthScreen();
+          }
+
+          if (session.requiresLegalAcceptance) {
+            return const LegalAcceptanceScreen();
           }
 
           if (session.user?.role == UserRole.passenger) {

@@ -3898,6 +3898,14 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        if (trip != null && trip!.terminalStopRef != null)
+                          Center(
+                            child: TerminalMapBanner(
+                              name: trip!.terminalStopRef!,
+                            ),
+                          ),
+                        if (trip != null && trip!.terminalStopRef != null)
+                          const SizedBox(height: 8),
                         Container(
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
@@ -4172,46 +4180,17 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                                 ),
                               ],
                             ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 38,
-                                  height: 38,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.14),
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                  child: Icon(
-                                    Icons.swipe_up,
-                                    color: Colors.white.withValues(alpha: 0.95),
-                                  ),
+                            child: Center(
+                              child: Text(
+                                trip == null
+                                    ? 'No trip selected · tap for controls'
+                                    : 'Trip controls · tap to open',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
                                 ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                        trip == null
-                                            ? 'No trip selected - pull up for controls'
-                                            : 'Trip control panel - pull up',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 2),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Icon(
-                                  Icons.keyboard_arrow_up,
-                                  color: Colors.white.withValues(alpha: 0.9),
-                                ),
-                              ],
+                              ),
                             ),
                           ),
                   ),
@@ -4268,29 +4247,34 @@ class _DriveMapMiniOverlay extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Row(
-              children: [
-                StatusBadge(status: status),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    routeLabel,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                    ),
+            Center(
+              child: InkWell(
+                onTap: onOpenControls,
+                borderRadius: BorderRadius.circular(18),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      StatusBadge(status: status),
+                      const SizedBox(width: 8),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 220),
+                        child: Text(
+                          routeLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                IconButton(
-                  tooltip: 'Open controls',
-                  onPressed: onOpenControls,
-                  icon: const Icon(Icons.keyboard_arrow_up),
-                  color: Colors.white,
-                  visualDensity: VisualDensity.compact,
-                ),
-              ],
+              ),
             ),
             const SizedBox(height: 8),
             Row(
@@ -4393,8 +4377,6 @@ class _DriveMapMiniControl extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.keyboard_arrow_up, color: Colors.white),
-            const SizedBox(width: 6),
             Text(
               hasTrip ? 'Controls' : 'Trip controls',
               style: const TextStyle(

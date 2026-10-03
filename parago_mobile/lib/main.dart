@@ -12,6 +12,7 @@ import 'core/network/api_client.dart';
 import 'core/storage/token_storage.dart';
 import 'firebase_options.dart';
 import 'screens/auth_screen.dart';
+import 'screens/legal_acceptance_screen.dart';
 import 'screens/driver/driver_home_screen.dart';
 import 'services/session_controller.dart';
 import 'theme/app_theme.dart';
@@ -33,11 +34,15 @@ Future<void> handleParaBackground(RemoteMessage message) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
     final tokens = await TokenStorage(prefs: prefs).loadTokens();
-    if (message.data['sessionId'] != ParaSoundService.sessionId(tokens['accessToken'])) return;
+    if (message.data['sessionId'] !=
+        ParaSoundService.sessionId(tokens['accessToken'])) {
+      return;
+    }
     await AppConfig.load();
-    final client = ApiClient(baseUrl: prefs.getString('para_api_base_url') ?? AppConfig.apiBaseUrl);
+    final client = ApiClient(
+        baseUrl: prefs.getString('para_api_base_url') ?? AppConfig.apiBaseUrl);
     await ParaSoundService.play(message.data['alertId'] ?? '', client,
-      sentAt: message.data['sentAt'], receipt: message.data['receipt']);
+        sentAt: message.data['sentAt'], receipt: message.data['receipt']);
   } catch (_) {
     // Never sound an alert when its session cannot be authorized.
   }
@@ -74,7 +79,8 @@ class ParagoApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'ParaGO!',
       theme: AppTheme.light(),
-      builder: (context, child) => AppUpdateGate(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) =>
+          AppUpdateGate(child: child ?? const SizedBox.shrink()),
       home: Consumer<SessionController>(
         builder: (context, session, _) {
           if (session.isLoading) {
@@ -83,6 +89,9 @@ class ParagoApp extends StatelessWidget {
 
           if (!session.isAuthenticated) {
             return const AuthScreen();
+          }
+          if (session.requiresLegalAcceptance) {
+            return const LegalAcceptanceScreen();
           }
           return const DriverHomeScreen();
         },

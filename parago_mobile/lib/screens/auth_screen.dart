@@ -201,7 +201,11 @@ class _AuthScreenState extends State<AuthScreen> {
                                 ),
                           ),
                           const SizedBox(height: 18),
-                          if ((_error ?? context.watch<SessionController>().signedOutMessage) != null) ...[
+                          if ((_error ??
+                                  context
+                                      .watch<SessionController>()
+                                      .signedOutMessage) !=
+                              null) ...[
                             Container(
                               padding: const EdgeInsets.all(14),
                               decoration: BoxDecoration(
@@ -209,7 +213,10 @@ class _AuthScreenState extends State<AuthScreen> {
                                 borderRadius: BorderRadius.circular(18),
                               ),
                               child: Text(
-                                (_error ?? context.watch<SessionController>().signedOutMessage)!,
+                                (_error ??
+                                    context
+                                        .watch<SessionController>()
+                                        .signedOutMessage)!,
                                 style: TextStyle(
                                   color: scheme.onErrorContainer,
                                   fontWeight: FontWeight.w600,

@@ -30,6 +30,7 @@ class SessionController extends ChangeNotifier {
   int _sessionEpoch = 0;
   String? signedOutMessage;
   bool _validating = false;
+  bool _requiresLegalAcceptance = false;
 
   Future<void> _handleRejection() async {
     signedOutMessage = _apiClient.authenticationRejectionMessage;
@@ -46,7 +47,8 @@ class SessionController extends ChangeNotifier {
         await AuthService(_apiClient).getCurrentUser();
       }
     } on ApiException catch (error) {
-      if (epoch == _sessionEpoch && (error.statusCode == 401 || error.statusCode == 403)) {
+      if (epoch == _sessionEpoch &&
+          (error.statusCode == 401 || error.statusCode == 403)) {
         signedOutMessage = error.message;
         await clear();
       }
@@ -65,7 +67,8 @@ class SessionController extends ChangeNotifier {
       if (DateTime.now().millisecondsSinceEpoch < expires - 60000) return;
       if (await _tryRefreshSession(_refreshToken)) notifyListeners();
     } on ApiException catch (error) {
-      if (epoch == _sessionEpoch && (error.statusCode == 401 || error.statusCode == 403)) {
+      if (epoch == _sessionEpoch &&
+          (error.statusCode == 401 || error.statusCode == 403)) {
         signedOutMessage = error.message;
         await clear();
       }
@@ -91,6 +94,8 @@ class SessionController extends ChangeNotifier {
   String? get token => _accessToken;
   String? get refreshToken => _refreshToken;
   bool get isAuthenticated => _user != null && _accessToken != null;
+  bool get requiresLegalAcceptance =>
+      isAuthenticated && _requiresLegalAcceptance;
   ApiClient get apiClient => _apiClient;
 
   bool _isStaffUser(UserProfile? user) {
@@ -142,6 +147,8 @@ class SessionController extends ChangeNotifier {
     _accessToken = session.accessToken;
     _refreshToken = session.refreshToken;
     _user = session.user;
+    _requiresLegalAcceptance =
+        session.requiresLegalAcceptance || !session.user.legalAccepted;
     _apiClient.setAccessToken(_accessToken);
     if (notify) {
       notifyListeners();
@@ -162,6 +169,7 @@ class SessionController extends ChangeNotifier {
           _accessToken = trimmedAccessToken;
           _refreshToken = refreshToken;
           _user = user;
+          _requiresLegalAcceptance = !user.legalAccepted;
         } else {
           await clear(notify: false);
         }
@@ -178,7 +186,9 @@ class SessionController extends ChangeNotifier {
           await clear(notify: false);
         }
       } catch (error) {
-        if (error is ApiException && error.statusCode == 401) signedOutMessage = error.message;
+        if (error is ApiException && error.statusCode == 401) {
+          signedOutMessage = error.message;
+        }
         await clear(notify: false);
       }
     } finally {
@@ -217,11 +227,19 @@ class SessionController extends ChangeNotifier {
     await clear();
   }
 
+  Future<void> acceptLegalPolicies() async {
+    final user = await AuthService(_apiClient).acceptLegalPolicies();
+    _user = user;
+    _requiresLegalAcceptance = false;
+    notifyListeners();
+  }
+
   Future<void> clear({bool notify = true}) async {
     _sessionEpoch++;
     _user = null;
     _accessToken = null;
     _refreshToken = null;
+    _requiresLegalAcceptance = false;
     _apiClient.setAccessToken(null);
     await _apiClient.clearCache();
     await _storage.clearTokens();

@@ -2,6 +2,7 @@ import '../core/network/api_client.dart';
 import '../models/auth/auth_models.dart';
 
 class AuthService {
+  static const legalPolicyVersion = '2026-10-03';
   AuthService(this._client);
 
   final ApiClient _client;
@@ -27,11 +28,28 @@ class AuthService {
   }
 
   Future<UserProfile> getCurrentUser() async {
-    final response = await _client.request(method: 'GET', path: '/auth/me', useCache: false);
+    final response =
+        await _client.request(method: 'GET', path: '/auth/me', useCache: false);
     final data =
         response['data'] as Map<String, dynamic>? ?? <String, dynamic>{};
     return UserProfile.fromJson(
         (data['user'] as Map? ?? <String, dynamic>{}).cast<String, dynamic>());
+  }
+
+  Future<UserProfile> acceptLegalPolicies() async {
+    final response = await _client.request(
+      method: 'POST',
+      path: '/auth/legal-acceptance',
+      body: {
+        'termsVersion': legalPolicyVersion,
+        'privacyVersion': legalPolicyVersion,
+      },
+      useCache: false,
+    );
+    final data = response['data'] as Map<String, dynamic>? ?? {};
+    return UserProfile.fromJson(
+      (data['user'] as Map? ?? {}).cast<String, dynamic>(),
+    );
   }
 
   Future<AuthSession> refreshSession({required String refreshToken}) async {

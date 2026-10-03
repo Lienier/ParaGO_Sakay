@@ -12,6 +12,8 @@ const {
   requestPasswordReset,
   resetPassword,
   buildProfile,
+  acceptLegalPolicies,
+  LEGAL_POLICY_VERSION,
 } = require('../services/auth.service');
 const authenticate = require('../middlewares/authenticate');
 const asyncHandler = require('../utils/asyncHandler');
@@ -26,7 +28,7 @@ const isStrongPassword = (password) => String(password || '').trim().length >= 8
 router.post(
   '/register-email',
   asyncHandler(async (req, res) => {
-    const { email, password, fullName, role } = req.body || {};
+    const { email, password, fullName, role, termsVersion, privacyVersion } = req.body || {};
     if (!email || !password || !fullName) {
       throw new ApiError(400, 'email, password, and fullName are required');
     }
@@ -46,7 +48,9 @@ router.post(
     if (role && !['PASSENGER'].includes(requestedRole)) {
       throw new ApiError(400, 'Invalid role');
     }
-    const result = await registerEmail({ email, password, fullName, role: requestedRole });
+    const result = await registerEmail({
+      email, password, fullName, role: requestedRole, termsVersion, privacyVersion,
+    });
     return ok(res, result, 'Registration successful', 201);
   })
 );
@@ -171,6 +175,20 @@ router.get(
   authenticate,
   asyncHandler(async (req, res) => {
     return ok(res, { user: await buildProfile(req.user) }, 'Profile');
+  })
+);
+
+router.post(
+  '/legal-acceptance',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const { termsVersion, privacyVersion } = req.body || {};
+    const result = await acceptLegalPolicies({
+      userId: req.user._id,
+      termsVersion,
+      privacyVersion,
+    });
+    return ok(res, result, `Policies accepted for version ${LEGAL_POLICY_VERSION}`);
   })
 );
 

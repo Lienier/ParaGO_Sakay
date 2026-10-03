@@ -35,6 +35,11 @@ const userSchema = new Schema(
     },
     isVerified: { type: Boolean, default: false },
     lastLoginAt: { type: Date },
+    legalAcceptance: {
+      termsVersion: { type: String, trim: true },
+      privacyVersion: { type: String, trim: true },
+      acceptedAt: { type: Date },
+    },
   },
   { timestamps: true }
 );

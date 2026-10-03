@@ -654,20 +654,20 @@ class _CollapsedMapSummary extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text(
-                    destinationLabel,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w800,
-                        ),
+                  child: InkWell(
+                    onTap: onExpand,
+                    borderRadius: BorderRadius.circular(12),
+                    child: Center(
+                      child: Text(
+                        destinationLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                    ),
                   ),
-                ),
-                IconButton(
-                  onPressed: onExpand,
-                  icon: const Icon(Icons.keyboard_arrow_down),
-                  tooltip: 'Show full controls',
-                  visualDensity: VisualDensity.compact,
                 ),
               ],
             ),

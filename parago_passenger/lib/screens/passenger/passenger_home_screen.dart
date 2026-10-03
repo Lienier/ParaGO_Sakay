@@ -3492,6 +3492,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
             ],
           ),
         ),
+        if (selectedRoute?.departureTerminal != null)
+          Positioned(
+            top: 12,
+            left: 16,
+            right: 16,
+            child: Center(
+              child: TerminalMapBanner(
+                name: selectedRoute!.departureTerminal!.name,
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -3638,46 +3649,61 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
               child: SizedBox(
                 height: 340,
                 width: double.infinity,
-                child: FlutterMap(
-                  mapController: _passengerMapController,
-                  options: MapOptions(
-                    initialCenter: mapCenter,
-                    initialZoom: _currentPassengerLocation == null
-                        ? (selectedRoute == null ? 13 : 14)
-                        : 16,
-                    onMapReady: _handlePassengerMapReady,
-                    onPositionChanged: _handlePassengerMapPositionChanged,
-                    onTap: (_, point) => _onPassengerMapTap(point),
-                  ),
+                child: Stack(
                   children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.parago.passenger',
+                    FlutterMap(
+                      mapController: _passengerMapController,
+                      options: MapOptions(
+                        initialCenter: mapCenter,
+                        initialZoom: _currentPassengerLocation == null
+                            ? (selectedRoute == null ? 13 : 14)
+                            : 16,
+                        onMapReady: _handlePassengerMapReady,
+                        onPositionChanged: _handlePassengerMapPositionChanged,
+                        onTap: (_, point) => _onPassengerMapTap(point),
+                      ),
+                      children: [
+                        TileLayer(
+                          urlTemplate:
+                              'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                          userAgentPackageName: 'com.parago.passenger',
+                        ),
+                        if (_currentPassengerLocation != null)
+                          CircleLayer(
+                            circles: [
+                              CircleMarker(
+                                point: _currentPassengerLocation!,
+                                radius: 10,
+                                color: const Color(0xCC2157A5),
+                                borderStrokeWidth: 4,
+                                borderColor: Colors.white,
+                              ),
+                            ],
+                          ),
+                        if (routePath.length >= 2)
+                          PolylineLayer(
+                            polylines: [
+                              Polyline(
+                                points: routePath,
+                                strokeWidth: 5,
+                                color: const Color(0xFF0F6A5F),
+                              ),
+                            ],
+                          ),
+                        MarkerLayer(markers: tripMarkers),
+                      ],
                     ),
-                    if (_currentPassengerLocation != null)
-                      CircleLayer(
-                        circles: [
-                          CircleMarker(
-                            point: _currentPassengerLocation!,
-                            radius: 10,
-                            color: const Color(0xCC2157A5),
-                            borderStrokeWidth: 4,
-                            borderColor: Colors.white,
+                    if (selectedRoute?.departureTerminal != null)
+                      Positioned(
+                        top: 12,
+                        left: 16,
+                        right: 16,
+                        child: Center(
+                          child: TerminalMapBanner(
+                            name: selectedRoute!.departureTerminal!.name,
                           ),
-                        ],
+                        ),
                       ),
-                    if (routePath.length >= 2)
-                      PolylineLayer(
-                        polylines: [
-                          Polyline(
-                            points: routePath,
-                            strokeWidth: 5,
-                            color: const Color(0xFF0F6A5F),
-                          ),
-                        ],
-                      ),
-                    MarkerLayer(markers: tripMarkers),
                   ],
                 ),
               ),
@@ -6896,34 +6922,24 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Align(
-                                  child: Container(
-                                    width: 58,
-                                    height: 6,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFD9DDD7),
-                                      borderRadius: BorderRadius.circular(999),
-                                    ),
+                          Center(
+                            child: Semantics(
+                              button: true,
+                              label: _passengerSheetCollapsed
+                                  ? 'Show trip details'
+                                  : 'Hide trip details',
+                              child: GestureDetector(
+                                onTap: _togglePassengerSheet,
+                                child: Container(
+                                  width: 92,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFD9DDD7),
+                                    borderRadius: BorderRadius.circular(999),
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 12),
-                              IconButton(
-                                onPressed: _togglePassengerSheet,
-                                icon: Icon(
-                                  _passengerSheetCollapsed
-                                      ? Icons.keyboard_arrow_up_rounded
-                                      : Icons.keyboard_arrow_down_rounded,
-                                  color: const Color(0xFF0F6A5F),
-                                ),
-                                tooltip: _passengerSheetCollapsed
-                                    ? 'Show panel'
-                                    : 'Hide panel',
-                              ),
-                            ],
+                            ),
                           ),
                           const SizedBox(height: 10),
                           if (_passengerSheetCollapsed) ...[
