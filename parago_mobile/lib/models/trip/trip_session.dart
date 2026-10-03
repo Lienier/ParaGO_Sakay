@@ -1,5 +1,7 @@
 import 'package:latlong2/latlong.dart';
 
+const _unchanged = Object();
+
 class TripSession {
   const TripSession({
     required this.id,
@@ -32,6 +34,7 @@ class TripSession {
     this.terminalStopRef,
     this.terminalLatitude,
     this.terminalLongitude,
+    this.driverStatus,
   });
 
   final String id;
@@ -58,6 +61,24 @@ class TripSession {
       snapshotUpdatedAt != null &&
       (other.snapshotUpdatedAt == null ||
           snapshotUpdatedAt!.isAfter(other.snapshotUpdatedAt!));
+
+  /// Returns true when this local snapshot should win over an incoming one.
+  /// Equal timestamps can occur when a realtime event and a refresh describe
+  /// the same write; the later lifecycle state must not be rolled back.
+  bool shouldKeepOver(TripSession incoming) {
+    final currentAt = snapshotUpdatedAt;
+    final incomingAt = incoming.snapshotUpdatedAt;
+    if (currentAt != null && incomingAt != null) {
+      if (currentAt.isAfter(incomingAt)) return true;
+      if (incomingAt.isAfter(currentAt)) return false;
+    } else if (currentAt != null && incomingAt == null) {
+      return true;
+    } else if (currentAt == null && incomingAt != null) {
+      return false;
+    }
+    return _stateRank(driverState) > _stateRank(incoming.driverState);
+  }
+
   final int? manualOccupancyCount;
   final int? occupancyCount;
   final bool? active;
@@ -68,6 +89,39 @@ class TripSession {
   final String? terminalStopRef;
   final double? terminalLatitude;
   final double? terminalLongitude;
+  final Map<String, dynamic>? driverStatus;
+
+  String get driverState =>
+      driverStatus?['state']?.toString() ??
+      (status == 'completed'
+          ? 'completed'
+          : status == 'cancelled'
+              ? 'cancelled'
+              : operatingMode == 'route' || terminalQueueStatus == 'departed'
+                  ? 'on_route'
+                  : terminalQueueStatus == 'loading'
+                      ? 'loading'
+                      : terminalQueueStatus == 'waiting' ||
+                              terminalQueueStatus == 'skipped'
+                          ? 'waiting'
+                          : 'driving_to_terminal');
+
+  String get driverStateLabel =>
+      driverStatus?['label']?.toString() ??
+      (driverState == 'on_route'
+          ? 'On route'
+          : driverState == 'completed'
+              ? 'Completed'
+              : driverState == 'cancelled'
+                  ? 'Cancelled'
+                  : driverState == 'loading'
+                      ? 'Loading'
+                      : driverState == 'waiting'
+                          ? 'Waiting in terminal queue'
+                          : 'Driving to terminal');
+
+  String? get driverStateDetail => driverStatus?['detail']?.toString();
+  String? get driverNextAction => driverStatus?['nextAction']?.toString();
 
   factory TripSession.fromJson(Map<String, dynamic> json) {
     final route = json['routeId'];
@@ -114,6 +168,9 @@ class TripSession {
       terminalStopRef: json['terminalStopRef']?.toString(),
       terminalLatitude: _readLatitudeFromPoint(json['terminalLocation']),
       terminalLongitude: _readLongitudeFromPoint(json['terminalLocation']),
+      driverStatus: json['driverStatus'] is Map
+          ? Map<String, dynamic>.from(json['driverStatus'] as Map)
+          : null,
     );
   }
 
@@ -158,10 +215,18 @@ class TripSession {
     String? notes,
     String? operatingMode,
     String? terminalQueueStatus,
-    int? terminalQueueNumber,
-    String? terminalStopRef,
-    double? terminalLatitude,
-    double? terminalLongitude,
+    Object? terminalQueueNumber = _unchanged,
+    Object? terminalStopRef = _unchanged,
+    Object? terminalLatitude = _unchanged,
+    Object? terminalLongitude = _unchanged,
+    Object? driverStatus = _unchanged,
+    Object? inactivityPausedAt = _unchanged,
+    Object? terminalSummary = _unchanged,
+    Object? snapshotUpdatedAt = _unchanged,
+    bool clearDriverStatus = false,
+    bool clearInactivityPausedAt = false,
+    bool clearTerminalSummary = false,
+    bool clearSnapshotUpdatedAt = false,
   }) {
     return TripSession(
       id: id ?? this.id,
@@ -182,22 +247,55 @@ class TripSession {
       startedAt: startedAt ?? this.startedAt,
       endedAt: endedAt ?? this.endedAt,
       acceptRequests: acceptRequests ?? this.acceptRequests,
-      inactivityPausedAt: inactivityPausedAt,
-      terminalSummary: terminalSummary,
-      snapshotUpdatedAt: snapshotUpdatedAt,
+      inactivityPausedAt: clearInactivityPausedAt
+          ? null
+          : identical(inactivityPausedAt, _unchanged)
+              ? this.inactivityPausedAt
+              : inactivityPausedAt as String?,
+      terminalSummary: clearTerminalSummary
+          ? null
+          : identical(terminalSummary, _unchanged)
+              ? this.terminalSummary
+              : terminalSummary as Map<String, dynamic>?,
+      snapshotUpdatedAt: clearSnapshotUpdatedAt
+          ? null
+          : identical(snapshotUpdatedAt, _unchanged)
+              ? this.snapshotUpdatedAt
+              : snapshotUpdatedAt as DateTime?,
       manualOccupancyCount: manualOccupancyCount ?? this.manualOccupancyCount,
       occupancyCount: occupancyCount ?? this.occupancyCount,
       active: active ?? this.active,
       notes: notes ?? this.notes,
       operatingMode: operatingMode ?? this.operatingMode,
       terminalQueueStatus: terminalQueueStatus ?? this.terminalQueueStatus,
-      terminalQueueNumber: terminalQueueNumber ?? this.terminalQueueNumber,
-      terminalStopRef: terminalStopRef ?? this.terminalStopRef,
-      terminalLatitude: terminalLatitude ?? this.terminalLatitude,
-      terminalLongitude: terminalLongitude ?? this.terminalLongitude,
+      terminalQueueNumber: identical(terminalQueueNumber, _unchanged)
+          ? this.terminalQueueNumber
+          : terminalQueueNumber as int?,
+      terminalStopRef: identical(terminalStopRef, _unchanged)
+          ? this.terminalStopRef
+          : terminalStopRef as String?,
+      terminalLatitude: identical(terminalLatitude, _unchanged)
+          ? this.terminalLatitude
+          : terminalLatitude as double?,
+      terminalLongitude: identical(terminalLongitude, _unchanged)
+          ? this.terminalLongitude
+          : terminalLongitude as double?,
+      driverStatus: identical(driverStatus, _unchanged)
+          ? (clearDriverStatus ? null : this.driverStatus)
+          : driverStatus as Map<String, dynamic>?,
     );
   }
 }
+
+int _stateRank(String state) => switch (state) {
+      'scheduled' => 0,
+      'driving_to_terminal' => 1,
+      'waiting' => 2,
+      'loading' => 3,
+      'on_route' => 4,
+      'completed' => 5,
+      _ => 0,
+    };
 
 List<LatLng> _readLinePoints(dynamic value) {
   final coordinates = value is Map ? value['coordinates'] : null;

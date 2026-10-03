@@ -10,6 +10,7 @@ const Driver = require('../models/driver');
 const User = require('../models/user');
 const Jeepney = require('../models/jeepney');
 const ApiError = require('../utils/apiError');
+const { DRIVER_ERROR_CODES, driverError } = require('../utils/driverError');
 const { invalidateDriverActiveContext } = require('./activeDriverContext.service');
 const activeQueue = { status: 'active', operatingMode: 'terminal_queue' };
 
@@ -19,7 +20,8 @@ async function prepare(routeId) {
 }
 async function lock(routeId, session) {
   const queue = await Queue.findOneAndUpdate({ _id: routeId }, { $inc: { revision: 1 } }, { new: true, session });
-  if (!queue) throw new ApiError(503, 'Terminal queue requires initialization');
+  if (!queue) throw driverError(503, DRIVER_ERROR_CODES.QUEUE_CONFLICT,
+    'The terminal queue is not ready yet.', 'Refresh the terminal screen and try again.');
   return queue;
 }
 async function eligible(trip, session) {
@@ -74,7 +76,8 @@ async function transaction(routeId, operation) {
   let result;
   try { await session.withTransaction(async () => { await lock(routeId, session); result = await operation(session); }); }
   catch (error) {
-    if (error.code === 11000) throw new ApiError(409, 'A queue entry or action already exists; refresh the queue');
+    if (error.code === 11000) throw driverError(409, DRIVER_ERROR_CODES.QUEUE_CONFLICT,
+      'This terminal action was already recorded.', 'Refresh the terminal status before trying again.');
     throw error;
   } finally { await session.endSession(); }
   try { await publish(routeId); }
@@ -82,13 +85,17 @@ async function transaction(routeId, operation) {
   return result;
 }
 function validateActor(actor, requestId, reason) {
-  if (!actor?._id || !requestId || !/^[a-zA-Z0-9_-]{8,100}$/.test(requestId)) throw new ApiError(400, 'A unique requestId is required');
-  if (actor.role === 'ADMIN' && (!reason || !String(reason).trim())) throw new ApiError(400, 'An admin action reason is required');
-  if (String(reason || '').length > 500) throw new ApiError(400, 'Reason is too long');
+  if (!actor?._id || !requestId || !/^[a-zA-Z0-9_-]{8,100}$/.test(requestId)) throw driverError(400, DRIVER_ERROR_CODES.REQUEST_ID_CONFLICT,
+    'This action is missing a valid request identifier.', 'Refresh the screen and try again.');
+  if (actor.role === 'ADMIN' && (!reason || !String(reason).trim())) throw driverError(400, 'ADMIN_ACTION_REASON_REQUIRED',
+    'An administrator action needs a reason.', 'Enter a short reason and try again.');
+  if (String(reason || '').length > 500) throw driverError(400, 'ADMIN_ACTION_REASON_TOO_LONG',
+    'The action reason is too long.', 'Use 500 characters or fewer.');
 }
 async function replay(actor, requestId, action, session) {
   const prior = await Action.findOne({ actorId: actor._id, requestId }).session(session);
-  if (prior && prior.action !== action) throw new ApiError(409, 'requestId was used for another action');
+  if (prior && prior.action !== action) throw driverError(409, DRIVER_ERROR_CODES.REQUEST_ID_CONFLICT,
+    'This request identifier was already used for a different action.', 'Refresh the status and try again once.');
   return prior;
 }
 async function audit(trip, actor, action, requestId, reason, session) {
@@ -105,11 +112,13 @@ async function checkIn({ document, actor, requestId, reason, existingId, session
   const operation = async session => {
     const prior = await replay(actor, requestId, 'check_in', session);
     if (prior) {
-      if (String(prior.routeId) !== String(document.routeId)) throw new ApiError(409, 'requestId belongs to another route');
+      if (String(prior.routeId) !== String(document.routeId)) throw driverError(409, DRIVER_ERROR_CODES.REQUEST_ID_CONFLICT,
+        'This request identifier belongs to another route.', 'Refresh the route status and try again.');
       return Trip.findById(prior.tripId).session(session);
     }
     if (await Trip.exists({ ...activeQueue, $or: [{ driverId: document.driverId }, { jeepneyId: document.jeepneyId }] }).session(session))
-      throw new ApiError(409, 'Driver or jeep already has a terminal queue entry');
+      throw driverError(409, DRIVER_ERROR_CODES.QUEUE_CONFLICT,
+        'This driver or jeepney already has an active terminal trip.', 'Refresh your trips and use the existing terminal trip.');
     const values = { ...document, status: 'active', active: true, operatingMode: 'terminal_queue',
       startedAt: new Date(), terminalCheckedInAt: new Date(), terminalQueueStatus: 'waiting', acceptRequests: false,
       terminalQueueNumber: await nextPosition(document.routeId, session) };
@@ -117,9 +126,11 @@ async function checkIn({ document, actor, requestId, reason, existingId, session
     let trip;
     if (existingId) {
       trip = await Trip.findOneAndUpdate({ _id: existingId, status: 'scheduled' }, { $set: values }, { new: true, session });
-      if (!trip) throw new ApiError(409, 'Trip is no longer scheduled');
+      if (!trip) throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+        'This terminal trip is no longer awaiting arrival.', 'Refresh the terminal status before continuing.');
     } else [trip] = await Trip.create([values], { session });
-    if (!await eligible(trip, session)) throw new ApiError(409, 'Driver and jeep must be active');
+    if (!await eligible(trip, session)) throw driverError(409, DRIVER_ERROR_CODES.DRIVER_OFFLINE,
+      'The driver account or jeepney is not eligible for terminal loading.', 'Make sure the account and jeepney are active, then refresh.');
     await sync(trip, session); await promote(trip.routeId, session);
     await audit(trip, actor, 'check_in', requestId, reason, session);
     return Trip.findById(trip._id).session(session);
@@ -143,22 +154,27 @@ async function offerTransfers(trip, session) {
 async function change({ tripId, actor, action, requestId, reason, direction }) {
   validateActor(actor, requestId, reason);
   const original = await Trip.findById(tripId);
-  if (!original) throw new ApiError(404, 'Trip not found');
+  if (!original) throw driverError(404, 'TRIP_NOT_FOUND', 'The selected trip could not be found.', 'Refresh the trip list.');
   return transaction(original.routeId, async session => {
     const prior = await replay(actor, requestId, action, session);
     if (prior) {
-      if (String(prior.tripId) !== String(tripId)) throw new ApiError(409, 'requestId belongs to another trip');
+      if (String(prior.tripId) !== String(tripId)) throw driverError(409, DRIVER_ERROR_CODES.REQUEST_ID_CONFLICT,
+        'This request identifier belongs to another trip.', 'Refresh the terminal status and try again once.');
       return Trip.findById(tripId).session(session);
     }
     const trip = await Trip.findOne({ _id: tripId, ...activeQueue }).session(session);
-    if (!trip) throw new ApiError(409, 'Trip is not in the active terminal queue');
+    if (!trip) throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+      'This trip is no longer in the active terminal queue.', 'Refresh the terminal status to see the current state.');
     if (actor.role !== 'ADMIN') {
       const driver = await Driver.findOne({ userId: actor._id }).session(session);
-      if (!driver || String(driver._id) !== String(trip.driverId)) throw new ApiError(403, 'This is not your trip');
-      if (!['depart', 'skip', 'restore'].includes(action)) throw new ApiError(403, 'Admin action required');
+      if (!driver || String(driver._id) !== String(trip.driverId)) throw driverError(403, DRIVER_ERROR_CODES.TRIP_NOT_ASSIGNED,
+        'This trip is assigned to a different driver.', 'Open your assigned trip before trying again.');
+      if (!['depart', 'skip', 'restore'].includes(action)) throw driverError(403, 'ADMIN_ACTION_REQUIRED',
+        'This terminal action is available only to an administrator.', 'Use the driver actions shown for your trip.');
     }
     if (action === 'depart') {
-      if (trip.terminalQueueStatus !== 'loading') throw new ApiError(409, 'Only the loading jeep can depart');
+      if (trip.terminalQueueStatus !== 'loading') throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+        'This jeepney is not the terminal loading jeep yet.', 'Wait until loading is assigned, then depart from the terminal.');
       await operatingRules.assertVehicleAllowed(await Jeepney.findById(trip.jeepneyId).session(session), session);
       await offerTransfers(trip, session);
       trip.operatingMode = 'route'; trip.terminalQueueStatus = 'departed'; trip.resumedAt = new Date();
@@ -180,14 +196,18 @@ async function change({ tripId, actor, action, requestId, reason, direction }) {
       const vehicle = await Jeepney.findById(trip.jeepneyId).session(session);
       trip.acceptRequests = trip.occupancyCount < vehicle.capacity;
     } else if (action === 'skip' || action === 'restore') {
-      if (action === 'skip' && !['waiting', 'loading'].includes(trip.terminalQueueStatus)) throw new ApiError(409, 'This jeep is already skipped');
-      if (action === 'restore' && trip.terminalQueueStatus !== 'skipped') throw new ApiError(409, 'Only skipped jeeps can be restored');
+      if (action === 'skip' && !['waiting', 'loading'].includes(trip.terminalQueueStatus)) throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+        'This jeepney cannot be skipped from its current terminal state.', 'Refresh the queue and follow the available action.');
+      if (action === 'restore' && trip.terminalQueueStatus !== 'skipped') throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+        'Only a skipped jeepney can return to the terminal queue.', 'Refresh the queue to see the current state.');
       if (action === 'skip') await offerTransfers(trip, session);
       trip.terminalQueueStatus = action === 'skip' ? 'skipped' : 'waiting'; trip.acceptRequests = false;
       trip.terminalQueueNumber = await nextPosition(trip.routeId, session);
     } else if (action === 'reorder') {
-      if (trip.terminalQueueStatus !== 'waiting') throw new ApiError(409, 'Only waiting jeeps can be reordered');
-      if (!['up', 'down'].includes(direction)) throw new ApiError(400, 'direction must be up or down');
+      if (trip.terminalQueueStatus !== 'waiting') throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+        'Only a waiting jeepney can change queue position.', 'Refresh the terminal queue first.');
+      if (!['up', 'down'].includes(direction)) throw driverError(400, 'INVALID_QUEUE_DIRECTION',
+        'The queue direction is invalid.', 'Refresh the terminal queue and try again.');
       const waiting = await Trip.find({ ...activeQueue, routeId: trip.routeId, terminalQueueStatus: 'waiting' }).sort({ terminalQueueNumber: 1 }).session(session);
       const index = waiting.findIndex(t => String(t._id) === String(tripId));
       const neighbor = waiting[index + (direction === 'up' ? -1 : 1)];
@@ -197,7 +217,8 @@ async function change({ tripId, actor, action, requestId, reason, direction }) {
         trip.terminalQueueNumber = neighbor.terminalQueueNumber; neighbor.terminalQueueNumber = position;
         await neighbor.save({ session }); await sync(neighbor, session);
       }
-    } else throw new ApiError(400, 'Unsupported terminal action');
+    } else throw driverError(400, 'UNSUPPORTED_TERMINAL_ACTION',
+      'This terminal action is not available.', 'Refresh the terminal status and use the displayed action.');
     await trip.save({ session }); await sync(trip, session); await promote(trip.routeId, session);
     await audit(trip, actor, action, requestId, reason, session);
     return Trip.findById(trip._id).session(session);
@@ -205,9 +226,11 @@ async function change({ tripId, actor, action, requestId, reason, direction }) {
 }
 async function reserve(trip, session, size = 1) {
   if (operatingRules.loadingTiming(trip).departureRequired)
-    throw new ApiError(409, 'The 10-minute loading period has ended. Wait for departure and the next loading jeep.');
+    throw driverError(409, DRIVER_ERROR_CODES.DEPARTURE_REQUIRED,
+      'The 10-minute terminal loading period has ended.', 'Confirm departure; the next jeep will load new terminal reservations.');
   if (trip.operatingMode !== 'terminal_queue' || trip.terminalQueueStatus !== 'loading' || !trip.acceptRequests || !await eligible(trip, session))
-    throw new ApiError(409, 'This jeep is not loading terminal passengers');
+    throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+      'This jeepney is not currently loading terminal passengers.', 'Refresh the terminal queue and select the loading jeepney.');
   await require('./seatAccounting.service').assertCapacity(trip, size, session);
   // Also conflict with manual occupancy and non-queue lifecycle writes.
   await Trip.updateOne({ _id: trip._id }, { $inc: { lifecycleRevision: 1 } }, { session });
@@ -263,9 +286,41 @@ async function reconcile() {
     await transaction(routeId, session => promote(routeId, session));
   }
 }
+
+function driverStatusFor(trip) {
+  if (trip.status === 'completed') {
+    return { state: 'completed', label: 'Completed', detail: 'This trip has ended.', nextAction: null };
+  }
+  if (trip.status === 'cancelled') {
+    return { state: 'cancelled', label: 'Cancelled', detail: 'This trip is no longer operating.', nextAction: null };
+  }
+  if (trip.operatingMode === 'route' || trip.terminalQueueStatus === 'departed') {
+    return { state: 'on_route', label: 'On route', detail: 'Terminal departure is complete.', nextAction: trip.status === 'active' ? 'Accept pickup requests or end the trip.' : null };
+  }
+  if (trip.terminalQueueStatus === 'loading') {
+    return { state: 'loading', label: 'Loading', detail: 'Passengers may board during the terminal loading period.', nextAction: 'Confirm departure when loading is complete.' };
+  }
+  if (trip.terminalQueueStatus === 'waiting') {
+    return { state: 'waiting', label: 'Waiting in terminal queue', detail: 'Your jeepney is waiting for its loading turn.', nextAction: 'Wait for the loading position.' };
+  }
+  if (trip.terminalQueueStatus === 'skipped') {
+    return { state: 'waiting', label: 'Skipped in terminal queue', detail: 'This jeepney is not currently loading.', nextAction: 'Restore the jeepney when it is ready to rejoin.' };
+  }
+  return { state: 'driving_to_terminal', label: 'Driving to terminal', detail: 'Fresh GPS arrival checks you into the terminal automatically.', nextAction: 'Drive to the configured departure terminal.' };
+}
+const arrivalCodeFor = status => ({
+  no_ordered_update: 'TERMINAL_ARRIVAL_PENDING',
+  stale_location: DRIVER_ERROR_CODES.GPS_STALE,
+  poor_accuracy: DRIVER_ERROR_CODES.GPS_POOR_ACCURACY,
+  invalid_coordinates: 'TERMINAL_GPS_INVALID',
+  outside_terminal_radius: DRIVER_ERROR_CODES.OUTSIDE_TERMINAL_RADIUS,
+  insufficient_valid_fixes: DRIVER_ERROR_CODES.TERMINAL_ARRIVAL_PENDING,
+  accepted: 'TERMINAL_ARRIVAL_ACCEPTED',
+}[status] || 'TERMINAL_ARRIVAL_PENDING');
 async function describe(value) {
   const trip = value.toObject ? value.toObject() : value;
-  if (trip.operatingMode !== 'terminal_queue') return trip;
+  const driverStatus = driverStatusFor(trip);
+  if (trip.operatingMode !== 'terminal_queue') return { ...trip, driverStatus };
   const vehicle = await Jeepney.findById(trip.jeepneyId?._id || trip.jeepneyId).select('capacity lastSeenAt lastKnownLocation latestLocationOrder');
   const { reserved: reservedSeats, occupied } = await require('./seatAccounting.service').counts(trip);
   const bookings = await Pickup.find({ tripSessionId: trip._id, status: { $in: ['pending', 'acknowledged'] }, expiresAt: { $gt: new Date() } }).select('partySize').lean();
@@ -274,7 +329,7 @@ async function describe(value) {
   const endTerminal = routeStops.length ? routeStops[routeStops.length - 1] : null;
   const queuePosition = trip.status !== 'active' || trip.terminalQueueStatus === 'off_queue' ? null : trip.terminalQueueStatus === 'skipped' ? null : trip.terminalQueueStatus === 'loading' ? 1 : 1 + await Trip.countDocuments({ ...activeQueue, routeId: trip.routeId?._id || trip.routeId,
     $or: [{ terminalQueueStatus: 'loading' }, { terminalQueueStatus: 'waiting', terminalQueueNumber: { $lt: trip.terminalQueueNumber } }] });
-  return { ...trip, terminalSummary: { queuePosition, reservedSeats, onboardSeats: occupied,
+  return { ...trip, driverStatus, terminalSummary: { queuePosition, reservedSeats, onboardSeats: occupied,
     reservationCount: bookings.length, reservationPartySizes: bookings.map(booking => booking.partySize ?? 1),
     ...operatingRules.loadingTiming(trip),
     availableSeats: Math.max(0, (vehicle?.capacity || 0) - occupied - reservedSeats),
@@ -282,6 +337,7 @@ async function describe(value) {
     lastSeenAt: vehicle?.lastSeenAt || null,
     terminalArrival: {
       status: trip.terminalArrivalStatus || 'no_ordered_update',
+      code: arrivalCodeFor(trip.terminalArrivalStatus || 'no_ordered_update'),
       reason: trip.terminalArrivalReason || 'Driver has not provided an ordered location update',
       distanceMeters: trip.terminalArrivalLastDistanceMeters ?? null,
       accuracyMeters: trip.terminalArrivalLastAccuracyMeters ?? null,
@@ -296,4 +352,4 @@ async function describe(value) {
     },
   } };
 }
-module.exports = { audit, validateActor, reconcile, describe, prepare, lock, promote, publish, transaction, checkIn, change, reserve, transfer, activeQueue };
+module.exports = { audit, validateActor, reconcile, describe, driverStatusFor, prepare, lock, promote, publish, transaction, checkIn, change, reserve, transfer, activeQueue };

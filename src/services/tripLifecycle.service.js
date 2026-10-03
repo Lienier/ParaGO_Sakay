@@ -6,7 +6,7 @@ const Alert = require('../models/stopAlert');
 const Jeepney = require('../models/jeepney');
 const Passenger = require('../models/passenger');
 const Driver = require('../models/driver');
-const ApiError = require('../utils/apiError');
+const { DRIVER_ERROR_CODES, driverError } = require('../utils/driverError');
 const { invalidateDriverActiveContext } = require('./activeDriverContext.service');
 const { publishNotification } = require('./notificationPublisher');
 const { serializeRideSession } = require('../utils/realtimePayloads');
@@ -29,7 +29,8 @@ async function createTripRecord(Model, document, { accepting = false } = {}) {
       const trip = await Trip.findOneAndUpdate({ _id: document.tripSessionId, status: 'active',
         ...(accepting ? { acceptRequests: true } : {}) },
       { $inc: { lifecycleRevision: 1 } }, { new: true, session });
-      if (!trip) throw new ApiError(409, 'Trip is closed or no longer accepting pickups');
+      if (!trip) throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+        'This trip is closed or is no longer accepting pickup requests.', 'Refresh the trip status and choose an available trip.');
       if (accepting) await require('./operatingRules.service').assertVehicleAllowed(await Jeepney.findById(trip.jeepneyId).session(session), session);
       if (terminal) await queue.reserve(trip, session, document.partySize ?? 1);
       else if (accepting) await require('./seatAccounting.service').assertCapacity(trip, document.partySize ?? 1, session);
@@ -56,7 +57,8 @@ async function endTrip(tripId, { actor, requestId, reason } = {}) {
         { $set: { status: 'completed', endedAt: now, active: false, acceptRequests: false,
           occupancyCount: 0, manualOccupancyCount: 0, terminalQueueStatus: 'departed' },
         $unset: { inactivityPausedAt: 1 } }, { new: true, session });
-      if (!trip) throw new ApiError(409, 'Trip already closed');
+      if (!trip) throw driverError(409, DRIVER_ERROR_CODES.TRIP_ALREADY_CLOSED,
+        'This trip has already ended.', 'Refresh the trip status before trying again.');
       rides = await Ride.find({ tripSessionId: tripId, status: { $in: ['onboard', 'waiting'] } }).session(session);
       await Ride.updateMany({ tripSessionId: tripId, status: { $in: ['onboard', 'waiting'] } },
         { $set: { status: 'completed', remainingCount: 0, endedAt: now, canSendStopAlert: false, offboardingMethod: 'trip_ended' }, $inc: { revision: 1 } }, { session });
@@ -123,7 +125,8 @@ async function setAvailability(tripId, acceptRequests) {
   const trip = await Trip.findOneAndUpdate({ _id: tripId, status: 'active', operatingMode: { $ne: 'terminal_queue' } },
     acceptRequests ? { $set: { acceptRequests: true, resumedAt: new Date() }, $unset: { inactivityPausedAt: 1 } }
       : { $set: { acceptRequests: false } }, { new: true });
-  if (!trip) throw new ApiError(409, 'Only active trips can change availability');
+  if (!trip) throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+    'Pickup availability can only change while the trip is active.', 'Refresh the trip status before trying again.');
   await invalidateDriverActiveContext(trip.driverId);
   return trip;
 }

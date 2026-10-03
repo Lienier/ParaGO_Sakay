@@ -106,6 +106,7 @@ before(async () => {
     res.status(error.statusCode || 500).json({
       message: error.message,
       code: error.code,
+      action: error.action,
     })
   );
 });
@@ -126,6 +127,8 @@ test('direct route starts are rejected and terminal intent waits for arrival', a
       status: 'active',
     });
   assert.equal(direct.status, 409);
+  assert.equal(direct.body.code, 'DIRECT_ROUTE_NOT_ALLOWED');
+  assert.match(direct.body.action, /terminal/i);
   assert.match(direct.body.message, /terminal/i);
 
   const intent = await request(app)
@@ -140,6 +143,7 @@ test('direct route starts are rejected and terminal intent waits for arrival', a
   assert.equal(intent.status, 201, intent.text);
   assert.equal(intent.body.data.status, 'scheduled');
   assert.equal(intent.body.data.terminalQueueStatus, 'off_queue');
+  assert.equal(intent.body.data.driverStatus.state, 'driving_to_terminal');
   const synchronizedDriver = await Driver.findById(driver._id);
   assert.equal(synchronizedDriver.operatingMode, 'terminal_queue');
   assert.equal(synchronizedDriver.terminalQueueStatus, 'off_queue');
@@ -149,6 +153,7 @@ test('direct route starts are rejected and terminal intent waits for arrival', a
     .set('Authorization', `Bearer ${token}`)
     .send({ requestId: 'manual-terminal-start' });
   assert.equal(manualStart.status, 409);
+  assert.equal(manualStart.body.code, 'TERMINAL_ARRIVAL_PENDING');
   assert.match(manualStart.body.message, /automatically|fresh GPS/i);
 });
 
@@ -188,6 +193,7 @@ test('two fresh in-geofence fixes check in once and departure enables route oper
   });
   assert.equal(poorAccuracy.detected, false);
   assert.equal(poorAccuracy.status, 'poor_accuracy');
+  assert.equal(poorAccuracy.code, 'TERMINAL_GPS_POOR_ACCURACY');
   assert.equal(poorAccuracy.reason, 'GPS accuracy is too low');
   assert.equal(await Trip.findById(pending._id).then((trip) => trip.terminalArrivalFixCount), 0);
   assert.equal(await Trip.findById(pending._id).then((trip) => trip.terminalArrivalStatus), 'poor_accuracy');
@@ -227,6 +233,8 @@ test('two fresh in-geofence fixes check in once and departure enables route oper
   const queued = await Trip.findById(pending._id);
   assert.equal(queued.status, 'active');
   assert.equal(queued.terminalQueueStatus, 'loading');
+  const loadingDescription = await terminalQueue.describe(queued);
+  assert.equal(loadingDescription.driverStatus.state, 'loading');
 
   const departed = await terminalQueue.change({
     tripId: pending._id,
@@ -236,6 +244,8 @@ test('two fresh in-geofence fixes check in once and departure enables route oper
   });
   assert.equal(departed.operatingMode, 'route');
   assert.equal(departed.terminalQueueStatus, 'departed');
+  const departedDescription = await terminalQueue.describe(departed);
+  assert.equal(departedDescription.driverStatus.label, 'On route');
 });
 
 test('arrival survives stream restart, rejects duplicate time and serializes concurrent fixes', async () => {

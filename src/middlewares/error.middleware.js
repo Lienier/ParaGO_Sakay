@@ -11,6 +11,8 @@ const normalizeError = (error) => {
       status: 409,
       message: `${fieldName} already exists`,
       errors: [],
+      code: 'DUPLICATE_RESOURCE',
+      action: 'Refresh the list and choose a different value.',
     };
   }
 
@@ -20,6 +22,8 @@ const normalizeError = (error) => {
       status: 400,
       message: errors[0] || 'Validation failed',
       errors,
+      code: 'VALIDATION_FAILED',
+      action: 'Review the highlighted fields and try again.',
     };
   }
 
@@ -28,20 +32,28 @@ const normalizeError = (error) => {
       status: 400,
       message: `Invalid ${error.path || 'request value'}`,
       errors: [],
+      code: 'INVALID_REQUEST_VALUE',
+      action: 'Check the value and try again.',
     };
   }
 
+  const status = error.statusCode || error.status || 500;
+  const safe = Boolean(error?.isOperational || error instanceof ApiError);
   return {
-    status: error.statusCode || error.status || 500,
-    message: error.message || 'Internal Server Error',
+    status,
+    message: safe || status < 500
+      ? (error.message || 'Request failed')
+      : 'The server could not complete the request.',
     errors: error.errors || [],
+    code: error.code || (status >= 500 ? 'SERVER_ERROR' : null),
+    action: error.action || (status >= 500 ? 'Try again shortly. If the problem continues, contact support.' : null),
   };
 };
 
 const errorHandler = (err, _req, res, _next) => {
-  const { status, message, errors } = normalizeError(err);
+  const { status, message, errors, code, action } = normalizeError(err);
   if (err.retryAfter) res.set('Retry-After', String(err.retryAfter));
-  return res.status(status).json({ success: false, message, errors, ...(err instanceof ApiError && err.code === 'SESSION_REPLACED' ? { code: err.code } : {}) });
+  return res.status(status).json({ success: false, message, errors, ...(code ? { code } : {}), ...(action ? { action } : {}) });
 };
 
 module.exports = { notFound, errorHandler };

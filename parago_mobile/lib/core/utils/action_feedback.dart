@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'driver_error_message.dart';
+
 class ActionFeedback {
   static Future<T?> run<T>({
     required BuildContext context,
@@ -11,7 +13,7 @@ class ActionFeedback {
     Future<void> Function(Object error)? onError,
     String? successMessage,
     String successTitle = 'Success',
-    String errorTitle = 'Action failed',
+    String errorTitle = 'Action not completed',
     bool showSuccess = true,
   }) async {
     final navigator = Navigator.of(context, rootNavigator: true);
@@ -68,10 +70,13 @@ class ActionFeedback {
         await onError(error);
       }
       if (context.mounted) {
+        final feedback = DriverErrorMessage.from(error);
         await showErrorDialog(
           context,
-          title: errorTitle,
-          message: _messageOf(error),
+          title: errorTitle == 'Action not completed'
+              ? feedback.title
+              : errorTitle,
+          message: feedback.message,
         );
       }
       return null;
@@ -147,14 +152,6 @@ class ActionFeedback {
 
   static String messageOf(Object error) => _messageOf(error);
 
-  static String _messageOf(Object error) {
-    final text = error.toString().trim();
-    if (text.startsWith('Exception: ')) {
-      return text.substring(11).trim();
-    }
-    if (text.startsWith('Error: ')) {
-      return text.substring(7).trim();
-    }
-    return text;
-  }
+  static String _messageOf(Object error) =>
+      DriverErrorMessage.from(error).message;
 }

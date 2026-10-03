@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../services/driver_service.dart';
 import '../../services/session_controller.dart';
+import '../../core/utils/driver_error_message.dart';
 
 class DriverProfileScreen extends StatefulWidget {
   const DriverProfileScreen({super.key});
@@ -42,7 +43,9 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
         _documents = results[1];
       });
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        setState(() => _error = DriverErrorMessage.from(error).message);
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }

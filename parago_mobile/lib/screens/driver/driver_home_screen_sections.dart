@@ -545,16 +545,20 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           ? null
           : () => _changePassengerCount(focusedTrip.id, -1),
       onStartTrip: _loading ||
+              _driverActionBusy ||
               (focusedTrip != null && focusedTrip.status == 'active') ||
               startRequirementMessage != null
           ? null
           : () => _startTrip(focusedTrip),
-      onEndTrip:
-          focusedTrip == null || _loading || focusedTrip.status != 'active'
-              ? null
-              : () => _endTrip(focusedTrip.id),
+      onEndTrip: focusedTrip == null ||
+              _loading ||
+              _driverActionBusy ||
+              focusedTrip.status != 'active'
+          ? null
+          : () => _endTrip(focusedTrip.id),
       onTogglePickup: focusedTrip == null ||
               _loading ||
+              _driverActionBusy ||
               focusedTrip.status != 'active' ||
               (focusedTrip.operatingMode != 'terminal_queue' &&
                   focusedTrip.acceptRequests == false &&
@@ -634,15 +638,20 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               ? null
               : (delta) => _changePassengerCount(liveTrip.id, delta),
           onStartTrip: _loading ||
+                  _driverActionBusy ||
                   (liveTrip != null && liveTrip.status == 'active') ||
                   liveStartRequirement != null
               ? null
               : () => _startTrip(liveTrip),
-          onEndTrip: liveTrip == null || _loading || liveTrip.status != 'active'
+          onEndTrip: liveTrip == null ||
+                  _loading ||
+                  _driverActionBusy ||
+                  liveTrip.status != 'active'
               ? null
               : () => _endTrip(liveTrip.id),
           onTogglePickup: liveTrip == null ||
                   _loading ||
+                  _driverActionBusy ||
                   liveTrip.status != 'active' ||
                   (liveTrip.operatingMode != 'terminal_queue' &&
                       liveTrip.acceptRequests == false &&

@@ -2,6 +2,14 @@ const Trip = require('../models/tripSession');
 const Driver = require('../models/driver');
 const { haversineMeters } = require('../utils/geo');
 const terminalQueue = require('./terminalQueue.service');
+const arrivalCode = status => ({
+  invalid_coordinates: 'TERMINAL_GPS_INVALID',
+  stale_location: 'TERMINAL_GPS_STALE',
+  poor_accuracy: 'TERMINAL_GPS_POOR_ACCURACY',
+  outside_terminal_radius: 'OUTSIDE_TERMINAL_RADIUS',
+  insufficient_valid_fixes: 'TERMINAL_ARRIVAL_PENDING',
+  accepted: 'TERMINAL_ARRIVAL_ACCEPTED',
+}[status] || 'TERMINAL_ARRIVAL_PENDING');
 
 const MAX_FIX_AGE_MS = 60 * 1000;
 const MAX_ACCURACY_METERS = 50;
@@ -66,7 +74,7 @@ async function processTerminalArrival({ actor, jeepneyId, latitude, longitude,
     trip.terminalArrivalLastAccuracyMeters = validNumber(accuracyMeters) && accuracyMeters >= 0 ? accuracyMeters : undefined;
     await trip.save({ session });
     if (count < 2) return { tripId: String(trip._id), detected: false,
-      fixes: count, distanceMeters: distance, reason, status };
+      fixes: count, distanceMeters: distance, reason, status, code: arrivalCode(status) };
     const queued = await terminalQueue.checkIn({
       session, existingId: trip._id, actor, requestId: `terminal-arrival-${trip._id}`,
       document: { driverId: trip.driverId, jeepneyId: trip.jeepneyId, routeId: trip.routeId,

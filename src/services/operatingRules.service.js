@@ -1,5 +1,5 @@
 const Holiday = require('../models/codingHoliday');
-const ApiError = require('../utils/apiError');
+const { driverError, DRIVER_ERROR_CODES } = require('../utils/driverError');
 const LOADING_MS = 10 * 60 * 1000;
 function manilaDate(now = new Date()) {
   return new Date(now.getTime() + 8 * 3600000).toISOString().slice(0, 10);
@@ -8,15 +8,18 @@ function codingRestricted(plate, date, holiday = false) {
   const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
   if (holiday || weekday === 0 || weekday === 6) return false;
   const digit = String(plate || '').match(/(\d)\D*$/)?.[1];
-  if (digit == null) throw new ApiError(409, 'Jeep plate needs a numeric ending before operation');
+  if (digit == null) throw driverError(409, 'PLATE_ENDING_REQUIRED',
+    'The jeepney plate has no valid numeric ending.', 'Ask an administrator to correct the jeepney record.');
   return [weekday * 2 - 1, weekday * 2 % 10].includes(Number(digit));
 }
 async function assertVehicleAllowed(vehicle, session, now = new Date()) {
-  if (!vehicle) throw new ApiError(409, 'Jeep is unavailable');
+  if (!vehicle) throw driverError(409, DRIVER_ERROR_CODES.JEEPNEY_NOT_FOUND,
+    'The assigned jeepney is unavailable.', 'Refresh your assignment or contact an administrator.');
   const date = manilaDate(now);
   const holiday = await Holiday.exists({ date }).session(session || null);
   if (codingRestricted(vehicle.plateNumber, date, Boolean(holiday))) {
-    throw new ApiError(409, `Jeep ${vehicle.plateNumber} cannot operate today (${date}): number coding. Your account remains active.`);
+    throw driverError(409, 'NUMBER_CODING_RESTRICTION',
+      `This jeepney cannot operate today because of number coding (${date}).`, 'Use an eligible jeepney or return on the next permitted day.');
   }
 }
 function loadingTiming(trip, now = new Date()) {

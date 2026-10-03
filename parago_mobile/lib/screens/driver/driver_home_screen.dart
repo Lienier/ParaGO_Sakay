@@ -16,6 +16,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/utils/action_feedback.dart';
+import '../../core/utils/driver_error_message.dart';
 import '../../core/utils/parago_format.dart';
 import '../../models/operations/notification.dart';
 import '../../models/operations/announcement.dart';
@@ -92,7 +93,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Map<String, List<PickupRequestModel>> _tripRequests = {};
   Map<String, List<StopAlertModel>> _tripAlerts = {};
   Map<String, List<RideSessionModel>> _tripRides = {};
-  bool _driverActionBusy = false;
+  bool _driverMutationInFlight = false;
+  bool _driverStatusUncertain = false;
+  bool get _driverActionBusy =>
+      _driverMutationInFlight ||
+      _driverStatusUncertain ||
+      _countQueues.values.any((queue) => queue.pending > 0);
   final _countQueues = <String, OccupancyAdjustmentQueue>{};
   Map<String, dynamic> _driverProfile = {};
   String? _assignedRouteId;
@@ -371,16 +377,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   bool _looksLikeConnectivityIssue(Object error) {
-    final message = ActionFeedback.messageOf(error).toLowerCase();
-    return message.contains('network') ||
-        message.contains('connection') ||
-        message.contains('socket') ||
-        message.contains('timed out') ||
-        message.contains('timeout') ||
-        message.contains('host lookup') ||
-        message.contains('failed host lookup') ||
-        message.contains('xmlhttprequest') ||
-        message.contains('fetch');
+    return DriverErrorMessage.isConnectivity(error);
   }
 
   Future<bool> _probeServerReachability(SessionController session) async {
@@ -743,7 +740,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     }
   }
 
-  Future<void> _load({bool silent = false}) async {
+  Future<bool> _load({bool silent = false}) async {
     final loadGeneration = ++_loadGeneration;
     final session = context.read<SessionController>();
     await _ensureDismissedNotificationsLoaded(session);
@@ -802,11 +799,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         rideSessionService: rideSessionService,
       );
 
-      if (!mounted || loadGeneration != _loadGeneration) return;
+      if (!mounted || loadGeneration != _loadGeneration) return false;
       setState(() {
+        _driverStatusUncertain = false;
         _trips = trips.map((incoming) {
           final current = _trips.where((t) => t.id == incoming.id).firstOrNull;
-          return current != null && current.isNewerThan(incoming)
+          return current != null && current.shouldKeepOver(incoming)
               ? current
               : incoming;
         }).toList(growable: false);
@@ -867,11 +865,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           ),
         );
       }
+      return true;
     } catch (error) {
       if (_looksLikeConnectivityIssue(error)) {
         _applyAutomaticAvailabilityState(session, hasInternet: false);
       }
-      setState(() => _statusMessage = error.toString());
+      if (mounted) {
+        setState(() => _statusMessage = DriverErrorMessage.from(error).message);
+      }
+      return false;
     } finally {
       if (mounted && !silent) setState(() => _loading = false);
     }
@@ -1443,25 +1445,55 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     bool reloadAfter = true,
   }) async {
     if (_driverActionBusy || !mounted) return;
-    _driverActionBusy = true;
-    setState(() => _statusMessage = loadingMessage);
+    _loadGeneration++;
+    setState(() {
+      _driverMutationInFlight = true;
+      _statusMessage = loadingMessage;
+    });
     try {
-      await action();
-      if (mounted && reloadAfter) await _load(silent: true);
+      final result = await action();
       if (!mounted) return;
-      setState(() => _statusMessage = successMessage);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(successMessage)));
-    } catch (error) {
+      _loadGeneration++;
+      if (result is TripSession) {
+        setState(() => _replaceTripSnapshot(result));
+      }
+      var refreshed = true;
+      if (reloadAfter) {
+        setState(() => _driverStatusUncertain = true);
+        refreshed = await _load(silent: true);
+      }
       if (!mounted) return;
-      if (reloadAfter) await _load(silent: true);
-      if (!mounted) return;
-      final message = ActionFeedback.messageOf(error);
+      final message = refreshed
+          ? successMessage
+          : '$successMessage Current status could not be refreshed. Reconnect and refresh before another action.';
       setState(() => _statusMessage = message);
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(message)));
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
+    } catch (error) {
+      if (!mounted) return;
+      debugPrint('Driver action failed: $error');
+      _loadGeneration++;
+      setState(() {
+        _driverStatusUncertain = true;
+        _statusMessage =
+            'Status uncertain — refreshing. Please wait before retrying.';
+      });
+      final refreshed = await _load(silent: true);
+      if (!mounted) return;
+      final feedback = DriverErrorMessage.from(error);
+      final uncertain = _looksLikeConnectivityIssue(error);
+      final message = !refreshed
+          ? 'Current trip status could not be confirmed. ${feedback.message} Trip controls stay paused until a refresh succeeds.'
+          : uncertain
+              ? 'Status uncertain. Trip status was refreshed before retrying. ${feedback.message}'
+              : feedback.message;
+      setState(() => _statusMessage = message);
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
     } finally {
-      _driverActionBusy = false;
+      if (mounted) setState(() => _driverMutationInFlight = false);
     }
   }
 
@@ -2529,15 +2561,28 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   String? _driverOperationsBannerMessage(TripSession? trip) {
-    if (trip?.operatingMode == 'terminal_queue') {
-      final summary = trip!.terminalSummary;
-      return 'Terminal: ${trip.terminalQueueStatus} ? Queue ${summary?["queuePosition"] ?? "?"} ? ${summary?["reservedSeats"] ?? 0} reserved ? ${summary?["onboardSeats"] ?? 0} onboard. ${summary?["gpsWarning"] == true ? "GPS unavailable or old; your queue position is retained." : ""}';
+    if (trip == null) return _driverStartRequirementMessage(trip: trip);
+    final state = trip.driverStateLabel;
+    final detail = trip.driverStateDetail;
+    final next = trip.driverNextAction;
+    if (trip.operatingMode == 'terminal_queue') {
+      final summary = trip.terminalSummary;
+      final queuePosition = summary?['queuePosition'];
+      final gpsWarning = summary?['gpsWarning'] == true
+          ? ' Live jeep GPS is unavailable or old; the queue position is retained.'
+          : '';
+      return '$state. ${detail ?? ''} Queue position: ${queuePosition ?? 'not assigned'}. '
+              'Reserved seats: ${summary?['reservedSeats'] ?? 0}. '
+              'Onboard: ${summary?['onboardSeats'] ?? 0}.$gpsWarning '
+              '${next ?? ''}'
+          .trim();
     }
-    if (trip?.status == 'active' && trip?.inactivityPausedAt != null) {
+    if (trip.status == 'active' && trip.inactivityPausedAt != null) {
       return 'No driver location was received for five minutes. Pickups are paused. Reopen pickup requests to resume, or end this trip.';
     }
-    if (trip?.status == 'active') {
-      return _driverPickupRequirementMessage(trip: trip);
+    if (trip.status == 'active') {
+      return '$state. ${detail ?? ''} ${next ?? _driverPickupRequirementMessage(trip: trip) ?? ''}'
+          .trim();
     }
     return _driverStartRequirementMessage(trip: trip);
   }
@@ -2681,7 +2726,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   void _replaceTripSnapshot(TripSession updatedTrip) {
     _trips = _trips
         .map((trip) =>
-            trip.id == updatedTrip.id && !trip.isNewerThan(updatedTrip)
+            trip.id == updatedTrip.id && !trip.shouldKeepOver(updatedTrip)
                 ? updatedTrip
                 : trip)
         .toList(growable: false);
@@ -2695,7 +2740,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   Future<void> _changePassengerCount(String tripId, int delta) async {
     const supportedDeltas = {-5, -3, -2, -1, 1, 2, 3, 5};
-    if (!mounted || !supportedDeltas.contains(delta)) return;
+    if (!mounted ||
+        _driverMutationInFlight ||
+        _driverStatusUncertain ||
+        !supportedDeltas.contains(delta)) {
+      return;
+    }
     final queue = _countQueues.putIfAbsent(
         tripId,
         () => OccupancyAdjustmentQueue(
@@ -2763,9 +2813,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       if (!mounted) {
         return;
       }
-      unawaited(_load(silent: true));
+      if (_driverStatusUncertain) return;
+      _loadGeneration++;
+      setState(() => _driverStatusUncertain = true);
+      final refreshed = await _load(silent: true);
+      if (!mounted) return;
       final message =
-          '${ActionFeedback.messageOf(error)} Check the refreshed count before retrying.';
+          '${ActionFeedback.messageOf(error)} ${refreshed ? 'Check the refreshed count before retrying.' : 'Count controls stay paused until a refresh succeeds.'}';
       setState(() {
         _statusMessage = message;
       });
@@ -2781,13 +2835,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       final baseLabel = effectiveRoute.label;
       final modeLabel = trip.operatingMode == 'terminal_queue'
           ? 'Terminal queue'
-          : 'Route mode';
+          : trip.driverStateLabel;
       return '$baseLabel | $modeLabel';
     }
     if (trip.routeName != null && trip.routeName!.isNotEmpty) {
       final modeLabel = trip.operatingMode == 'terminal_queue'
           ? 'Terminal queue'
-          : 'Route mode';
+          : trip.driverStateLabel;
       return '${trip.routeLabel} | $modeLabel';
     }
     for (final route in _routes) {
@@ -3139,6 +3193,107 @@ class _DriverStatusBanner extends StatelessWidget {
             onPressed: onClose,
             icon: const Icon(Icons.close),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DriverStatusTimeline extends StatelessWidget {
+  const _DriverStatusTimeline({required this.trip});
+
+  final TripSession? trip;
+
+  static const _states = <String>[
+    'scheduled',
+    'driving_to_terminal',
+    'waiting',
+    'loading',
+    'on_route',
+    'completed',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final current = trip?.driverState ?? 'scheduled';
+    final rawIndex = _states.indexOf(current);
+    final currentIndex = rawIndex < 0 ? 0 : rawIndex;
+    const labels = <String>[
+      'Scheduled',
+      'To terminal',
+      'Waiting',
+      'Loading',
+      'On route',
+      'Completed',
+    ];
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Trip status',
+              style: TextStyle(
+                  color: Colors.white70, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          Text(trip?.driverStateLabel ?? 'Ready to start',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800)),
+          if (trip?.driverStateDetail != null) ...[
+            const SizedBox(height: 3),
+            Text(trip!.driverStateDetail!,
+                style: const TextStyle(color: Colors.white70)),
+          ],
+          const SizedBox(height: 12),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (var index = 0; index < labels.length; index++) ...[
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: index == currentIndex
+                          ? Theme.of(context)
+                              .colorScheme
+                              .secondary
+                              .withValues(alpha: 0.85)
+                          : Colors.white.withValues(
+                              alpha: index < currentIndex ? 0.16 : 0.06),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(labels[index],
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: index == currentIndex
+                                ? FontWeight.w800
+                                : FontWeight.w600)),
+                  ),
+                  if (index < labels.length - 1)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 4),
+                      child: Icon(Icons.chevron_right,
+                          size: 16, color: Colors.white54),
+                    ),
+                ],
+              ],
+            ),
+          ),
+          if (trip?.driverNextAction != null) ...[
+            const SizedBox(height: 10),
+            Text('Next: ${trip!.driverNextAction}',
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.w600)),
+          ],
         ],
       ),
     );
@@ -3521,6 +3676,8 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                                   ],
                                 ),
                               ),
+                              const SizedBox(height: 16),
+                              _DriverStatusTimeline(trip: trip),
                               const SizedBox(height: 16),
                               Text(
                                 'Passengers onboard',

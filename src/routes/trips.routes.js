@@ -11,7 +11,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
 const { apiRateLimiters } = require('../middlewares/rateLimits');
-const ApiError = require('../utils/apiError');
+const { DRIVER_ERROR_CODES, driverError } = require('../utils/driverError');
 const { ok } = require('../utils/response');
 const { DRIVER, ADMIN, PASSENGER } = require('../constants/roles');
 const { ensureObjectId, ensureEnum } = require('../utils/validators');
@@ -78,7 +78,8 @@ const buildTerminalQueueFields = async ({
 
   const terminalStop = resolveRouteTerminalStop(route);
   if (!terminalStop) {
-    throw new ApiError(409, 'Selected route has no terminal stop configured');
+    throw driverError(409, DRIVER_ERROR_CODES.TERMINAL_NOT_CONFIGURED,
+      'This route has no configured departure terminal.', 'Choose a route with a terminal before starting a trip.');
   }
 
   const existingQueueTrips = await TripSession.find({
@@ -167,10 +168,8 @@ const createTripSession = async ({
     }
   }
 
-  throw new ApiError(
-    409,
-    'Unable to reserve a unique terminal queue slot right now'
-  );
+  throw driverError(409, DRIVER_ERROR_CODES.QUEUE_CONFLICT,
+    'The terminal queue is busy and could not reserve a position.', 'Refresh the queue and try again.');
 };
 
 router.get(
@@ -245,7 +244,7 @@ router.post(
     const payload = req.body || {};
     const startedAt = payload.status === 'active' ? new Date() : undefined;
     if (!payload.jeepneyId || !payload.routeId) {
-      throw new ApiError(400, 'jeepneyId and routeId are required');
+      throw driverError(400, 'TRIP_FIELDS_REQUIRED', 'A jeepney and route are required.', 'Select both before starting terminal entry.');
     }
     ensureObjectId(payload.jeepneyId, 'jeepneyId');
     ensureObjectId(payload.routeId, 'routeId');
@@ -258,56 +257,60 @@ router.post(
     const jeepney = await Jeepney.findById(payload.jeepneyId);
     if (payload.status === 'active') await assertVehicleAllowed(jeepney);
     if (!jeepney) {
-      throw new ApiError(404, 'Jeepney not found');
+      throw driverError(404, DRIVER_ERROR_CODES.JEEPNEY_NOT_FOUND, 'The selected jeepney was not found.', 'Refresh your assigned jeepney and try again.');
     }
     if (jeepney.status !== 'active') {
-      throw new ApiError(409, 'Jeepney is not active');
+      throw driverError(409, DRIVER_ERROR_CODES.JEEPNEY_INACTIVE, 'The selected jeepney is not active.', 'Ask an administrator to activate the jeepney before starting.');
     }
     const route = await Route.findById(payload.routeId);
     if (!route) {
-      throw new ApiError(404, 'Route not found');
+      throw driverError(404, DRIVER_ERROR_CODES.ROUTE_NOT_FOUND, 'The selected route was not found.', 'Refresh the route list and choose an active route.');
     }
     if (route.status !== 'active') {
-      throw new ApiError(409, 'Route is not active');
+      throw driverError(409, DRIVER_ERROR_CODES.ROUTE_INACTIVE, 'The selected route is not active.', 'Choose an active route or contact an administrator.');
     }
     const requestedOperatingMode = String(payload.operatingMode || '').trim().toLowerCase();
     if (requestedOperatingMode === 'route') {
-      throw new ApiError(
-        409,
-        'Drivers must arrive at the terminal and complete terminal departure before route operation'
-      );
+      throw driverError(409, 'DIRECT_ROUTE_NOT_ALLOWED',
+        'A trip must begin at its configured terminal.', 'Start terminal entry and complete terminal departure before driving the route.');
     }
     const operatingMode = 'terminal_queue';
     if (
       operatingMode === 'terminal_queue' &&
       !resolveRouteTerminalStop(route)
     ) {
-      throw new ApiError(409, 'Selected route has no terminal stop configured');
+      throw driverError(409, DRIVER_ERROR_CODES.TERMINAL_NOT_CONFIGURED,
+        'This route has no configured departure terminal.', 'Choose a route with a terminal before starting a trip.');
     }
 
     if (req.user.role === DRIVER) {
       const driver = await requireCurrentDriver(req.user);
       if (normalizeStatus(req.user.status) !== 'active') {
-        throw new ApiError(403, 'Driver account must be active to create trips');
+        throw driverError(403, DRIVER_ERROR_CODES.ACCOUNT_INACTIVE,
+          'Your driver account is not active.', 'Contact an administrator before starting a trip.');
       }
       if (driver.status !== 'active') {
-        throw new ApiError(403, 'Driver must be online to create trips');
+        throw driverError(403, DRIVER_ERROR_CODES.DRIVER_OFFLINE,
+          'Your driver status is offline.', 'Set your driver status to online and try again.');
       }
       if (
         driver.assignedJeepneyId &&
         String(driver.assignedJeepneyId) !== String(jeepney._id)
         ) {
-        throw new ApiError(403, 'This jeepney is not assigned to the driver');
+        throw driverError(403, DRIVER_ERROR_CODES.ASSIGNMENT_MISSING,
+          'This jeepney is not assigned to your driver account.', 'Use your assigned jeepney or contact an administrator.');
       }
       payload.driverId = driver._id;
     } else {
       const requestedStatus = payload.status || 'scheduled';
       if (requestedStatus !== 'scheduled' && !payload.driverId) {
-        throw new ApiError(400, 'driverId is required when creating a non-scheduled trip');
+      throw driverError(400, DRIVER_ERROR_CODES.ASSIGNMENT_MISSING,
+        'A driver assignment is required for a trip that starts immediately.', 'Assign a driver or create a scheduled terminal trip.');
       }
     }
     if (operatingMode === 'terminal_queue') {
-      if (!payload.driverId) throw new ApiError(400, 'driverId is required for terminal entry');
+      if (!payload.driverId) throw driverError(400, DRIVER_ERROR_CODES.ASSIGNMENT_MISSING,
+        'A driver assignment is required for terminal entry.', 'Select an assigned driver before creating the terminal trip.');
       const intent = await require('../services/terminalIntent.service').createTerminalIntent({
         driverId: payload.driverId, routeId: route._id, jeepneyId: jeepney._id,
       });
@@ -338,39 +341,42 @@ router.patch(
     const trip = await requireTrip(req.params.id);
     let route;
     if (trip.status === 'active') {
-      throw new ApiError(409, 'Trip already active');
+      throw driverError(409, 'TRIP_ALREADY_ACTIVE', 'This trip is already active.', 'Refresh the trip status and continue from the active trip.');
     }
     if (trip.status === 'completed' || trip.status === 'cancelled') {
-      throw new ApiError(409, 'Trip is already closed');
+      throw driverError(409, DRIVER_ERROR_CODES.TRIP_ALREADY_CLOSED, 'This trip has already ended.', 'Refresh your trip list before starting another trip.');
     }
     if (req.user.role === DRIVER) {
       const driver = await requireCurrentDriver(req.user);
       if (normalizeStatus(req.user.status) !== 'active') {
-        throw new ApiError(403, 'Driver account must be active to start a trip');
+        throw driverError(403, DRIVER_ERROR_CODES.ACCOUNT_INACTIVE,
+          'Your driver account is not active.', 'Contact an administrator before starting a trip.');
       }
       if (driver.status !== 'active') {
-        throw new ApiError(403, 'Driver must be online to start a trip');
+        throw driverError(403, DRIVER_ERROR_CODES.DRIVER_OFFLINE,
+          'Your driver status is offline.', 'Set your driver status to online and try again.');
       }
       if (
         driver.assignedJeepneyId &&
         String(driver.assignedJeepneyId) !== String(trip.jeepneyId)
       ) {
-        throw new ApiError(403, 'This jeepney is not assigned to the driver');
+        throw driverError(403, DRIVER_ERROR_CODES.ASSIGNMENT_MISSING,
+          'This jeepney is not assigned to your driver account.', 'Use your assigned jeepney or contact an administrator.');
       }
       if (!trip.driverId) {
         trip.driverId = driver._id;
       } else if (String(trip.driverId) !== String(driver._id)) {
-        throw new ApiError(403, 'You are not assigned to this trip');
+        throw driverError(403, DRIVER_ERROR_CODES.TRIP_NOT_ASSIGNED,
+          'This trip is assigned to a different driver.', 'Open your assigned trip before continuing.');
       }
     }
     if (trip.operatingMode === 'terminal_queue') {
       if (trip.status === 'scheduled' && trip.terminalQueueStatus === 'off_queue') {
-        throw new ApiError(
-          409,
-          'Drive to the configured terminal. Terminal check-in is detected automatically from fresh GPS.'
-        );
+        throw driverError(409, DRIVER_ERROR_CODES.TERMINAL_ARRIVAL_PENDING,
+          'Terminal arrival has not been confirmed by fresh GPS yet.', 'Drive to the configured terminal and keep fresh GPS enabled.');
       }
-      throw new ApiError(409, 'Terminal check-in is already being processed');
+      throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+        'Terminal check-in is already being processed.', 'Wait for the next GPS update and refresh the trip status.');
     }
     await assertVehicleAllowed(await Jeepney.findById(trip.jeepneyId));
     trip.status = 'active';
@@ -388,7 +394,8 @@ router.patch(
     if (trip.operatingMode === 'terminal_queue') {
       route = route || (trip.routeId ? await Route.findById(trip.routeId) : null);
       if (!route) {
-        throw new ApiError(409, 'Route is required for a terminal queue trip');
+        throw driverError(409, DRIVER_ERROR_CODES.ROUTE_NOT_FOUND,
+          'A route is required for a terminal queue trip.', 'Select an active route and try again.');
       }
       const terminalFields = await buildTerminalQueueFields({
         route,
@@ -429,7 +436,7 @@ router.patch('/:id/terminal/:action', authenticate, authorize(DRIVER, ADMIN), as
   ensureObjectId(req.params.id, 'trip id');
   const trip = await terminalQueue.change({ tripId: req.params.id, actor: req.user, action: req.params.action,
     requestId: req.body.requestId, reason: req.body.reason });
-  return ok(res, trip, 'Terminal queue updated');
+  return ok(res, await terminalQueue.describe(trip), 'Terminal queue updated');
 }));
 
 router.patch(
@@ -440,7 +447,7 @@ router.patch(
     ensureObjectId(req.params.id, 'trip id');
     const trip = await requireTrip(req.params.id);
     if (trip.status === 'completed' || trip.status === 'cancelled') {
-      throw new ApiError(409, 'Trip already closed');
+      throw driverError(409, DRIVER_ERROR_CODES.TRIP_ALREADY_CLOSED, 'This trip has already ended.', 'Refresh your trip list.');
     }
     if (req.user.role === DRIVER) {
       await ensureDriverAssignedToTrip(req.user, trip);
@@ -453,7 +460,7 @@ router.patch(
       });
     }
     await invalidateDriverActiveContext(trip.driverId);
-    return ok(res, closedTrip, 'Trip ended');
+    return ok(res, await terminalQueue.describe(closedTrip), 'Trip ended');
   })
 );
 
@@ -465,7 +472,8 @@ router.patch(
     ensureObjectId(req.params.id, 'trip id');
     const trip = await requireTrip(req.params.id);
     await ensureDriverAssignedToTrip(req.user, trip);
-    if (typeof req.body.acceptRequests !== 'boolean') throw new ApiError(400, 'acceptRequests must be a boolean');
+    if (typeof req.body.acceptRequests !== 'boolean') throw driverError(400, 'INVALID_AVAILABILITY_VALUE',
+      'Pickup availability must be enabled or paused.', 'Choose one of the available pickup controls.');
     const updated = await tripLifecycle.setAvailability(trip._id, req.body.acceptRequests);
     return ok(res, updated, 'Trip availability updated');
   })
@@ -481,7 +489,8 @@ router.patch(
     await ensureDriverAssignedToTrip(req.user, trip);
 
     if (trip.status !== 'active') {
-      throw new ApiError(409, 'Only active trips can update occupancy');
+      throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+        'Passenger counts can only change on an active trip.', 'Refresh the trip status before changing the count.');
     }
 
     const delta = req.body?.delta;
@@ -492,16 +501,12 @@ router.patch(
     if (isAdjustment && (!Number.isInteger(delta) || !supportedDeltas.has(delta) ||
         typeof operationId !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(operationId) ||
         req.body.manualOccupancyCount !== undefined)) {
-      throw new ApiError(
-        400,
-        'Use a supported passenger adjustment (-5, -3, -2, -1, +1, +2, +3, or +5) with a unique operationId'
-      );
+      throw driverError(400, 'INVALID_OCCUPANCY_ADJUSTMENT',
+        'Passenger count adjustment is invalid.', 'Use +1, +2, +3, +5, -1, -2, -3, or -5 with a new operation.');
     }
     if (!isAdjustment && (!Number.isInteger(requestedManualOccupancy) || requestedManualOccupancy < 0)) {
-      throw new ApiError(
-        400,
-        'manualOccupancyCount must be a whole number at or above zero'
-      );
+      throw driverError(400, 'INVALID_OCCUPANCY_COUNT',
+        'Manual passenger count must be a whole number of zero or more.', 'Enter a valid passenger count and try again.');
     }
 
     let capacity = null;
@@ -514,10 +519,12 @@ router.patch(
           status: 'active',
         }).session(occupancySession);
         if (!freshTrip) {
-          throw new ApiError(409, 'Only active trips can update occupancy');
+          throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+            'Passenger counts can only change on an active trip.', 'Refresh the trip status before changing the count.');
         }
         if (String(freshTrip.driverId) !== String(trip.driverId)) {
-          throw new ApiError(403, 'Driver is no longer assigned to this trip');
+          throw driverError(403, DRIVER_ERROR_CODES.TRIP_NOT_ASSIGNED,
+            'Your driver account is no longer assigned to this trip.', 'Refresh your trips before changing the count.');
         }
         const Operation = require('../models/occupancyOperation');
         if (isAdjustment) {
@@ -525,21 +532,25 @@ router.patch(
           if (receipt) {
             if (String(receipt.tripId) !== String(trip._id) ||
                 String(receipt.driverId) !== String(freshTrip.driverId) || receipt.delta !== delta) {
-              throw new ApiError(409, 'Operation ID was already used for another adjustment');
+              throw driverError(409, DRIVER_ERROR_CODES.DUPLICATE_OPERATION,
+                'This passenger-count operation was already used for another change.', 'Refresh the count before trying again.');
             }
             return;
           }
           requestedManualOccupancy = (freshTrip.manualOccupancyCount || 0) + delta;
-          if (requestedManualOccupancy < 0) throw new ApiError(409, 'Manual passenger count is already zero');
+          if (requestedManualOccupancy < 0) throw driverError(409, 'OCCUPANCY_ALREADY_ZERO',
+            'There are no manual passengers to remove.', 'Refresh the count and remove a smaller number.');
         } else if (req.body.expectedManualOccupancyCount !== freshTrip.manualOccupancyCount) {
-          throw new ApiError(409, 'Passenger count changed; refresh before updating');
+          throw driverError(409, DRIVER_ERROR_CODES.STALE_OCCUPANCY,
+            'The passenger count changed on another device.', 'Refresh the count before making another change.');
         }
 
         const jeepney = await Jeepney.findById(freshTrip.jeepneyId)
           .select('capacity status plateNumber jeepneyName vehicleTag')
           .session(occupancySession);
         if (!jeepney) {
-          throw new ApiError(404, 'Jeepney not found');
+          throw driverError(404, DRIVER_ERROR_CODES.JEEPNEY_NOT_FOUND,
+            'The assigned jeepney could not be found.', 'Refresh your driver assignment.');
         }
 
         capacity = Number(jeepney.capacity);
@@ -547,16 +558,15 @@ router.patch(
         const onboardRideCount = seatCounts.onboard;
         nextOccupancyCount = onboardRideCount + requestedManualOccupancy;
         const reserved = seatCounts.reserved;
-        if (nextOccupancyCount + reserved > capacity) throw new ApiError(409, 'Occupancy would consume reserved seats');
+        if (nextOccupancyCount + reserved > capacity) throw driverError(409, DRIVER_ERROR_CODES.CAPACITY_CONFLICT,
+          'That change would use seats reserved for booked passengers.', 'Add fewer manual passengers or wait for reservations to resolve.');
         if (
           Number.isFinite(capacity) &&
           capacity > 0 &&
           nextOccupancyCount > capacity
         ) {
-          throw new ApiError(
-            409,
-            `Occupancy cannot exceed jeepney capacity of ${capacity}`
-          );
+          throw driverError(409, DRIVER_ERROR_CODES.CAPACITY_CONFLICT,
+            `Passenger count cannot exceed this jeepney's ${capacity}-seat capacity.`, 'Remove passengers or wait for a seat to become available.');
         }
 
         freshTrip.manualOccupancyCount = requestedManualOccupancy;

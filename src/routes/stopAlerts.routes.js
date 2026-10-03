@@ -7,6 +7,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
 const ApiError = require('../utils/apiError');
+const { DRIVER_ERROR_CODES, driverError } = require('../utils/driverError');
 const { ok } = require('../utils/response');
 const { PASSENGER, DRIVER, ADMIN } = require('../constants/roles');
 const { createStopAlert } = require('../services/stopAlert.service');
@@ -93,7 +94,8 @@ router.patch(
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'stop alert id');
     const alert = await StopAlert.findById(req.params.id);
-    if (!alert) throw new ApiError(404, 'Stop alert not found');
+    if (!alert) throw driverError(404, DRIVER_ERROR_CODES.STOP_ALERT_NOT_FOUND,
+      'This stop alert is no longer available.', 'Refresh the alert list.');
     const trip = await requireTrip(alert.tripSessionId, {
       notFoundMessage: 'Trip not found for this stop alert',
     });
@@ -104,7 +106,8 @@ router.patch(
       return ok(res, alert, 'Stop alert already acknowledged');
     }
     if (alert.status === 'dismissed') {
-      throw new ApiError(409, 'Cannot acknowledge a dismissed stop alert');
+      throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+        'This stop alert was already dismissed.', 'Refresh the alert list before trying again.');
     }
 
     const previousStatus = alert.status;
@@ -128,15 +131,18 @@ router.patch(
     if (!acknowledgedAlert) {
       const latestAlert = await StopAlert.findById(req.params.id);
       if (!latestAlert) {
-        throw new ApiError(404, 'Stop alert not found');
+        throw driverError(404, DRIVER_ERROR_CODES.STOP_ALERT_NOT_FOUND,
+          'This stop alert is no longer available.', 'Refresh the alert list.');
       }
       if (latestAlert.status === 'acknowledged') {
         return ok(res, latestAlert, 'Stop alert already acknowledged');
       }
       if (latestAlert.status === 'dismissed') {
-        throw new ApiError(409, 'Cannot acknowledge a dismissed stop alert');
+        throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+          'This stop alert was already dismissed.', 'Refresh the alert list before trying again.');
       }
-      throw new ApiError(409, 'Stop alert acknowledgement is already in progress');
+      throw driverError(409, DRIVER_ERROR_CODES.DUPLICATE_OPERATION,
+        'This stop alert is already being acknowledged.', 'Refresh the alert list before trying again.');
     }
 
     const passenger = await Passenger.findById(alert.passengerId).select('userId');

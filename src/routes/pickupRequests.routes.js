@@ -21,6 +21,7 @@ const authenticate = require('../middlewares/authenticate');
 const authorize = require('../middlewares/authorize');
 const { ok } = require('../utils/response');
 const ApiError = require('../utils/apiError');
+const { DRIVER_ERROR_CODES, driverError } = require('../utils/driverError');
 const { PASSENGER, DRIVER, ADMIN } = require('../constants/roles');
 const {
   pickupRequestTtlMinutes,
@@ -116,19 +117,24 @@ const resolveTripDriverUserId = async (trip) => {
 
 const ensureDriverCanHandlePickup = ({ driver, trip, accountStatus }) => {
   if (!driver) {
-    throw new ApiError(403, 'Driver profile missing');
+    throw driverError(403, DRIVER_ERROR_CODES.ASSIGNMENT_MISSING,
+      'Your driver profile is not available.', 'Sign in again or contact an administrator.');
   }
   if (normalizeStatus(accountStatus) !== 'active') {
-    throw new ApiError(403, 'Driver account must be active to handle pickups');
+    throw driverError(403, DRIVER_ERROR_CODES.ACCOUNT_INACTIVE,
+      'Your driver account is not active.', 'Contact an administrator before handling pickups.');
   }
   if (driver.status !== 'active') {
-    throw new ApiError(403, 'Driver must be online to handle pickups');
+    throw driverError(403, DRIVER_ERROR_CODES.DRIVER_OFFLINE,
+      'Your driver status is offline.', 'Set your driver status to online and try again.');
   }
   if (!driver.assignedJeepneyId) {
-    throw new ApiError(403, 'Driver must be assigned to a jeepney before handling pickups');
+    throw driverError(403, DRIVER_ERROR_CODES.ASSIGNMENT_MISSING,
+      'No jeepney is assigned to your driver account.', 'Contact an administrator before handling pickups.');
   }
   if (String(driver.assignedJeepneyId) !== String(trip.jeepneyId)) {
-    throw new ApiError(403, 'Focused trip must use the driver assigned jeepney');
+    throw driverError(403, DRIVER_ERROR_CODES.TRIP_NOT_ASSIGNED,
+      'This trip uses a different jeepney assignment.', 'Refresh your trips and open the assigned jeepney.');
   }
 };
 
@@ -523,7 +529,8 @@ router.patch(
     const request = await requirePickupRequest(req.params.id);
     const trip = await requireTrip(request.tripSessionId);
     if (trip.status !== 'active') {
-      throw new ApiError(409, 'Trip is not active for acknowledgment');
+      throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+        'This trip is no longer active for pickup acknowledgement.', 'Refresh the trip status before trying again.');
     }
     let driver;
     if (req.user.role === DRIVER) {
@@ -537,16 +544,19 @@ router.patch(
       });
     }
     if (!trip.driverId) {
-      throw new ApiError(409, 'Trip driver missing');
+      throw driverError(409, DRIVER_ERROR_CODES.ASSIGNMENT_MISSING,
+        'This trip has no assigned driver.', 'Ask an administrator to assign a driver, then refresh.');
     }
 
     if (request.status === 'acknowledged') {
       return ok(res, request, 'Pickup request already acknowledged');
     }
     if (!canDriverAcknowledgePickupRequest(request.status)) {
-      throw new ApiError(409, 'Only pending pickup requests can be acknowledged');
+      throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+        'Only a pending pickup request can be acknowledged.', 'Refresh the request to see its current status.');
     }
-    if (request.expiresAt <= new Date()) throw new ApiError(409, 'Pickup request has expired');
+    if (request.expiresAt <= new Date()) throw driverError(409, DRIVER_ERROR_CODES.TRIP_ALREADY_CLOSED,
+      'This pickup request has expired.', 'Refresh the request list; the passenger must send a new request.');
     const previousStatus = request.status;
     request.status = 'acknowledged';
     request.acknowledgedAt = new Date();

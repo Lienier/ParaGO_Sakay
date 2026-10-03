@@ -252,7 +252,7 @@ class ApiClient {
       return 'The request timed out before the server responded.';
     }
 
-    return rawMessage.isEmpty ? 'Network error' : rawMessage;
+    return 'The request could not be completed. Check your connection and refresh before trying again.';
   }
 
   Future<void> _clearAllCache() async {
@@ -308,6 +308,8 @@ class ApiClient {
   }
 
   Future<void> clearCache() async {
+    _cacheGeneration++;
+    _pendingGetRequests.clear();
     await _clearAllCache();
   }
 
@@ -401,6 +403,8 @@ class ApiClient {
         final message = payload['message']?.toString() ?? 'Request failed';
         final errors =
             (payload['errors'] as List?)?.map((e) => e.toString()).toList();
+        final code = payload['code']?.toString();
+        final action = payload['action']?.toString();
         final status = response.statusCode ?? 500;
         _recordTelemetry(
           method: upperMethod,
@@ -410,7 +414,8 @@ class ApiClient {
           success: false,
           statusCode: status,
         );
-        throw ApiException(status, message, errors: errors);
+        throw ApiException(status, message,
+            errors: errors, code: code, action: action);
       }
 
       if (isGet && useCache && cacheGeneration == _cacheGeneration) {
@@ -436,11 +441,15 @@ class ApiClient {
 
       return payload;
     } on DioException catch (error) {
-      if (error.response?.statusCode == 401 && !path.startsWith('/auth/') &&
-          error.requestOptions.headers['Authorization'] == _dio.options.headers['Authorization']) {
+      if (error.response?.statusCode == 401 &&
+          !path.startsWith('/auth/') &&
+          error.requestOptions.headers['Authorization'] ==
+              _dio.options.headers['Authorization']) {
         final body = error.response?.data;
-        authenticationRejectionMessage = body is Map && body['code'] == 'SESSION_REPLACED'
-            ? 'Your account was signed in on another device' : null;
+        authenticationRejectionMessage =
+            body is Map && body['code'] == 'SESSION_REPLACED'
+                ? 'Your account was signed in on another device'
+                : null;
         await onAuthenticationRejected?.call();
       }
       if (error.response?.statusCode == 429) {
@@ -477,7 +486,17 @@ class ApiClient {
         success: false,
         statusCode: status,
       );
-      throw ApiException(status, message);
+      final payload = error.response?.data;
+      final transportCode = error.response == null
+          ? (error.type == DioExceptionType.connectionTimeout ||
+                  error.type == DioExceptionType.receiveTimeout ||
+                  error.type == DioExceptionType.sendTimeout
+              ? 'REQUEST_TIMEOUT'
+              : 'NETWORK_UNAVAILABLE')
+          : null;
+      throw ApiException(status, message,
+          code: payload is Map ? payload['code']?.toString() : transportCode,
+          action: payload is Map ? payload['action']?.toString() : null);
     }
   }
 
@@ -516,7 +535,9 @@ class ApiClient {
       }
     }
 
-    if (isGet) {
+    // A reconciliation must not join a GET that began before a mutation.
+    // Cacheable reads still coalesce; authoritative reads always reach the API.
+    if (isGet && useCache) {
       final pending = _pendingGetRequests[cacheKey];
       if (pending != null) {
         return pending;
@@ -539,7 +560,7 @@ class ApiClient {
       }
     });
 
-    if (isGet) {
+    if (isGet && useCache) {
       _pendingGetRequests[cacheKey] = requestFuture;
     }
 

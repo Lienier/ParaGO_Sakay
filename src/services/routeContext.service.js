@@ -4,6 +4,7 @@ const TripSession = require('../models/tripSession');
 const PickupRequest = require('../models/pickupRequest');
 const RideSession = require('../models/rideSession');
 const ApiError = require('../utils/apiError');
+const { DRIVER_ERROR_CODES, driverError } = require('../utils/driverError');
 
 const applyQueryOptions = (query, { select, populate } = {}) => {
   if (select) {
@@ -33,7 +34,8 @@ const requireCurrentDriver = async (
   applyQueryOptions(query, { select, populate });
   const driver = await query;
   if (!driver) {
-    throw new ApiError(404, notFoundMessage);
+    throw driverError(404, DRIVER_ERROR_CODES.ASSIGNMENT_MISSING,
+      'Your driver profile is not available.', 'Sign in again or contact an administrator.');
   }
   return driver;
 };
@@ -122,7 +124,8 @@ const ensureDriverAssignedToTrip = async (
     }));
 
   if (String(resolvedDriver._id) !== String(trip.driverId)) {
-    throw new ApiError(403, forbiddenMessage);
+    throw driverError(403, DRIVER_ERROR_CODES.TRIP_NOT_ASSIGNED,
+      'You are not assigned to this trip.', 'Refresh your trips and open the assigned trip.');
   }
 
   return resolvedDriver;

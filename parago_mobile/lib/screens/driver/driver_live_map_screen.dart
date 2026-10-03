@@ -7,6 +7,8 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../../core/utils/driver_error_message.dart';
+
 import '../../core/config/app_config.dart';
 
 class DriverLiveMapScreen extends StatefulWidget {
@@ -146,7 +148,7 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
     } catch (error) {
       setState(() {
         _loadingLocation = false;
-        _statusMessage = 'Unable to get current location: $error';
+        _statusMessage = DriverErrorMessage.from(error).message;
       });
     }
   }
@@ -172,7 +174,7 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
       onError: (Object error) {
         if (!mounted) return;
         setState(() {
-          _statusMessage = 'Live location stream error: $error';
+          _statusMessage = DriverErrorMessage.from(error).message;
         });
       },
     );
@@ -286,7 +288,7 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
     } catch (error) {
       setState(() {
         _loadingRoute = false;
-        _statusMessage = 'Failed to load route: $error';
+        _statusMessage = DriverErrorMessage.from(error).message;
       });
     }
   }
