@@ -33,7 +33,7 @@ Updated: 2026-09-18. Changes remain local. No deployment or APK distribution per
 
 ## Release and rollback
 
-1. Keep `GROUP_BOOKINGS_ENABLED=false` (also the default when absent). Deploy group-aware API/worker count handling before enabling new group creation.
+1. Keep `GROUP_BOOKINGS_ENABLED=false` (also the default when absent) until compatible passenger and driver builds are deployed. The local and staging environment files now enable the verified group flow; production must set the flag explicitly in its runtime configuration.
 2. Distribute compatible passenger and driver applications. Verify active clients support group readiness, count confirmation and partial completion. Old clients must not be used to operate group journeys.
 3. Legacy records require no destructive migration: absent party/boarded/remaining counts are interpreted as one for active rides, and completed rides display zero remaining. Do not rewrite historical fares.
 4. Use controlled accounts to walk through denied GPS remote booking, solo automatic boarding, full/partial group boarding, transfer, partial/final unload, trip end, expired booking, lost response and reconnect.

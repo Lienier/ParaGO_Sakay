@@ -1060,6 +1060,18 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     final payload = await _showPickupDialog();
     if (payload == null) return;
     if (!mounted) return;
+    if (payload.bookingMode == _PassengerBookingMode.roadside &&
+        _draftPickupPoint == null) {
+      setState(() => _statusMessage =
+          'Choose a roadside pickup point on the map before booking.');
+      await ActionFeedback.showInfoDialog(
+        context,
+        title: 'Pickup point required',
+        message:
+            'Terminal loading is unavailable. Select a roadside pickup point on the map, then open this booking again to switch to roadside pickup.',
+      );
+      return;
+    }
     setState(() {
       _draftPickupPoint = payload.bookingMode == _PassengerBookingMode.terminal
           ? terminalStop?.position
@@ -1524,12 +1536,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       // An older backend or unavailable capability check must never enable groups.
     }
     if (!mounted) return null;
-    final maxPartySize = _trips
+    final routeMaxPartySize = _trips
         .where((trip) => trip.routeId == _selectedRouteId)
         .fold<int>(
             1, (value, trip) => math.max(value, trip.jeepneyCapacity ?? 1));
     var selectedPartySize =
-        groupsEnabled ? _draftPartySize.clamp(1, maxPartySize) : 1;
+        groupsEnabled ? _draftPartySize.clamp(1, routeMaxPartySize) : 1;
     final terminalStop = _routeTerminalStop(_selectedRoute);
     var selectedBookingMode = _bookingMode;
     final pickupStopCtrl = TextEditingController(
@@ -1544,6 +1556,22 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     final result = await showDialog<_PassengerBookingDetails>(
       context: context,
       builder: (context) => StatefulBuilder(builder: (context, setDialogState) {
+        final terminalSeats = _trips
+            .where((trip) =>
+                trip.routeId == _selectedRouteId &&
+                trip.operatingMode == 'terminal_queue' &&
+                trip.terminalQueueStatus == 'loading' &&
+                trip.terminalSummary?['departureRequired'] != true)
+            .map((trip) =>
+                (trip.terminalSummary?['availableSeats'] as num?)?.toInt() ?? 0)
+            .fold<int>(0, (value, seats) => value > seats ? value : seats);
+        final maxPartySize =
+            selectedBookingMode == _PassengerBookingMode.terminal
+                ? math.max(1, terminalSeats)
+                : routeMaxPartySize;
+        if (selectedPartySize > maxPartySize) {
+          selectedPartySize = maxPartySize;
+        }
         final farePreview = _estimateFarePreview(
           _selectedRoute,
           selectedBookingMode == _PassengerBookingMode.terminal
@@ -1555,6 +1583,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         void submit() {
           if (selectedBookingMode == _PassengerBookingMode.terminal &&
               !_hasTerminalSeats) {
+            setDialogState(() {
+              selectedBookingMode = _PassengerBookingMode.roadside;
+              pickupStopCtrl.text =
+                  _draftPickupLabel ?? 'Nearest loading point';
+            });
             return;
           }
           FocusManager.instance.primaryFocus?.unfocus();
@@ -1599,6 +1632,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                 ),
                 const Text(
                     'Everyone shares this pickup and destination. The driver confirms the actual boarded count. Change the group size by cancelling and booking again.'),
+                if (selectedBookingMode == _PassengerBookingMode.terminal)
+                  Text('Loading jeep seats available: $terminalSeats'),
                 const SizedBox(height: 12),
               ],
               StatefulBuilder(
@@ -1641,6 +1676,18 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                   );
                 },
               ),
+              if (selectedBookingMode == _PassengerBookingMode.terminal &&
+                  !_hasTerminalSeats)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'No jeep is loading at the terminal now. Choose roadside pickup, or try again when loading starts.',
+                      style: TextStyle(color: Colors.deepOrange),
+                    ),
+                  ),
+                ),
               const SizedBox(height: 12),
               if (farePreview != null) ...[
                 Container(
@@ -1711,15 +1758,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed:
-                  selectedBookingMode == _PassengerBookingMode.terminal &&
-                          !_hasTerminalSeats
-                      ? null
-                      : submit,
+              onPressed: submit,
               child: Text(
                   selectedBookingMode == _PassengerBookingMode.terminal &&
                           !_hasTerminalSeats
-                      ? 'Wait for the next jeep'
+                      ? 'Switch to roadside'
                       : 'Book now'),
             ),
           ],
@@ -3840,7 +3883,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
-      unawaited(_refreshBookings(useCache: false, replacePending: true));
+      unawaited(_load(preferFresh: true));
     }
   }
 
@@ -3906,17 +3949,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   Future<void> _handleRealtimeOperationsChanged(
     Map<String, dynamic> event,
   ) async {
-    if (!mounted || event['type']?.toString() != 'trip.occupancy.updated') {
+    if (!mounted) {
       return;
     }
-    final tripId = event['tripId']?.toString().trim() ?? '';
-    if (tripId.isEmpty || !_trips.any((trip) => trip.id == tripId)) {
-      return;
-    }
-    // Reconcile from the backend so occupancy, capacity, and request
-    // availability are all updated together instead of applying a partial
-    // event over a possibly newer trip snapshot.
-    await _refreshTripsOnly(useCache: false, replacePending: true);
+    // Operational events can change bookings, rides, queue eligibility, or
+    // occupancy. Reconcile all authoritative passenger domains instead of
+    // applying a partial event over a newer snapshot. The coordinator
+    // coalesces bursts and never replays a mutation.
+    await _reconcileAfterSocketReady();
   }
 
   AnnouncementFeedController _announcementFeed() {
@@ -6975,7 +7015,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                               icon: Icons.near_me_rounded,
                               onPressed: _loading ||
                                       _pickupSubmitting ||
-                                      _terminalBookingFull ||
                                       _pickupBlockedReason != null
                                   ? null
                                   : _sendPickup,
@@ -7174,7 +7213,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                           child: Padding(
                               padding: EdgeInsets.all(8),
                               child: Text(
-                                  'No terminal seats available. Wait for the loading jeep to depart.'))),
+                                  'No terminal seats are available right now. Open booking to switch to roadside pickup, or try again when loading starts.'))),
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Align(
@@ -7627,8 +7666,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                       title: 'Book this route',
                       subtitle:
                           'Send your pinned pickup and unload points to the nearest eligible jeep',
-                      onPressed:
-                          _loading || _terminalBookingFull ? null : _sendPickup,
+                      onPressed: _loading ? null : _sendPickup,
                     ),
                     const SizedBox(height: 12),
                     _PassengerActionButton(

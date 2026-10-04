@@ -28,8 +28,12 @@ It implements a modular backend for passenger/driver/admin roles with:
   APK distribution
 
 Companion bookings and group seat accounting are implemented behind the
-`GROUP_BOOKINGS_ENABLED` backend feature flag and remain disabled by default
-until the complete passenger, driver, and admin walkthrough is accepted.
+`GROUP_BOOKINGS_ENABLED` backend feature flag. The local and staging
+environment files used in this workspace enable the compatible group flow;
+production must
+set the same variable to `true` in its runtime configuration only after the
+passenger and driver builds have been verified. Set it to `false` to roll back
+new group creation while keeping existing count-aware rides readable.
 
 ## Project structure
 
@@ -79,7 +83,7 @@ until the complete passenger, driver, and admin walkthrough is accepted.
 - `TOMTOM_API_KEY`
 - `GOOGLE_ROUTES_API_KEY`
 - `REDIS_URL`
-- `GROUP_BOOKINGS_ENABLED` (default `false`)
+- `GROUP_BOOKINGS_ENABLED` (default `false`; set to `true` for the released group flow)
 
 ## API groups (v1)
 

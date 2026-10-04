@@ -181,6 +181,12 @@ const resolveEligibleTripForRoute = async ({
   partySize = 1,
 }) => {
   const normalizedPickupType = normalizePickupType(pickupType);
+  const terminalUnavailable = () => new ApiError(
+    409,
+    'No jeepney is loading at this terminal right now. Choose roadside pickup or try again when a jeep is loading.',
+    [],
+    'TERMINAL_LOADING_UNAVAILABLE'
+  );
   const trips = await TripSession.find({
     routeId,
     status: 'active',
@@ -199,7 +205,8 @@ const resolveEligibleTripForRoute = async ({
     .sort({ startedAt: -1, createdAt: -1 });
 
   if (!trips.length) {
-    throw new ApiError(409, 'No active jeepneys are available on this route right now');
+    if (normalizedPickupType === 'terminal') throw terminalUnavailable();
+    throw new ApiError(409, 'No active jeepneys are available on this route right now', [], 'NO_ACTIVE_JEEPNEY');
   }
 
   const pickupCoordinates = pointCoordinates(pickupLocation);
@@ -263,9 +270,12 @@ const resolveEligibleTripForRoute = async ({
   }
 
   if (!eligibleTrips.length) {
+    if (normalizedPickupType === 'terminal') throw terminalUnavailable();
     throw new ApiError(
       409,
-      'No nearby jeepney on this route has enough remaining capacity for a new booking'
+      'No nearby jeepney on this route has enough remaining capacity for a new booking',
+      [],
+      'INSUFFICIENT_SEATS'
     );
   }
 

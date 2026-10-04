@@ -44,6 +44,19 @@ before(async () => {
 });
 after(async () => { await mongoose.disconnect(); if (repl) await repl.stop(); });
 const body = () => ({ routeId: String(route._id), pickupType: 'roadside', pickupLocation: point(14.02), destinationLocation: point(14.08), destinationStopRef: 'End' });
+test('terminal pickup requires the current loading jeep and returns a switchable error otherwise', async () => {
+  await Trip.updateMany({ routeId: route._id }, { $set: { operatingMode: 'terminal_queue', terminalQueueStatus: 'waiting', acceptRequests: false } });
+  try {
+    const response = await request(app).post('/pickup-requests')
+      .set('Authorization', `Bearer ${await token()}`)
+      .send({ ...body(), pickupType: 'terminal', pickupLocation: undefined });
+    assert.equal(response.status, 409, JSON.stringify(response.body));
+    assert.equal(response.body.code, 'TERMINAL_LOADING_UNAVAILABLE');
+    assert.match(response.body.message, /roadside pickup/i);
+  } finally {
+    await Trip.updateMany({ routeId: route._id }, { $set: { operatingMode: 'route', terminalQueueStatus: 'off_queue', acceptRequests: true } });
+  }
+});
 test('remote booking accepts absent GPS and ignores distant phone GPS', async () => {
   for (const extra of [{}, { currentLocation: point(0) }]) {
     const response = await request(app).post('/pickup-requests').set('Authorization', `Bearer ${await token()}`).send({ ...body(), ...extra });
