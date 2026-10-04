@@ -326,7 +326,7 @@ router.get(
   })
 );
 
-for (const endpoint of ['reorder', 'skip', 'status']) {
+for (const endpoint of ['reorder', 'skip', 'status', 'remove']) {
   router.patch(`/terminal-queue/:tripId/${endpoint}`, asyncHandler(async (req, res) => {
     ensureObjectId(req.params.tripId, 'trip id');
     let action = endpoint;
@@ -335,6 +335,7 @@ for (const endpoint of ['reorder', 'skip', 'status']) {
       if (req.body.terminalQueueStatus !== 'departed') throw new ApiError(409, 'Loading is managed automatically; use skip/restore for queue changes');
       action = 'depart';
     }
+    if (endpoint === 'remove') action = 'remove';
     await terminalQueue.change({ tripId: req.params.tripId, actor: req.user, action,
       direction: req.body.direction, requestId: req.body.requestId, reason: req.body.reason });
     return ok(res, await buildHybridDispatchBoard(), 'Terminal queue updated');

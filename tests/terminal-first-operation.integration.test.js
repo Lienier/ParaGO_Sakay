@@ -54,7 +54,7 @@ before(async () => {
   });
   driver = await Driver.create({ userId: user._id, status: 'active' });
   jeepney = await Jeepney.create({
-    plateNumber: 'TERMINAL-FIRST-1',
+    plateNumber: 'TERMINAL-FIRST-3',
     capacity: 20,
     currentDriverId: driver._id,
     status: 'active',
@@ -246,6 +246,55 @@ test('two fresh in-geofence fixes check in once and departure enables route oper
   assert.equal(departed.terminalQueueStatus, 'departed');
   const departedDescription = await terminalQueue.describe(departed);
   assert.equal(departedDescription.driverStatus.label, 'On route');
+});
+
+test('admin can remove a skipped terminal driver without deleting the account or jeepney', async () => {
+  const pending = await Trip.create({
+    driverId: driver._id,
+    jeepneyId: jeepney._id,
+    routeId: route._id,
+    status: 'scheduled',
+    active: false,
+    acceptRequests: false,
+    operatingMode: 'terminal_queue',
+    terminalQueueStatus: 'off_queue',
+    terminalLocation: point(121, 14),
+    terminalRadiusMeters: 100,
+  });
+  const actor = { _id: user._id, role: 'ADMIN' };
+  const arrival = {
+    actor: { _id: user._id, role: 'DRIVER' },
+    jeepneyId: jeepney._id,
+    latitude: 14,
+    longitude: 121,
+    accuracyMeters: 8,
+    streamId: crypto.randomUUID(),
+  };
+  await processTerminalArrival({ ...arrival, sequence: 1, capturedAt: new Date() });
+  await processTerminalArrival({ ...arrival, sequence: 2, capturedAt: new Date() });
+  const queued = await Trip.findById(pending._id);
+  assert.equal(queued.status, 'active');
+  assert.equal(queued.terminalQueueStatus, 'loading');
+
+  await terminalQueue.change({
+    tripId: pending._id,
+    actor,
+    action: 'skip',
+    requestId: 'admin-skip-for-remove',
+  });
+  const removed = await terminalQueue.change({
+    tripId: pending._id,
+    actor,
+    action: 'remove',
+    requestId: 'admin-remove-skipped',
+  });
+  assert.equal(removed.status, 'cancelled');
+  assert.equal(removed.active, false);
+  assert.equal(removed.terminalQueueStatus, 'off_queue');
+  assert.ok(await User.exists({ _id: user._id, status: 'active' }));
+  assert.ok(await Jeepney.exists({ _id: jeepney._id, status: 'active' }));
+  const synchronizedDriver = await Driver.findById(driver._id);
+  assert.equal(synchronizedDriver.terminalQueueStatus, 'off_queue');
 });
 
 test('arrival survives stream restart, rejects duplicate time and serializes concurrent fixes', async () => {

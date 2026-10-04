@@ -20,6 +20,7 @@ class _AdminOperationsPage extends StatelessWidget {
       required this.onReportRange,
       required this.onReorder,
       required this.onSkip,
+      required this.onRemove,
       required this.onDepart});
   final _AdminWorkspaceSection section;
   final Map<String, dynamic>? dashboard, board, report;
@@ -34,6 +35,7 @@ class _AdminOperationsPage extends StatelessWidget {
   final VoidCallback onReportRange;
   final Future<void> Function(String, String) onReorder, onDepart;
   final Future<void> Function(String, bool) onSkip;
+  final Future<void> Function(String) onRemove;
 
   Widget _state(String key) => Padding(
       padding: const EdgeInsets.symmetric(vertical: 12),
@@ -278,6 +280,7 @@ class _AdminOperationsPage extends StatelessWidget {
                               .length,
                           onReorder: onReorder,
                           onSkippedChanged: onSkip,
+                          onRemove: onRemove,
                           onStatusChanged: onDepart),
                 )),
         ],
@@ -401,6 +404,7 @@ List<Widget> _terminalQueueActions(
   required int total,
   required Future<void> Function(String tripId, String direction) onReorder,
   required Future<void> Function(String tripId, bool skipped) onSkippedChanged,
+  required Future<void> Function(String tripId) onRemove,
   required Future<void> Function(String tripId, String terminalQueueStatus)
       onStatusChanged,
 }) {
@@ -430,6 +434,10 @@ List<Widget> _terminalQueueActions(
     TextButton(
         onPressed: () => onSkippedChanged(tripId, !skipped),
         child: Text(skipped ? 'Restore' : 'Skip')),
+    if (skipped)
+      TextButton(
+          onPressed: () => onRemove(tripId),
+          child: const Text('Remove driver')),
     TextButton(
         onPressed: loading ? () => onStatusChanged(tripId, 'departed') : null,
         child: const Text('Depart terminal')),

@@ -139,14 +139,14 @@ const seedCoreFixture = async () => {
 
   const [jeepney, otherJeepney] = await Jeepney.create([
     {
-      plateNumber: 'P1-0001',
+      plateNumber: 'P1-0003',
       capacity: 20,
       status: 'active',
       lastKnownLocation: point(routePath[0][0], routePath[0][1]),
       lastSeenAt: new Date(),
     },
     {
-      plateNumber: 'P1-0002',
+      plateNumber: 'P1-0004',
       capacity: 20,
       status: 'active',
       lastKnownLocation: point(routePath[1][0], routePath[1][1]),
@@ -1659,14 +1659,16 @@ test('terminal capacity reservations and transfer acceptance are atomic', async 
   assert.equal(await PickupRequest.countDocuments({ tripSessionId: second._id, status: 'pending' }), 1);
 });
 
-test('terminal status endpoint requires reason and enforces driver ownership', async () => {
+test('terminal status endpoint accepts an optional reason and enforces driver ownership', async () => {
   const f = await seedCoreFixture(); const q = require('../src/services/terminalQueue.service');
   const first = await q.checkIn({ document: { driverId: f.driver._id, jeepneyId: f.jeepney._id, routeId: f.route._id }, actor: f.users.driver, requestId: 'endpoint-checkin' });
   const path = `/api/v1/admin/terminal-queue/${first._id}/status`;
-  assert.equal((await request(app).patch(path).set(auth(f.tokens.admin)).send({ terminalQueueStatus: 'departed', requestId: 'admin-departure' })).status, 400);
   assert.equal((await request(app).patch(`/api/v1/trips/${first._id}/terminal/depart`).set(auth(f.tokens.otherDriver)).send({ requestId: 'wrong-departure' })).status, 403);
-  const result = await request(app).patch(path).set(auth(f.tokens.admin)).send({ terminalQueueStatus: 'departed', requestId: 'admin-departure', reason: 'Driver requested dispatch' });
-  assert.equal(result.status, 200, result.text);
+  const withoutReason = await request(app).patch(path).set(auth(f.tokens.admin)).send({ terminalQueueStatus: 'departed', requestId: 'admin-departure' });
+  assert.equal(withoutReason.status, 200, withoutReason.text);
+  const Action = require('../src/models/terminalQueueAction');
+  const auditWithoutReason = await Action.findOne({ requestId: 'admin-departure' }).lean();
+  assert.equal(auditWithoutReason.reason ?? null, null);
 });
 
 

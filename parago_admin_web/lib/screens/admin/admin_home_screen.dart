@@ -48,7 +48,8 @@ class AdminHomeScreen extends StatefulWidget {
   State<AdminHomeScreen> createState() => _AdminHomeScreenState();
 }
 
-class _AdminHomeScreenState extends State<AdminHomeScreen> {
+class _AdminHomeScreenState extends State<AdminHomeScreen>
+    with WidgetsBindingObserver {
   Map<String, dynamic>? _dashboard;
   Map<String, dynamic>? _passengerFlowReport;
   Map<String, dynamic>? _hybridDispatchBoard;
@@ -209,11 +210,14 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Keep a low-frequency fallback even when realtime is enabled. Socket
+      // events provide the fast path; polling repairs missed events after a
+      // reconnect or browser suspension.
+      _startPolling();
       if (AppConfig.enableRealtime) {
         _connectRealtimeSocket();
-      } else {
-        _startPolling();
       }
       await _load();
     });
@@ -249,11 +253,19 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _securitySession?.removeListener(_handleSecuritySession);
     _pollingTimer?.cancel();
     _operationsSubscription?.cancel();
     _realtimeSocketService.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      unawaited(_load(silent: true));
+    }
   }
 
   void _startPolling() {
@@ -288,12 +300,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     if (!mounted) {
       return;
     }
-
-    final notificationType = event['notificationType']?.toString() ?? '';
-    if (notificationType.isEmpty) {
-      return;
-    }
-
+    // Queue, occupancy, booking, notification, and trip events all affect
+    // the dispatch dashboard. Re-read the authoritative dashboard instead of
+    // relying on the event payload to contain every section.
     unawaited(_load(silent: true));
   }
 
@@ -306,21 +315,26 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                 content: TextField(
                     controller: controller,
                     maxLength: 500,
-                    decoration:
-                        const InputDecoration(labelText: 'Required reason')),
+                    decoration: const InputDecoration(
+                        labelText: 'Reason (optional)',
+                        hintText: 'Add context for the audit log if useful')),
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(context),
                       child: const Text('Cancel')),
                   FilledButton(
                       onPressed: () {
-                        if (controller.text.trim().isNotEmpty) {
-                          Navigator.pop(context, controller.text.trim());
-                        }
+                        Navigator.pop(context, controller.text.trim());
                       },
                       child: const Text('Confirm'))
                 ]));
-    controller.dispose();
+    // Let the dialog finish its pop animation before disposing the field
+    // controller. Disposing synchronously can make Flutter web rebuild the
+    // closing TextField with a disposed controller and surface a framework
+    // error instead of completing the terminal action.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      controller.dispose();
+    });
     return result;
   }
 
@@ -376,6 +390,28 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     }
   }
 
+  Future<void> _removeSkippedTerminalDriver(String tripId) async {
+    final reason = await _terminalReason();
+    if (reason == null || !mounted) return;
+    try {
+      final session = context.read<SessionController>();
+      final board = await AdminService(session.apiClient)
+          .removeTerminalQueueTrip(tripId: tripId, reason: reason);
+      if (!mounted) return;
+      setState(() {
+        _dispatchRevision++;
+        _hybridDispatchBoard = board;
+        _sectionTimes['dispatch'] = DateTime.now();
+        _sectionErrors.remove('dispatch');
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Remove from terminal failed: $error')),
+      );
+    }
+  }
+
   Widget _buildWorkspaceContent() {
     switch (_selectedSection) {
       case _AdminWorkspaceSection.overview:
@@ -397,6 +433,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           onReportRange: _pickReportRange,
           onReorder: _reorderTerminalQueueTrip,
           onSkip: _setTerminalQueueSkipped,
+          onRemove: _removeSkippedTerminalDriver,
           onDepart: _setTerminalQueueStatus,
         );
       case _AdminWorkspaceSection.drivers:

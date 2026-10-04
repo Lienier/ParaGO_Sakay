@@ -76,33 +76,57 @@ class AdminService {
   Future<Map<String, dynamic>> reorderTerminalQueueTrip({
     required String tripId,
     required String direction,
-    required String reason,
+    String? reason,
   }) async {
+    final payload = <String, dynamic>{'direction': direction};
+    if (reason != null && reason.trim().isNotEmpty) {
+      payload['reason'] = reason.trim();
+    }
     final response = await _terminalRequest(
-        '/admin/terminal-queue/$tripId/reorder',
-        {'direction': direction, 'reason': reason});
+        '/admin/terminal-queue/$tripId/reorder', payload);
     return response['data'] as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> setTerminalQueueSkipped({
     required String tripId,
     required bool skipped,
-    required String reason,
+    String? reason,
   }) async {
-    final response = await _terminalRequest(
-        '/admin/terminal-queue/$tripId/skip',
-        {'skipped': skipped, 'reason': reason});
+    final payload = <String, dynamic>{'skipped': skipped};
+    if (reason != null && reason.trim().isNotEmpty) {
+      payload['reason'] = reason.trim();
+    }
+    final response =
+        await _terminalRequest('/admin/terminal-queue/$tripId/skip', payload);
     return response['data'] as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> setTerminalQueueStatus({
     required String tripId,
     required String terminalQueueStatus,
-    required String reason,
+    String? reason,
   }) async {
+    final payload = <String, dynamic>{
+      'terminalQueueStatus': terminalQueueStatus
+    };
+    if (reason != null && reason.trim().isNotEmpty) {
+      payload['reason'] = reason.trim();
+    }
+    final response =
+        await _terminalRequest('/admin/terminal-queue/$tripId/status', payload);
+    return response['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> removeTerminalQueueTrip({
+    required String tripId,
+    String? reason,
+  }) async {
+    final payload = <String, dynamic>{};
+    if (reason != null && reason.trim().isNotEmpty) {
+      payload['reason'] = reason.trim();
+    }
     final response = await _terminalRequest(
-        '/admin/terminal-queue/$tripId/status',
-        {'terminalQueueStatus': terminalQueueStatus, 'reason': reason});
+        '/admin/terminal-queue/$tripId/remove', payload);
     return response['data'] as Map<String, dynamic>;
   }
 

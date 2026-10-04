@@ -87,8 +87,6 @@ async function transaction(routeId, operation) {
 function validateActor(actor, requestId, reason) {
   if (!actor?._id || !requestId || !/^[a-zA-Z0-9_-]{8,100}$/.test(requestId)) throw driverError(400, DRIVER_ERROR_CODES.REQUEST_ID_CONFLICT,
     'This action is missing a valid request identifier.', 'Refresh the screen and try again.');
-  if (actor.role === 'ADMIN' && (!reason || !String(reason).trim())) throw driverError(400, 'ADMIN_ACTION_REASON_REQUIRED',
-    'An administrator action needs a reason.', 'Enter a short reason and try again.');
   if (String(reason || '').length > 500) throw driverError(400, 'ADMIN_ACTION_REASON_TOO_LONG',
     'The action reason is too long.', 'Use 500 characters or fewer.');
 }
@@ -195,6 +193,29 @@ async function change({ tripId, actor, action, requestId, reason, direction }) {
       trip.terminalArrivalLastSequence = undefined;
       const vehicle = await Jeepney.findById(trip.jeepneyId).session(session);
       trip.acceptRequests = trip.occupancyCount < vehicle.capacity;
+    } else if (action === 'remove') {
+      if (actor.role !== 'ADMIN') throw driverError(403, 'ADMIN_ACTION_REQUIRED',
+        'Only an administrator can remove a skipped jeepney from terminal dispatch.',
+        'Ask an administrator to remove this driver from the terminal queue.');
+      if (trip.terminalQueueStatus !== 'skipped') throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
+        'Only a skipped jeepney can be removed from terminal dispatch.',
+        'Skip the jeepney first or refresh the terminal status.');
+      // Removing a skipped terminal intent ends only this terminal trip. It
+      // does not delete the driver, jeepney, bookings, or historical records.
+      // Any pending terminal requests already received a transfer offer when
+      // the trip was skipped.
+      trip.status = 'cancelled';
+      trip.active = false;
+      trip.acceptRequests = false;
+      trip.terminalQueueStatus = 'off_queue';
+      trip.terminalQueueNumber = undefined;
+      trip.terminalCheckedInAt = undefined;
+      trip.terminalLoadingStartedAt = undefined;
+      trip.terminalLoadingWarnedAt = undefined;
+      trip.terminalLoadingExpiredAt = undefined;
+      trip.terminalStopRef = undefined;
+      trip.terminalLocation = undefined;
+      trip.terminalArrivalFixCount = 0;
     } else if (action === 'skip' || action === 'restore') {
       if (action === 'skip' && !['waiting', 'loading'].includes(trip.terminalQueueStatus)) throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
         'This jeepney cannot be skipped from its current terminal state.', 'Refresh the queue and follow the available action.');
