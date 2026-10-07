@@ -32,6 +32,7 @@ class AdminDriverManagementScreen extends StatefulWidget {
 class _AdminDriverManagementScreenState
     extends State<AdminDriverManagementScreen> {
   static const Duration _presenceRefreshInterval = Duration(seconds: 30);
+  static const int _driversPerPage = 10;
 
   final _createFormKey = GlobalKey<FormState>();
   final _editFormKey = GlobalKey<FormState>();
@@ -62,6 +63,7 @@ class _AdminDriverManagementScreenState
   bool _saving = false;
   String? _error;
   String _statusFilter = 'all';
+  int _driverPageIndex = 0;
 
   String? _createEmail;
   String? _createPassword;
@@ -215,6 +217,15 @@ class _AdminDriverManagementScreenState
     }
   }
 
+  List<Map<String, dynamic>> get _filteredDrivers {
+    final query = _searchCtrl.text.trim().toLowerCase();
+    return _drivers
+        .whereType<Map<String, dynamic>>()
+        .where((driver) =>
+            _matchesStatusFilter(driver) && _matchesDriverSearch(driver, query))
+        .toList(growable: false);
+  }
+
   String _accountStatusOf(Map<String, dynamic> driver) {
     final direct = _textOf(driver['accountStatus']).toLowerCase();
     if (direct.isNotEmpty) return direct;
@@ -265,6 +276,9 @@ class _AdminDriverManagementScreenState
       setState(() {
         _drivers = results[0] as List<dynamic>;
         _routes = results[1] as List<RouteSummaryModel>;
+        final lastPage = (_filteredDrivers.length - 1) ~/ _driversPerPage;
+        _driverPageIndex =
+            _driverPageIndex.clamp(0, lastPage < 0 ? 0 : lastPage).toInt();
         _error = null;
       });
     } catch (error) {
@@ -450,14 +464,11 @@ class _AdminDriverManagementScreenState
 
   @override
   Widget build(BuildContext context) {
-    final searchQuery = _searchCtrl.text.trim().toLowerCase();
-    final drivers = _drivers
-        .whereType<Map<String, dynamic>>()
-        .where(
-          (driver) =>
-              _matchesStatusFilter(driver) &&
-              _matchesDriverSearch(driver, searchQuery),
-        )
+    final drivers = _filteredDrivers;
+    final pageCount = (drivers.length / _driversPerPage).ceil();
+    final pageDrivers = drivers
+        .skip(_driverPageIndex * _driversPerPage)
+        .take(_driversPerPage)
         .toList(growable: false);
     final allDrivers = _drivers.whereType<Map<String, dynamic>>().toList();
     final onlineCount = allDrivers
@@ -518,7 +529,7 @@ class _AdminDriverManagementScreenState
                       final stacked = constraints.maxWidth < 760;
                       final searchField = TextField(
                         controller: _searchCtrl,
-                        onChanged: (_) => setState(() {}),
+                        onChanged: (_) => setState(() => _driverPageIndex = 0),
                         decoration: const InputDecoration(
                           labelText: 'Search driver, email, route, or plate',
                           prefixIcon: Icon(Icons.search),
@@ -556,7 +567,10 @@ class _AdminDriverManagementScreenState
                           ),
                         ],
                         onChanged: (value) {
-                          setState(() => _statusFilter = value ?? 'all');
+                          setState(() {
+                            _statusFilter = value ?? 'all';
+                            _driverPageIndex = 0;
+                          });
                         },
                       );
 
@@ -667,7 +681,7 @@ class _AdminDriverManagementScreenState
                         DataColumn(label: Text('Actions'))
                       ],
                       rows: [
-                        for (final driver in drivers)
+                        for (final driver in pageDrivers)
                           DataRow(cells: [
                             DataCell(Text(_driverDisplayName(driver))),
                             DataCell(Text(
@@ -687,6 +701,44 @@ class _AdminDriverManagementScreenState
                     )),
               );
             }),
+          if (drivers.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                Text(
+                    'Showing ${_driverPageIndex * _driversPerPage + 1}–${_driverPageIndex * _driversPerPage + pageDrivers.length} of ${drivers.length} drivers'),
+                Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _driverPageIndex > 0
+                          ? () => setState(() => _driverPageIndex--)
+                          : null,
+                      icon: const Icon(Icons.chevron_left),
+                      label: const Text('Previous'),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Text('Page ${_driverPageIndex + 1} of $pageCount'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _driverPageIndex + 1 < pageCount
+                          ? () => setState(() => _driverPageIndex++)
+                          : null,
+                      icon: const Icon(Icons.chevron_right),
+                      label: const Text('Next'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
