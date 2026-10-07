@@ -172,7 +172,7 @@ class PassengerService {
   }
 
   Future<RideSessionModel> completeRideSession(String rideSessionId,
-      {RideSessionModel? ride}) async {
+      {RideSessionModel? ride}) async {         
     final response = await _client.request(
       method: 'PATCH',
       path: '/ride-sessions/$rideSessionId/complete',

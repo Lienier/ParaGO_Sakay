@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowSplashScreenBackground">@color/sakay_splash_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/sakay_splash_android12</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/sakay_splash_background</item>
+    </style>
+</resources>
