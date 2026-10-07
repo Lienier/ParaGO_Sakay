@@ -321,10 +321,6 @@ class _AdminOperationsPage extends StatelessWidget {
               label: 'Total boarded',
               value: summary['totalBoarded']?.toString() ?? 'Unavailable',
               accent: AppColors.primary),
-          _PassengerFlowStatTile(
-              label: 'Total unloaded',
-              value: summary['totalUnloaded']?.toString() ?? 'Unavailable',
-              accent: AppColors.textSecondary),
         ]),
         const SizedBox(height: 24),
         if (daily.isEmpty)
@@ -842,11 +838,7 @@ class _PassengerFlowChart extends StatelessWidget {
   Widget build(BuildContext context) {
     final maxValue = series.fold<int>(
       1,
-      (max, point) => [
-        max,
-        point.boarded,
-        point.unloaded,
-      ].reduce((left, right) => left > right ? left : right),
+      (max, point) => point.boarded > max ? point.boarded : max,
     );
 
     return Container(
@@ -867,10 +859,6 @@ class _PassengerFlowChart extends StatelessWidget {
               _ChartLegend(
                 label: 'Boarded',
                 color: Color(0xFF0F6A5F),
-              ),
-              _ChartLegend(
-                label: 'Unloaded',
-                color: Color(0xFFE29B2D),
               ),
             ],
           ),
@@ -899,24 +887,10 @@ class _PassengerFlowChart extends StatelessWidget {
                                   Expanded(
                                     child: Align(
                                       alignment: Alignment.bottomCenter,
-                                      child: Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.end,
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          _FlowBar(
-                                            value: point.boarded,
-                                            maxValue: maxValue,
-                                            color: AppColors.primary,
-                                          ),
-                                          const SizedBox(width: 6),
-                                          _FlowBar(
-                                            value: point.unloaded,
-                                            maxValue: maxValue,
-                                            color: AppColors.warning,
-                                          ),
-                                        ],
+                                      child: _FlowBar(
+                                        value: point.boarded,
+                                        maxValue: maxValue,
+                                        color: AppColors.primary,
                                       ),
                                     ),
                                   ),
