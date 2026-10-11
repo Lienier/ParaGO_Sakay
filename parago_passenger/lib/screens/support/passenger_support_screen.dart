@@ -1,3 +1,4 @@
+import '../../widgets/glass_surface.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -124,7 +125,7 @@ class _PassengerSupportScreenState extends State<PassengerSupportScreen> {
   }
 
   Future<void> _openThreadComposer() async {
-    final created = await showModalBottomSheet<_SupportThreadDraft>(
+    final created = await showGlassBottomSheet<_SupportThreadDraft>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -175,7 +176,7 @@ class _PassengerSupportScreenState extends State<PassengerSupportScreen> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(ActionFeedback.messageOf(error))),
+        GlassSnackBar(content: Text(ActionFeedback.messageOf(error))),
       );
     } finally {
       if (mounted) {
@@ -428,7 +429,7 @@ class _PassengerSupportThreadScreenState
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(ActionFeedback.messageOf(error))),
+        GlassSnackBar(content: Text(ActionFeedback.messageOf(error))),
       );
     } finally {
       if (mounted) {
@@ -450,7 +451,7 @@ class _PassengerSupportThreadScreenState
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(ActionFeedback.messageOf(error))),
+        GlassSnackBar(content: Text(ActionFeedback.messageOf(error))),
       );
     }
   }
@@ -468,7 +469,7 @@ class _PassengerSupportThreadScreenState
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(ActionFeedback.messageOf(error))),
+        GlassSnackBar(content: Text(ActionFeedback.messageOf(error))),
       );
     }
   }

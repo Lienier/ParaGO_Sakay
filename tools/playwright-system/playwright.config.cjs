@@ -1,6 +1,6 @@
 const path = require('node:path');
 const { defineConfig } = require('../../.tools/playwright/node_modules/@playwright/test');
-const output = path.resolve(__dirname, '../../artifacts/playwright_system_test_2026-10-06');
+const output = path.resolve(__dirname, '../..', process.env.SYSTEM_TEST_ARTIFACT_DIR || 'artifacts/playwright_system_test_2026-10-06');
 module.exports = defineConfig({
   testDir: __dirname, testMatch: '**/*.spec.cjs', fullyParallel: false, workers: 1,
   timeout: 90000, expect: { timeout: 15000 }, retries: 0,

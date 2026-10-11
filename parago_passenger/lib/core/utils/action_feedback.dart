@@ -1,3 +1,4 @@
+import '../../widgets/glass_surface.dart';
 import 'dart:async';
 import '../exceptions/api_exception.dart';
 
@@ -25,7 +26,7 @@ class ActionFeedback {
         useRootNavigator: true,
         builder: (dialogContext) => PopScope(
           canPop: false,
-          child: AlertDialog(
+          child: GlassAlertDialog(
             content: Row(
               children: [
                 const SizedBox(
@@ -124,26 +125,15 @@ class ActionFeedback {
     required String message,
     required IconData icon,
   }) {
-    return showDialog<void>(
-      context: context,
-      useRootNavigator: true,
-      builder: (dialogContext) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(icon),
-            const SizedBox(width: 10),
-            Expanded(child: Text(title)),
-          ],
-        ),
-        content: Text(message),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
+    final controller = ScaffoldMessenger.of(context).showSnackBar(GlassSnackBar(
+      showCloseIcon: true,
+      content: Row(children: [
+        Icon(icon),
+        const SizedBox(width: 10),
+        Expanded(child: Text('$title: $message'))
+      ]),
+    ));
+    return controller.closed.then((_) {});
   }
 
   static String messageOf(Object error) => _messageOf(error);

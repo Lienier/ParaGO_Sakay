@@ -109,6 +109,14 @@ class DriverService {
     throw StateError('No driver location endpoint was attempted');
   }
 
+  Future<List<PickupRequestModel>> getRequestsForRoute(String routeId) async {
+    final data = await _client.getList(
+        path: '/pickup-requests/route/$routeId', useCache: false);
+    return data
+        .map((e) => PickupRequestModel.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<List<PickupRequestModel>> getRequestsForTrip(
     String tripSessionId, {
     bool useCache = true,

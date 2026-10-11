@@ -10,7 +10,7 @@ const maxFutureSkewMs = 30 * 1000;
 const stateByJeepney = new Map();
 
 const finiteNumber = (value, fieldName) => {
-  const parsed = Number(value);
+  const parsed = typeof value === 'number' ? value : NaN;
   if (!Number.isFinite(parsed)) {
     throw new ApiError(400, `${fieldName} must be a finite number`);
   }
@@ -99,7 +99,7 @@ const validateOrderedLocationPayload = (body = {}, now = new Date()) => {
     latitude,
     longitude,
     accuracyMeters,
-    speedMetersPerSecond: speedMetersPerSecond ?? 0,
+    speedMetersPerSecond,
     headingDegrees: headingDegrees ?? 0,
     streamId,
     sequence,

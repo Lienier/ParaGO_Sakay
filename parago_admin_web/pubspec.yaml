@@ -1,12 +1,14 @@
 name: parago_admin_web
 description: ParaGO! admin web console
 publish_to: "none"
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
 
 dependencies:
+  parago_map_ui:
+    path: ../packages/parago_map_ui
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.6

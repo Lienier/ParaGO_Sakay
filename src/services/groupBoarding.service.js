@@ -16,6 +16,7 @@ async function ready(requestId, userId) {
     const passenger = await Passenger.findOne({ userId }).session(session);
     booking = passenger && await Pickup.findOne({ _id: requestId, passengerId: passenger._id }).session(session);
     if (!booking) throw new ApiError(404, 'Booking not found.');
+    if (booking.flowVersion === 2) throw new ApiError(409, 'This booking boards automatically. Group-ready confirmation is not needed.', [], 'AUTO_BOARDING_PENDING');
     if ((booking.partySize ?? 1) <= 1) throw new ApiError(409, 'Use the normal boarding action for a solo booking.');
     if (booking.status !== 'acknowledged' || booking.expiresAt <= new Date()) throw new ApiError(409, 'This booking is not ready for boarding. Refresh its status.');
     const trip = await Trip.findOneAndUpdate({ _id: booking.tripSessionId, status: 'active' }, { $inc: { lifecycleRevision: 1 } }, { new: true, session });

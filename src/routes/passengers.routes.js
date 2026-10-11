@@ -100,6 +100,9 @@ router.put(
 
 const updatePassengerLocation = async (req, res) => {
   const body = req.body || {};
+  if (typeof body.lat !== 'number' || typeof body.lng !== 'number') {
+    throw new ApiError(400, 'location latitude and longitude must be numbers');
+  }
   ensureLatLng(body.lat, body.lng, 'location');
   const passenger = await requireCurrentPassenger(req.user, {
     select: '_id',

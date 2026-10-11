@@ -1,0 +1,13 @@
+name: parago_map_ui
+description: Shared jeep markers for SAKAY maps.
+publish_to: none
+version: 1.0.0
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_map: ^7.0.2
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

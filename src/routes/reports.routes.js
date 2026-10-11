@@ -15,16 +15,19 @@ const router = express.Router();
 
 router.use(authenticate, authorize(ADMIN));
 
-const startOfUtcDay = (value) =>
-  new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+const MANILA_OFFSET_MS = 8 * 3600000;
+const startOfManilaDay = (value) => {
+  const local = new Date(value.getTime() + MANILA_OFFSET_MS);
+  return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - MANILA_OFFSET_MS);
+};
 
-const formatUtcDayKey = (value) => startOfUtcDay(value).toISOString().slice(0, 10);
+const formatManilaDayKey = (value) => new Date(startOfManilaDay(value).getTime() + MANILA_OFFSET_MS).toISOString().slice(0, 10);
 
-const formatUtcDayLabel = (value) =>
+const formatManilaDayLabel = (value) =>
   value.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
-    timeZone: 'UTC',
+    timeZone: 'Asia/Manila',
   });
 
 const buildDailyTimeline = ({ from, to, boardedRows, unloadedRows }) => {
@@ -35,17 +38,17 @@ const buildDailyTimeline = ({ from, to, boardedRows, unloadedRows }) => {
     unloadedRows.map((entry) => [entry._id, Number(entry.count || 0)])
   );
   const timeline = [];
-  const endDay = startOfUtcDay(to);
+  const endDay = startOfManilaDay(to);
 
   for (
-    let cursor = startOfUtcDay(from);
+    let cursor = startOfManilaDay(from);
     cursor.getTime() <= endDay.getTime();
     cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000)
   ) {
-    const dayKey = formatUtcDayKey(cursor);
+    const dayKey = formatManilaDayKey(cursor);
     timeline.push({
       day: dayKey,
-      label: formatUtcDayLabel(cursor),
+      label: formatManilaDayLabel(cursor),
       boarded: boardedMap.get(dayKey) || 0,
       unloaded: unloadedMap.get(dayKey) || 0,
     });
@@ -226,7 +229,7 @@ router.get(
               $dateToString: {
                 format: '%Y-%m-%d',
                 date: '$boardedAt',
-                timezone: 'UTC',
+                timezone: 'Asia/Manila',
               },
             },
             count: { $sum: '$seatCount' },
@@ -242,7 +245,7 @@ router.get(
               $dateToString: {
                 format: '%Y-%m-%d',
                 date: '$endedAt',
-                timezone: 'UTC',
+                timezone: 'Asia/Manila',
               },
             },
             count: { $sum: '$seatCount' },
@@ -321,9 +324,9 @@ router.get(
           $project: {
             seatCount: 1,
             label: {
-              $ifNull: ['$fareSnapshot.destinationStopRef', '$destinationStopRef'],
+              $ifNull: ['$unloadEvents.destinationStopRef', { $ifNull: ['$fareSnapshot.destinationStopRef', '$destinationStopRef'] }],
             },
-            coordinates: '$destinationLocation.coordinates',
+            coordinates: { $ifNull: ['$unloadEvents.destinationLocation.coordinates', '$destinationLocation.coordinates'] },
           },
         },
         {

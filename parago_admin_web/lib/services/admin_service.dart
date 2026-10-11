@@ -41,6 +41,12 @@ class AdminService {
 
   final ApiClient _client;
 
+  Future<Map<String, dynamic>> fleet() async {
+    final response = await _client.request(
+        method: 'GET', path: '/admin/fleet', useCache: false);
+    return Map<String, dynamic>.from(response['data'] as Map);
+  }
+
   Future<Map<String, dynamic>> dashboard({bool useCache = true}) async {
     final response = await _client.request(
       method: 'GET',
@@ -125,8 +131,8 @@ class AdminService {
     if (reason != null && reason.trim().isNotEmpty) {
       payload['reason'] = reason.trim();
     }
-    final response = await _terminalRequest(
-        '/admin/terminal-queue/$tripId/remove', payload);
+    final response =
+        await _terminalRequest('/admin/terminal-queue/$tripId/remove', payload);
     return response['data'] as Map<String, dynamic>;
   }
 

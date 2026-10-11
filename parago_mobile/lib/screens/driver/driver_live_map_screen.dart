@@ -1,3 +1,4 @@
+import 'package:parago_map_ui/road_jeep_marker.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -395,22 +396,11 @@ class _DriverLiveMapScreenState extends State<DriverLiveMapScreen> {
       if (currentLocation != null)
         Marker(
           point: currentLocation,
-          width: 28,
-          height: 28,
-          child: Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E88E5),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 3),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x401E88E5),
-                  blurRadius: 10,
-                  spreadRadius: 2,
-                ),
-              ],
-            ),
-          ),
+          rotate: true,
+          width: RoadJeepMarker.extent,
+          height: RoadJeepMarker.extent,
+          child: RoadJeepMarker(
+              latitude: currentLocation.latitude, label: 'Your jeep'),
         ),
       if (destination != null)
         Marker(

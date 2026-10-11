@@ -58,6 +58,7 @@ const processAutomaticOffboardingForRide = async ({
   jeepneyLocation,
   now = new Date(),
 }) => {
+  if (ride?.flowVersion === 2) return null;
   if (!ride || (ride.partySize ?? 1) > 1 || ride.status !== 'onboard') {
     return null;
   }
@@ -120,6 +121,7 @@ const processAutomaticOffboardingForRide = async ({
 
 const processAutomaticOffboardingForTrip = async ({
   tripSessionId,
+  observation,
   jeepneyLocation,
   now = new Date(),
 }) => {
@@ -147,7 +149,7 @@ const processAutomaticOffboardingForTrip = async ({
     status: 'onboard',
   }).sort({ boardedAt: 1, createdAt: 1 });
 
-  const completed = [];
+  const completed = observation ? await require('./memberUnloading.service').processTrip({ tripSessionId, observation, now }) : [];
   for (const ride of rides) {
     const completedRide = await processAutomaticOffboardingForRide({
       ride,

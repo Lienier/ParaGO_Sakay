@@ -261,6 +261,11 @@ const syncJeepneyAssignment = async (driver, newJeepneyId) => {
 
 router.use(authenticate, authorize(ADMIN));
 
+router.get('/fleet', asyncHandler(async (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  return ok(res, await require('../services/adminFleet.service').getAdminFleet(), 'Fleet locations');
+}));
+
 const CodingHoliday = require('../models/codingHoliday');
 router.get('/coding-holidays', asyncHandler(async (_req, res) =>
   ok(res, await CodingHoliday.find().sort({ date: 1 }), 'Coding holidays')));

@@ -1,3 +1,4 @@
+import 'glass_surface.dart';
 import 'package:flutter/material.dart';
 
 class DriverToastAction {
@@ -43,73 +44,83 @@ class _DriverActionToastState extends State<DriverActionToast> {
     final index = widget.actions.indexWhere((a) => a.id == _selected);
     final action = widget.actions[index < 0 ? 0 : index];
     _selected = action.id;
-    return Material(
-      elevation: 8,
-      borderRadius: BorderRadius.circular(12),
-      color: Theme.of(context).colorScheme.surface,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [
-                Expanded(
-                    child: Text('${widget.actions.length} driver actions',
-                        style: const TextStyle(fontWeight: FontWeight.bold))),
-                IconButton(
-                    tooltip: _collapsed ? 'Show actions' : 'Minimize actions',
-                    onPressed: _busy
-                        ? null
-                        : () => setState(() => _collapsed = !_collapsed),
-                    icon: Icon(
-                        _collapsed ? Icons.expand_more : Icons.expand_less)),
-              ]),
-              if (!_collapsed) ...[
-                Text(action.title,
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                Text(action.detail,
-                    maxLines: 3, overflow: TextOverflow.ellipsis),
-                if (_error != null)
-                  Text(_error!,
-                      style: TextStyle(
-                          color: Theme.of(context).colorScheme.error)),
-                Wrap(spacing: 8, children: [
-                  FilledButton(
-                      onPressed: _busy
-                          ? null
-                          : () async {
-                              setState(() {
-                                _busy = true;
-                                _error = null;
-                              });
-                              try {
-                                await action.run();
-                              } catch (error) {
-                                if (mounted) {
-                                  setState(() => _error = error.toString());
-                                }
-                              } finally {
-                                if (mounted) setState(() => _busy = false);
-                              }
-                            },
-                      child: Text(_busy ? 'Working...' : action.label)),
-                  if (widget.actions.length > 1)
-                    TextButton(
-                        onPressed: _busy
-                            ? null
-                            : () => setState(() {
-                                  _selected = widget
-                                      .actions[((index < 0 ? 0 : index) + 1) %
-                                          widget.actions.length]
-                                      .id;
-                                  _error = null;
-                                }),
-                        child: const Text('Next action')),
-                ]),
-              ],
-            ]),
-      ),
+    return GlassSurface(
+      child: Builder(
+          builder: (context) => Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Expanded(
+                            child: Text(
+                                '${widget.actions.length} driver actions',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold))),
+                        IconButton(
+                            tooltip: _collapsed
+                                ? 'Show actions'
+                                : 'Minimize actions',
+                            onPressed: _busy
+                                ? null
+                                : () =>
+                                    setState(() => _collapsed = !_collapsed),
+                            icon: Icon(_collapsed
+                                ? Icons.expand_more
+                                : Icons.expand_less)),
+                      ]),
+                      if (!_collapsed) ...[
+                        Text(action.title,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.bold)),
+                        Text(action.detail,
+                            maxLines: 3, overflow: TextOverflow.ellipsis),
+                        if (_error != null)
+                          Text(_error!,
+                              style: TextStyle(
+                                  color: Theme.of(context).colorScheme.error)),
+                        Wrap(spacing: 8, children: [
+                          FilledButton(
+                              onPressed: _busy
+                                  ? null
+                                  : () async {
+                                      setState(() {
+                                        _busy = true;
+                                        _error = null;
+                                      });
+                                      try {
+                                        await action.run();
+                                      } catch (error) {
+                                        if (mounted) {
+                                          setState(
+                                              () => _error = error.toString());
+                                        }
+                                      } finally {
+                                        if (mounted) {
+                                          setState(() => _busy = false);
+                                        }
+                                      }
+                                    },
+                              child: Text(_busy ? 'Working...' : action.label)),
+                          if (widget.actions.length > 1)
+                            TextButton(
+                                onPressed: _busy
+                                    ? null
+                                    : () => setState(() {
+                                          _selected = widget
+                                              .actions[
+                                                  ((index < 0 ? 0 : index) +
+                                                          1) %
+                                                      widget.actions.length]
+                                              .id;
+                                          _error = null;
+                                        }),
+                                child: const Text('Next action')),
+                        ]),
+                      ],
+                    ]),
+              )),
     );
   }
 }

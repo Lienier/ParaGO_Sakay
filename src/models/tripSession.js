@@ -4,6 +4,7 @@ const { Schema } = mongoose;
 
 const tripSessionSchema = new Schema(
   {
+    flowVersion: { type: Number, enum: [1, 2], default: 1 },
     jeepneyId: { type: Schema.Types.ObjectId, ref: 'Jeepney', required: true },
     driverId: { type: Schema.Types.ObjectId, ref: 'Driver' },
     routeId: { type: Schema.Types.ObjectId, ref: 'Route', required: true },
@@ -28,6 +29,9 @@ const tripSessionSchema = new Schema(
     inactivityPausedAt: { type: Date },
     resumedAt: { type: Date },
     lifecycleRevision: { type: Number, default: 0 },
+    automaticLifecycle: { type: Boolean, default: false },
+    automaticDepartureCheck: { type: Schema.Types.Mixed },
+    automaticFinishCheck: { type: Schema.Types.Mixed },
     manualOccupancyCount: { type: Number, default: 0, min: 0 },
     occupancyCount: { type: Number, default: 0, min: 0 },
     active: { type: Boolean, default: false },

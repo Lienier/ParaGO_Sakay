@@ -70,7 +70,7 @@ async function publish(routeId) {
   const { emitOperationsChanged } = require('../realtime/socketServer');
   for (const role of ['driver', 'passenger', 'admin']) emitOperationsChanged({ type: 'terminal.queue.updated', routeId: String(routeId), role });
 }
-async function transaction(routeId, operation) {
+async function transaction(routeId, operation, { publishChanges = true } = {}) {
   await prepare(routeId);
   const session = await mongoose.startSession();
   let result;
@@ -80,7 +80,7 @@ async function transaction(routeId, operation) {
       'This terminal action was already recorded.', 'Refresh the terminal status before trying again.');
     throw error;
   } finally { await session.endSession(); }
-  try { await publish(routeId); }
+  try { if (publishChanges) await publish(routeId); }
   catch (_) { console.error('[Terminal queue] Post-commit update publication failed; clients must refresh'); }
   return result;
 }
@@ -117,7 +117,7 @@ async function checkIn({ document, actor, requestId, reason, existingId, session
     if (await Trip.exists({ ...activeQueue, $or: [{ driverId: document.driverId }, { jeepneyId: document.jeepneyId }] }).session(session))
       throw driverError(409, DRIVER_ERROR_CODES.QUEUE_CONFLICT,
         'This driver or jeepney already has an active terminal trip.', 'Refresh your trips and use the existing terminal trip.');
-    const values = { ...document, status: 'active', active: true, operatingMode: 'terminal_queue',
+    const values = { ...document, flowVersion: require('../config/env').automaticGroupFlowEnabled ? 2 : document.flowVersion || 1, status: 'active', active: true, operatingMode: 'terminal_queue',
       startedAt: new Date(), terminalCheckedInAt: new Date(), terminalQueueStatus: 'waiting', acceptRequests: false,
       terminalQueueNumber: await nextPosition(document.routeId, session) };
     await operatingRules.assertVehicleAllowed(await Jeepney.findById(document.jeepneyId).session(session), session);
@@ -272,6 +272,7 @@ async function transfer({ requestId, passengerId, offerId, accept }) {
       await journey.assertCanBook(passengerId, session, request._id);
       const trip = await promote(request.routeId, session);
       if (!trip) throw new ApiError(409, 'No loading jeep is available. Your offer remains pending');
+      if (request.flowVersion === 2 && trip.flowVersion !== 2) throw new ApiError(409, 'Wait for a loading jeep running the updated booking flow. Your offer remains pending.');
       await reserve(trip, session, request.partySize ?? 1);
       request.tripSessionId = trip._id; request.status = 'pending'; request.acceptedTransferOfferId = offerId;
       request.acknowledgedAt = undefined; request.acknowledgedBy = undefined; request.autoBoarding = undefined;
@@ -316,10 +317,10 @@ function driverStatusFor(trip) {
     return { state: 'cancelled', label: 'Cancelled', detail: 'This trip is no longer operating.', nextAction: null };
   }
   if (trip.operatingMode === 'route' || trip.terminalQueueStatus === 'departed') {
-    return { state: 'on_route', label: 'On route', detail: 'Terminal departure is complete.', nextAction: trip.status === 'active' ? 'Accept pickup requests or end the trip.' : null };
+    return { state: 'on_route', label: 'On route', detail: 'Terminal departure is complete.', nextAction: trip.status === 'active' ? (trip.flowVersion === 2 ? 'Boarding and drop-offs are automatic. Follow the route; use manual corrections only when needed.' : 'Accept pickup requests or end the trip.') : null };
   }
   if (trip.terminalQueueStatus === 'loading') {
-    return { state: 'loading', label: 'Loading', detail: 'Passengers may board during the terminal loading period.', nextAction: 'Confirm departure when loading is complete.' };
+    return { state: 'loading', label: 'Loading', detail: 'Passengers may board during the terminal loading period.', nextAction: trip.flowVersion === 2 && require('../config/env').automaticDriverLifecycleEnabled ? 'Departure is detected automatically when the jeep leaves the terminal. Manual controls are available as a fallback.' : 'Confirm departure when loading is complete.' };
   }
   if (trip.terminalQueueStatus === 'waiting') {
     return { state: 'waiting', label: 'Waiting in terminal queue', detail: 'Your jeepney is waiting for its loading turn.', nextAction: 'Wait for the loading position.' };
@@ -341,7 +342,11 @@ const arrivalCodeFor = status => ({
 async function describe(value) {
   const trip = value.toObject ? value.toObject() : value;
   const driverStatus = driverStatusFor(trip);
-  if (trip.operatingMode !== 'terminal_queue') return { ...trip, driverStatus };
+  if (trip.operatingMode !== 'terminal_queue') {
+    const vehicle = await Jeepney.findById(trip.jeepneyId?._id || trip.jeepneyId).select('capacity');
+    const seats = await require('./seatAccounting.service').counts(trip);
+    return { ...trip, driverStatus, availableSeats: Math.max(0, (vehicle?.capacity || 0) - seats.occupied - seats.reserved) };
+  }
   const vehicle = await Jeepney.findById(trip.jeepneyId?._id || trip.jeepneyId).select('capacity lastSeenAt lastKnownLocation latestLocationOrder');
   const { reserved: reservedSeats, occupied } = await require('./seatAccounting.service').counts(trip);
   const bookings = await Pickup.find({ tripSessionId: trip._id, status: { $in: ['pending', 'acknowledged'] }, expiresAt: { $gt: new Date() } }).select('partySize').lean();

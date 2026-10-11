@@ -6,21 +6,30 @@ class PickupRequestModel {
     required this.routeId,
     required this.status,
     required this.pickupType,
+    this.flowVersion = 1,
+    this.members = const [],
     this.partySize = 1,
     this.groupReadyAt,
     this.stopRef,
     this.terminalStopRef,
     this.sourceNote,
+    this.assignedJeepneyLabel,
     this.pickupLatitude,
     this.pickupLongitude,
     this.terminalLatitude,
     this.terminalLongitude,
+    this.destinationStopRef,
     this.fareSnapshot,
     this.expiresAt,
     this.createdAt,
     this.acknowledgedAt,
   });
 
+  final int flowVersion;
+  final List<JourneyMemberModel> members;
+  String get destinationsLabel => members.isEmpty
+      ? (destinationStopRef ?? "Saved destination")
+      : JourneyMemberModel.destinationSummary(members);
   final int partySize;
   final String? groupReadyAt;
 
@@ -33,10 +42,12 @@ class PickupRequestModel {
   final String? stopRef;
   final String? terminalStopRef;
   final String? sourceNote;
+  final String? assignedJeepneyLabel;
   final double? pickupLatitude;
   final double? pickupLongitude;
   final double? terminalLatitude;
   final double? terminalLongitude;
+  final String? destinationStopRef;
   final FareSnapshotModel? fareSnapshot;
   final String? expiresAt;
   final String? createdAt;
@@ -46,6 +57,12 @@ class PickupRequestModel {
 
   factory PickupRequestModel.fromJson(Map<String, dynamic> json) {
     return PickupRequestModel(
+      assignedJeepneyLabel: json['assignedJeepneyLabel']?.toString(),
+      flowVersion: (json['flowVersion'] as num?)?.toInt() ?? 1,
+      members: (json['members'] as List? ?? [])
+          .map((m) =>
+              JourneyMemberModel.fromJson(Map<String, dynamic>.from(m as Map)))
+          .toList(),
       partySize: (json['partySize'] as num?)?.toInt() ?? 1,
       groupReadyAt: json['groupReadyAt']?.toString(),
       id: json['_id'].toString(),
@@ -61,6 +78,7 @@ class PickupRequestModel {
       pickupLongitude: _readLongitude(json['pickupLocation']),
       terminalLatitude: _readLatitude(json['terminalLocation']),
       terminalLongitude: _readLongitude(json['terminalLocation']),
+      destinationStopRef: json['destinationStopRef']?.toString(),
       fareSnapshot: FareSnapshotModel.fromJson(json['fareSnapshot']),
       expiresAt: json['expiresAt']?.toString(),
       createdAt: json['createdAt']?.toString(),
@@ -134,4 +152,33 @@ double? _readNumber(dynamic value) {
     return value.toDouble();
   }
   return double.tryParse(value?.toString() ?? '');
+}
+
+class JourneyMemberModel {
+  const JourneyMemberModel(
+      {required this.memberId,
+      required this.organizer,
+      required this.label,
+      required this.destinationStopRef,
+      required this.latitude,
+      required this.longitude,
+      required this.fare,
+      required this.status});
+  final String memberId, label, destinationStopRef, status;
+  final bool organizer;
+  final double latitude, longitude, fare;
+  factory JourneyMemberModel.fromJson(Map<String, dynamic> json) =>
+      JourneyMemberModel(
+          memberId: json['memberId'].toString(),
+          organizer: json['organizer'] == true,
+          label: json['label'].toString(),
+          destinationStopRef: json['destinationStopRef'].toString(),
+          latitude: _readLatitude(json['destinationLocation'])!,
+          longitude: _readLongitude(json['destinationLocation'])!,
+          fare: (json['fareSnapshot']['amount'] as num).toDouble(),
+          status: json['status'].toString());
+  static String destinationSummary(List<JourneyMemberModel> members) {
+    final names = members.map((m) => m.destinationStopRef).toSet().toList();
+    return '${names.take(2).join("\n")}${names.length > 2 ? "\n+${names.length - 2} more" : ""}';
+  }
 }

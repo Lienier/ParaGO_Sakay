@@ -1,3 +1,4 @@
+import 'widgets/glass_surface.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -142,7 +143,7 @@ Future<void> _confirmPassengerRoleGateLogout(
 ) async {
   final shouldLogout = await showDialog<bool>(
     context: context,
-    builder: (dialogContext) => AlertDialog(
+    builder: (dialogContext) => GlassAlertDialog(
       title: const Text('Sign out?'),
       content: const Text(
         'Are you sure you want to sign out of the passenger application?',

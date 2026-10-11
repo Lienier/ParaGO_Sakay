@@ -51,6 +51,11 @@ const createStopAlert = async ({
     throw new ApiError(404, 'Route not found for this trip');
   }
 
+  if (session.flowVersion === 2) {
+    const member = session.members.find(m => m.status === 'onboard' && m.destinationStopRef === stopRef);
+    if (!member) throw new ApiError(400, 'Select a remaining passenger destination for the para alert.');
+    location = member.destinationLocation;
+  }
   let alertLocation = location;
   if (!alertLocation || !Array.isArray(alertLocation.coordinates) || alertLocation.coordinates.length < 2) {
     alertLocation = pickDefaultRouteCoordinate(route);
@@ -83,7 +88,14 @@ const createStopAlert = async ({
     note,
     location: alertLocation,
     status: 'sent',
-  });
+  }, { beforeCreate: async transaction => {
+    // The trip write serializes competing alerts. Recheck inside the retried
+    // transaction so simultaneous taps cannot all pass the initial lookup.
+    const duplicate = await StopAlert.findOne({ passengerId, tripSessionId,
+      status: 'sent', createdAt: { $gte: new Date(Date.now() - stopAlertCooldownMinutes * 60 * 1000) },
+    }).session(transaction);
+    if (duplicate) throw new ApiError(429, 'Please wait before sending another stop alert');
+  } });
 };
 
 module.exports = { createStopAlert };

@@ -5,7 +5,7 @@ const { io } = require('socket.io-client');
 const { createLab } = require('./fixture.cjs');
 let lab, api;
 const sessions = {};
-const output = path.resolve(__dirname, '../../artifacts/playwright_system_test_2026-10-06');
+const output = path.resolve(__dirname, '../..', process.env.SYSTEM_TEST_ARTIFACT_DIR || 'artifacts/playwright_system_test_2026-10-06');
 
 async function call(method, route, actor, data, status = 200) {
   const response = await api[method]('/api/v1' + route, {

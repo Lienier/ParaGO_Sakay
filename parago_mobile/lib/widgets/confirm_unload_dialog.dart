@@ -1,3 +1,4 @@
+import 'glass_surface.dart';
 import 'package:flutter/material.dart';
 import '../models/operations/ride_session.dart';
 
@@ -12,7 +13,8 @@ Future<int?> confirmPassengerCount(
   return showDialog<int>(
       context: context,
       builder: (context) => StatefulBuilder(
-            builder: (context, update) => AlertDialog(
+            builder: (context, update) => GlassAlertDialog(
+              scrollable: true,
               title: Text(title),
               content: Column(mainAxisSize: MainAxisSize.min, children: [
                 Text(identity),
@@ -46,7 +48,8 @@ Future<bool> confirmPassengerUnload(
     BuildContext context, RideSessionModel ride) async {
   return await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (context) => GlassAlertDialog(
+          scrollable: true,
           title: const Text('Mark passenger unloaded?'),
           content: Text('${ride.passengerLabel}\nBooking ${ride.bookingLabel}\n'
               'Destination: ${ride.destinationStopRef ?? "Saved destination"}\n\n'

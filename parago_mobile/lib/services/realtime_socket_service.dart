@@ -141,6 +141,9 @@ class RealtimeSocketService {
         _notificationController.add(normalized);
       }
     });
+    socket.on('route.pickups.changed', (payload) {
+      _operationsController.add(_normalizePayload(payload));
+    });
     socket.on('ops.changed', (payload) {
       final normalized = _normalizePayload(payload);
       if (normalized.isNotEmpty) {
@@ -200,6 +203,18 @@ class RealtimeSocketService {
     _pickupRequestController.close();
     _supportController.close();
     _announcementController.close();
+  }
+
+  void subscribeToRoute(String id) {
+    if (_subscriptions.addRoute(id) && isConnected) {
+      _requestSubscription(RealtimeSubscription('subscribe.route', id));
+    }
+  }
+
+  void unsubscribeFromRoute(String id) {
+    if (_subscriptions.removeRoute(id) && isConnected) {
+      _requestUnsubscribe('unsubscribe.route', id);
+    }
   }
 
   void subscribeToTrip(String tripId) {

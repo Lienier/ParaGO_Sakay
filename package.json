@@ -9,6 +9,9 @@
     "npm": "11.x"
   },
   "scripts": {
+    "test:admin-fleet": "node --test tests/admin-fleet.integration.test.js",
+    "test:automatic-group-flow": "node --test tests/destination-arrival.test.js tests/automatic-group-flow.integration.test.js tests/group-bookings.integration.test.js tests/booking-revision.integration.test.js",
+    "test:driver-information-flow": "node --test tests/driver-information-lifecycle.integration.test.js tests/destination-arrival.test.js tests/automatic-group-flow.integration.test.js tests/group-bookings.integration.test.js tests/booking-revision.integration.test.js",
     "test:booking-revision": "node --test tests/booking-revision.integration.test.js tests/group-bookings.integration.test.js tests/terminal-loading.integration.test.js tests/boarding-notifications.integration.test.js tests/manual-unloading.integration.test.js",
     "test:saved-places": "node --test tests/saved-places.integration.test.js",
     "test:mobile-releases": "node --test tests/mobile-releases.integration.test.js",

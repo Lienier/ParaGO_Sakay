@@ -129,7 +129,7 @@ class LocationTrackingService {
     onPosition?.call(position);
 
     final speed =
-        position.speed.isFinite && position.speed >= 0 ? position.speed : 0.0;
+        position.speed.isFinite && position.speed >= 0 ? position.speed : null;
     final heading = position.heading.isFinite && position.heading >= 0
         ? position.heading % 360
         : 0.0;
@@ -139,7 +139,7 @@ class LocationTrackingService {
         longitude: position.longitude,
         accuracyMeters:
             position.accuracy.isFinite ? position.accuracy.clamp(0, 500) : 500,
-        speedMetersPerSecond: speed.clamp(0, 100),
+        speedMetersPerSecond: speed?.clamp(0, 100),
         headingDegrees: heading,
         capturedAt: position.timestamp,
       ),

@@ -75,8 +75,16 @@ router.post('/:id/group-board', authenticate, authorize(DRIVER), asyncHandler(as
 }));
 router.get('/capabilities', authenticate, authorize(PASSENGER), (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  return ok(res, { groupBookingsEnabled: require('../config/env').groupBookingsEnabled }, 'Booking capabilities');
+  return ok(res, { groupBookingsEnabled: require('../config/env').automaticGroupFlowEnabled || require('../config/env').groupBookingsEnabled, flowVersion: require('../config/env').automaticGroupFlowEnabled ? 2 : 1, minimumBuild: require('../config/env').automaticGroupMinimumBuild }, 'Booking capabilities');
 });
+
+router.post('/quote', authenticate, authorize(PASSENGER), asyncHandler(async (req, res) => {
+  if (!require('../config/env').automaticGroupFlowEnabled) throw new ApiError(409, 'Automatic group booking is not enabled yet.');
+  ensureObjectId(req.body.routeId, 'routeId');
+  const route = await Route.findById(req.body.routeId);
+  if (!route) throw new ApiError(404, 'Route not found');
+  return ok(res, require('../services/bookingV2.service').quoteBooking(route, req.body), 'Booking quote');
+}));
 
 const isFinitePositiveNumber = (value) =>
   Number.isFinite(Number(value)) && Number(value) > 0;
@@ -190,6 +198,7 @@ const resolveEligibleTripForRoute = async ({
   const trips = await TripSession.find({
     routeId,
     status: 'active',
+    ...(require('../config/env').automaticGroupFlowEnabled ? { flowVersion: 2 } : {}),
     acceptRequests: true,
     ...(excludeTripIds.length > 0 ? { _id: { $nin: excludeTripIds } } : {}),
   })
@@ -301,8 +310,12 @@ router.post(
   authorize(PASSENGER),
   asyncHandler(async (req, res) => {
     const payload = req.body || {};
-    const partySize = require('../services/seatAccounting.service').partySize(payload.partySize);
-    if (partySize > 1 && !require('../config/env').groupBookingsEnabled) {
+    const v2 = payload.flowVersion === 2;
+    const enabled = require('../config/env').automaticGroupFlowEnabled;
+    if (v2 && !enabled) throw new ApiError(409, 'Automatic booking is not enabled yet.');
+    if (enabled && !v2) throw new ApiError(426, 'Update the passenger app before making a new booking.', [], 'APP_UPDATE_REQUIRED');
+    const partySize = v2 ? (Array.isArray(payload.members) ? payload.members.length : 0) : require('../services/seatAccounting.service').partySize(payload.partySize);
+    if (!v2 && partySize > 1 && !require('../config/env').groupBookingsEnabled) {
       throw new ApiError(409, 'Companion bookings are not available yet. Book for yourself only.', [], 'GROUP_BOOKINGS_DISABLED');
     }
     const passenger = await requireCurrentPassenger(req.user, {
@@ -318,6 +331,12 @@ router.post(
     ensureObjectId(payload.routeId, 'routeId');
     const route = await Route.findById(payload.routeId);
     if (!route) throw new ApiError(404, 'Route not found');
+    const quote = v2 ? require('../services/bookingV2.service').quoteBooking(route, payload) : null;
+    if (v2) {
+      require('../services/bookingV2.service').requireReviewedQuote(quote, payload);
+      payload.destinationLocation = quote.members[0].destinationLocation;
+      payload.destinationStopRef = quote.members[0].destinationStopRef;
+    }
     const pickupType = normalizePickupType(payload.pickupType);
     const terminalStop = isTerminalPickupType(pickupType)
       ? resolveRouteTerminalStop(route)
@@ -403,12 +422,14 @@ router.post(
       tripSessionId: trip._id,
       passengerId: passenger._id,
       status: { $in: ['pending', 'acknowledged'] },
+      expiresAt: { $gt: new Date() },
     });
     if (pendingCount >= maxRequestsPerPassengerPerTrip) {
       throw new ApiError(409, 'Too many pending requests for this trip');
     }
 
     const request = await createTripRecord(PickupRequest, {
+      ...(v2 ? { flowVersion: 2, members: quote.members, regularTotal: quote.regularTotal, quoteToken: quote.quoteToken } : {}),
       partySize,
       fareSnapshot: resolveRouteFareSnapshot({
         route,
@@ -438,7 +459,7 @@ router.post(
     }, { accepting: true });
 
     const tripDriverUserId = await resolveTripDriverUserId(trip);
-    await publishNotification({
+    try { await publishNotification({
       userId: tripDriverUserId,
       type: 'pickup_request_created',
       title: isTerminalPickupType(pickupType)
@@ -458,6 +479,7 @@ router.post(
       },
       category: 'trip',
     });
+    } catch (_) { console.error('[Booking] Notification failed after commit'); }
     emitToTrip(trip._id.toString(), 'pickup_request.updated', {
       action: 'created',
       tripId: trip._id.toString(),
@@ -505,10 +527,35 @@ router.get(
     const passenger = await requireCurrentPassenger(req.user, {
       notFoundMessage: 'Passenger profile not found',
     });
+    // Expiry ends a reservation; it must not delete the booking history.
+    await PickupRequest.updateMany({ passengerId: passenger._id,
+      status: { $in: ['pending', 'acknowledged', 'transfer_offered'] },
+      expiresAt: { $lte: new Date() } }, { $set: { status: 'expired' } });
     const list = await PickupRequest.find({ passengerId: passenger._id }).sort({ createdAt: -1 });
     return ok(res, list, 'Passenger pickup requests');
   })
 );
+
+// Route visibility is informational. Mutation endpoints still require the
+// booking's assigned driver/trip. Never expose passenger identity or notes.
+router.get('/route/:routeId', authenticate, authorize(DRIVER, ADMIN), asyncHandler(async (req, res) => {
+  ensureObjectId(req.params.routeId, 'routeId');
+  const route = await Route.findById(req.params.routeId).select('_id status');
+  if (!route || route.status !== 'active') throw new ApiError(404, 'Active route not found');
+  if (req.user.role === DRIVER && !await Driver.exists({ userId: req.user._id, status: 'active', assignedRouteId: route._id })) {
+    throw new ApiError(403, 'This route is not assigned to you');
+  }
+  const trips = await TripSession.find({ routeId: route._id, status: 'active' }).populate('jeepneyId', 'plateNumber jeepneyName').lean();
+  const byId = new Map(trips.map(t => [String(t._id), t]));
+  const requests = await PickupRequest.find({ routeId: route._id, tripSessionId: { $in: trips.map(t => t._id) },
+    status: { $in: ['pending', 'acknowledged'] }, expiresAt: { $gt: new Date() } }).sort({ createdAt: 1 }).lean();
+  return ok(res, requests.map(request => {
+    const item = serializePickupRequest(request);
+    delete item.passengerId; delete item.sourceNote;
+    const trip = byId.get(String(request.tripSessionId));
+    return { ...item, assignedJeepneyLabel: trip?.jeepneyId?.plateNumber || trip?.jeepneyId?.jeepneyName || 'Assigned jeep', informational: true };
+  }), 'Route pickup information');
+}));
 
 router.get(
   '/trip/:tripSessionId',
@@ -522,6 +569,9 @@ router.get(
         forbiddenMessage: 'Driver not assigned to this trip',
       });
     }
+    await PickupRequest.updateMany({ tripSessionId: trip._id,
+      status: { $in: ['pending', 'acknowledged', 'transfer_offered'] },
+      expiresAt: { $lte: new Date() } }, { $set: { status: 'expired' } });
     const list = await PickupRequest.find({ tripSessionId: req.params.tripSessionId }).sort({
       status: 1,
       createdAt: -1,
@@ -537,6 +587,7 @@ router.patch(
   asyncHandler(async (req, res) => {
     ensureObjectId(req.params.id, 'pickup request id');
     const request = await requirePickupRequest(req.params.id);
+    if (request.flowVersion === 2) throw new ApiError(409, 'This booking boards automatically. Driver acknowledgement is not needed.');
     const trip = await requireTrip(request.tripSessionId);
     if (trip.status !== 'active') {
       throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
@@ -625,15 +676,16 @@ router.patch(
 
     const cancelled = await PickupRequest.findOneAndUpdate({
       _id: request._id, status: { $in: ['pending', 'acknowledged'] },
-    }, { $set: { status: 'cancelled' } }, { new: true });
+    }, { $set: { status: 'cancelled', ...(request.flowVersion === 2 ? { 'members.$[].status': 'cancelled' } : {}) } }, { new: true });
     if (!cancelled) throw new ApiError(409, 'Pickup request is no longer available for cancellation');
     request.status = cancelled.status;
+    if (request.flowVersion === 2) request.members = cancelled.members;
     const trip = await TripSession.findById(request.tripSessionId)
       .populate('driverId', 'userId');
     if (request.pickupType === 'terminal') {
       await syncTerminalQueueStatus(trip);
     }
-    await publishNotification({
+    try { await publishNotification({
       userId: await resolveTripDriverUserId(trip),
       type: 'pickup_request_cancelled',
       title: 'Pickup request cancelled',
@@ -645,6 +697,7 @@ router.patch(
       },
       category: 'trip',
     });
+    } catch (_) { console.error('[Booking] Cancellation notification failed after save'); }
     emitToTrip(request.tripSessionId?.toString() || '', 'pickup_request.updated', {
       action: 'cancelled',
       tripId: request.tripSessionId?.toString() || '',

@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const Jeepney = require('../models/jeepney');
 const asyncHandler = require('../utils/asyncHandler');
 const authenticate = require('../middlewares/authenticate');
@@ -43,12 +44,30 @@ router.put(
     if (!Object.keys(updates).length) {
       throw new ApiError(400, 'No valid jeepney fields provided');
     }
-    const item = await Jeepney.findByIdAndUpdate(
+    const session = await mongoose.startSession();
+    let item;
+    try { await session.withTransaction(async () => {
+    if (updates.capacity != null) {
+      const Trip = require('../models/tripSession');
+      // Boarding and reservations also write these trips, serializing a
+      // capacity change with concurrent seat changes.
+      await Trip.updateMany({ jeepneyId: req.params.id, status: { $in: ['active', 'scheduled'] } },
+        { $inc: { lifecycleRevision: 1 } }, { session });
+      const trips = await Trip.find({ jeepneyId: req.params.id, status: { $in: ['active', 'scheduled'] } }).session(session);
+      let required = 0;
+      for (const trip of trips) {
+        const counts = await require('../services/seatAccounting.service').counts(trip, session);
+        required += counts.occupied + counts.reserved;
+      }
+      if (updates.capacity < required) throw new ApiError(409, 'Capacity cannot be lower than the onboard and reserved seats');
+    }
+    item = await Jeepney.findByIdAndUpdate(
       req.params.id,
       { $set: updates },
-      { new: true, runValidators: true }
+      { new: true, runValidators: true, session }
     );
     if (!item) throw new ApiError(404, 'Jeepney not found');
+    }); } finally { await session.endSession(); }
     return ok(res, item, 'Jeepney updated');
   })
 );

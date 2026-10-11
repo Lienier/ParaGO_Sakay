@@ -1,3 +1,7 @@
+import '../../services/waiting_movement_guard.dart';
+import '../../widgets/waiting_check_card.dart';
+import 'package:parago_map_ui/road_jeep_marker.dart';
+import '../../widgets/glass_surface.dart';
 import '../../widgets/terminal_map_marker.dart';
 import '../../widgets/map_follow_control.dart';
 import '../../widgets/booking_fare_reference.dart';
@@ -8,6 +12,8 @@ import '../../services/passenger_booking_guard.dart';
 import '../../core/utils/automation_location.dart';
 import '../../widgets/legal_pages.dart';
 import 'dart:async';
+import '../../widgets/group_booking_dialog.dart';
+import '../../widgets/journey_members.dart';
 import '../../widgets/terminal_loading_clock.dart';
 import 'dart:math' as math;
 
@@ -95,7 +101,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   static const double _passengerEtaMovementRefreshMeters = 100;
   static const double _passengerMapFollowJitterMeters = 2;
   static const double _sheetCollapsedSize = 0.09;
-  static const double _sheetPeekSize = 0.38;
+  static const double _sheetPeekSize = 0.30;
   static const double _sheetExpandedSize = 0.90;
 
   List<TripSession> _trips = [];
@@ -103,6 +109,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   List<PickupRequestModel> _requests = [];
   List<RideSessionModel> _rides = [];
   List<NotificationModel> _notifications = [];
+  final Set<String> _hiddenNoticeIds = {};
   List<AnnouncementModel> _announcements = [];
   String? _selectedTripId;
   String? _selectedRouteId;
@@ -130,6 +137,56 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   bool _silentRefreshActive = false;
   bool _realtimePrimed = false;
   bool _locatingPassenger = false;
+  final _waitingMovement = WaitingMovementGuard();
+
+  PickupRequestModel? get _movementPromptBooking {
+    final booking = _selectedTripBooking;
+    if (_activeRide?.status == 'onboard' ||
+        booking == null ||
+        booking.id != _waitingMovement.bookingId ||
+        _waitingMovement.reason == null) {
+      return null;
+    }
+    final expires = DateTime.tryParse(booking.expiresAt ?? '');
+    if (expires != null && !expires.isAfter(DateTime.now())) return null;
+    return booking;
+  }
+
+  void _checkWaitingMovement(Position position, LatLng point) {
+    final booking = _selectedTripBooking;
+    if (_activeRide?.status == 'onboard' || booking == null) {
+      _waitingMovement.reset();
+      return;
+    }
+    final now = DateTime.now();
+    final trip = _tripById(booking.tripSessionId);
+    final vehicle = trip == null ? null : _tripVehiclePoint(trip);
+    final at = trip == null
+        ? null
+        : _tripVehicleStates[trip.id]?.lastAuthoritativeSampleAt ??
+            trip.jeepneyLastSeenAt;
+    final fresh = at != null &&
+        !now.difference(at).isNegative &&
+        now.difference(at) <= const Duration(seconds: 15);
+    _waitingMovement.update(
+        id: booking.id,
+        point: point,
+        capturedAt: position.timestamp,
+        now: now,
+        accuracyMetres: position.accuracy,
+        speed: position.speed,
+        nearAssignedJeep: fresh &&
+            vehicle != null &&
+            _distance.as(LengthUnit.Meter, point, vehicle) <= 50);
+  }
+
+  void _confirmStillWaiting() {
+    final point = _currentPassengerLocation;
+    if (point == null) return;
+    setState(() =>
+        _waitingMovement.confirmWaiting(point: point, now: DateTime.now()));
+  }
+
   Future<LatLng?>? _passengerLocationRequest;
   bool _passengerLocationReportInFlight = false;
   DateTime? _lastPassengerLocationReportedAt;
@@ -324,6 +381,59 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     return null;
   }
 
+  List<JourneyMemberModel> get _mapJourneyMembers {
+    final ride = _displayRide;
+    if (ride?.flowVersion == 2 && ride?.status == 'onboard') {
+      return ride!.members;
+    }
+    return _selectedTripBooking?.flowVersion == 2
+        ? _selectedTripBooking!.members
+        : const [];
+  }
+
+  List<Marker> _memberDestinationMarkers() {
+    final groups = <String, List<JourneyMemberModel>>{};
+    for (final member in _mapJourneyMembers) {
+      final key = '${member.latitude},${member.longitude}';
+      groups.putIfAbsent(key, () => []).add(member);
+    }
+    return groups.values.map((members) {
+      final member = members.first;
+      final remaining = members.where((m) => m.status != 'completed').length;
+      return Marker(
+        rotate: true,
+        point: LatLng(member.latitude, member.longitude),
+        width: 44,
+        height: 44,
+        alignment: Alignment.topCenter,
+        child: GestureDetector(
+          onTap: () => showDialog<void>(
+              context: context,
+              builder: (_) => GlassAlertDialog(
+                    scrollable: true,
+                    title: Text(member.destinationStopRef),
+                    content: JourneyMembers(members: members),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Close'))
+                    ],
+                  )),
+          child: Tooltip(
+            message: '${member.destinationStopRef}: $remaining remaining',
+            child: CircleAvatar(
+                radius: 18,
+                backgroundColor: Colors.white,
+                child: Icon(remaining == 0 ? Icons.check_circle : Icons.flag,
+                    color: remaining == 0
+                        ? Colors.grey
+                        : const Color(0xFFD84315))),
+          ),
+        ),
+      );
+    }).toList();
+  }
+
   PickupRequestModel? get _selectedTripBooking {
     final selectedTripId = _selectedTripId;
     if (selectedTripId != null && selectedTripId.isNotEmpty) {
@@ -452,7 +562,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         notifications: notifications,
         silent: silent,
       );
-      if (_shouldReportPassengerLocationForRideAutomation) {
+      if (_shouldRefreshWaitingLocation) {
         unawaited(_ensureCurrentPassengerLocation(
           silent: true,
           forceRefresh: true,
@@ -488,7 +598,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         final locationTimestamp = _currentPassengerLocationAt;
         final shouldRefreshPassengerLocation = locationTimestamp == null ||
             DateTime.now().difference(locationTimestamp) >=
-                (_shouldReportPassengerLocationForRideAutomation
+                (_shouldRefreshWaitingLocation
                     ? _passengerLocationReportInterval
                     : _backgroundLocationRefreshInterval);
         if (shouldRefreshPassengerLocation) {
@@ -875,7 +985,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       final thresholdMeters =
           _destinationApproachThresholdMeters(notification.payload);
       messenger.showSnackBar(
-        SnackBar(
+        GlassSnackBar(
           content: Text(
             "You're within $thresholdMeters meters of $stopLabel. The driver has been notified.",
           ),
@@ -888,7 +998,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       final request = _readPassengerPickupRequest(notification.payload);
       final stopLabel = request?.stopRef ?? 'your selected pickup point';
       messenger.showSnackBar(
-        SnackBar(
+        GlassSnackBar(
           content: Text(
             'Pickup confirmed at $stopLabel. Your booking was updated.',
           ),
@@ -898,7 +1008,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     }
 
     messenger.showSnackBar(
-      SnackBar(content: Text('${notification.title}: ${notification.body}')),
+      GlassSnackBar(
+          content: Text('${notification.title}: ${notification.body}')),
     );
   }
 
@@ -978,7 +1089,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     final first = newNotifications.first;
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
+      GlassSnackBar(
         content: Text(
           newNotifications.length == 1
               ? '${first.title}: ${first.body}'
@@ -994,14 +1105,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       trip.terminalQueueStatus == 'loading' &&
       trip.terminalSummary?['departureRequired'] != true &&
       (trip.terminalSummary?['availableSeats'] as num? ?? 0) > 0);
-  bool get _terminalBookingFull =>
-      _bookingMode == _PassengerBookingMode.terminal && !_hasTerminalSeats;
 
   bool _pickupSubmitting = false;
   bool _actionNeedsReconciliation = false;
 
   String? get _pickupBlockedReason => _actionNeedsReconciliation
-      ? 'Refresh to confirm your booking status'
+      ? 'Refresh booking'
       : passengerBookingBlockedReason(rides: _rides, requests: _requests);
 
   Future<void> _sendPickup() async {
@@ -1027,6 +1136,30 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       return;
     }
 
+    final capabilities =
+        await PassengerService(context.read<SessionController>().apiClient)
+            .bookingCapabilities();
+    if (!mounted) return;
+    if (capabilities['flowVersion'] == 2) {
+      final mode = await showDialog<_PassengerBookingMode>(
+          context: context,
+          builder: (_) => GlassSimpleDialog(
+                title: const Text('Pickup'),
+                children: [
+                  SimpleDialogOption(
+                      onPressed: () => Navigator.pop(
+                          context, _PassengerBookingMode.roadside),
+                      child: const Text('Roadside')),
+                  if (_routeTerminalStop(selectedRoute) != null)
+                    SimpleDialogOption(
+                        onPressed: () => Navigator.pop(
+                            context, _PassengerBookingMode.terminal),
+                        child: const Text('Terminal')),
+                ],
+              ));
+      if (mode == null || !mounted) return;
+      setState(() => _bookingMode = mode);
+    }
     final terminalStop = _routeTerminalStop(selectedRoute);
     final isTerminalBooking = _bookingMode == _PassengerBookingMode.terminal;
 
@@ -1034,25 +1167,23 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         (!isTerminalBooking &&
             (_draftPickupPoint == null || _draftUnloadPoint == null))) {
       setState(() => _statusMessage = isTerminalBooking
-          ? 'Choose your unload location before booking from the terminal.'
-          : 'Pin both your pickup and unload locations on the map before booking.');
+          ? 'Choose a drop-off.'
+          : 'Choose pickup and drop-off.');
       await ActionFeedback.showInfoDialog(
         context,
         title: 'Pins required',
         message: isTerminalBooking
-            ? 'Choose your unload location before booking from the terminal.'
-            : 'Pin both your pickup and unload locations on the map before booking.',
+            ? 'Choose a drop-off.'
+            : 'Choose pickup and drop-off.',
       );
       return;
     }
     if (isTerminalBooking && terminalStop == null) {
-      setState(() =>
-          _statusMessage = 'This route has no terminal stop configured yet.');
+      setState(() => _statusMessage = 'No terminal.');
       await ActionFeedback.showInfoDialog(
         context,
         title: 'Terminal unavailable',
-        message:
-            'This route has no terminal stop configured yet. Use roadside booking for now.',
+        message: 'No terminal. Choose Roadside.',
       );
       return;
     }
@@ -1078,10 +1209,22 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           : _draftPickupPoint;
       _draftPickupLabel = payload.pickupStopRef;
       _draftUnloadLabel = payload.destinationStopRef;
+      if (payload.quotedPayload != null) {
+        final coordinates = (payload.quotedPayload!['members'] as List)
+            .first['destinationLocation']['coordinates'] as List;
+        _draftUnloadPoint = LatLng((coordinates[1] as num).toDouble(),
+            (coordinates[0] as num).toDouble());
+      }
       _bookingMode = payload.bookingMode;
       _draftBookingNote = payload.note;
     });
 
+    if (payload.quotedPayload?['_bookingCreated'] == true) {
+      setState(() => _statusMessage =
+          'Booking created. Drivers on this route can see your pickup; your assigned jeep will board you automatically.');
+      await _load();
+      return;
+    }
     if (_pickupBlockedReason != null) {
       setState(() => _statusMessage = _pickupBlockedReason);
       return;
@@ -1095,22 +1238,24 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       successMessage: payload.bookingMode == _PassengerBookingMode.terminal
           ? 'Terminal boarding request sent. A terminal-queue jeep on ${selectedRoute.label} has been notified.'
           : 'Booking request sent. The nearest eligible jeep on ${selectedRoute.label} has been notified.',
-      action: () => passengerService.createPickupRequest(
-        routeId: _selectedRouteId!,
-        partySize: payload.partySize,
-        pickupType: payload.bookingMode.apiValue,
-        pickupLat: payload.bookingMode == _PassengerBookingMode.terminal
-            ? null
-            : _draftPickupPoint!.latitude,
-        pickupLng: payload.bookingMode == _PassengerBookingMode.terminal
-            ? null
-            : _draftPickupPoint!.longitude,
-        destinationStopRef: payload.destinationStopRef,
-        destinationLat: _draftUnloadPoint!.latitude,
-        destinationLng: _draftUnloadPoint!.longitude,
-        stopRef: payload.pickupStopRef,
-        sourceNote: payload.note,
-      ),
+      action: () => payload.quotedPayload != null
+          ? passengerService.createQuotedBooking(payload.quotedPayload!)
+          : passengerService.createPickupRequest(
+              routeId: _selectedRouteId!,
+              partySize: payload.partySize,
+              pickupType: payload.bookingMode.apiValue,
+              pickupLat: payload.bookingMode == _PassengerBookingMode.terminal
+                  ? null
+                  : _draftPickupPoint!.latitude,
+              pickupLng: payload.bookingMode == _PassengerBookingMode.terminal
+                  ? null
+                  : _draftPickupPoint!.longitude,
+              destinationStopRef: payload.destinationStopRef,
+              destinationLat: _draftUnloadPoint!.latitude,
+              destinationLng: _draftUnloadPoint!.longitude,
+              stopRef: payload.pickupStopRef,
+              sourceNote: payload.note,
+            ),
     );
   }
 
@@ -1126,8 +1271,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     final offer = _transferOffers.first;
     final accept = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
-                title: const Text('Your terminal booking needs a new jeep'),
+        builder: (context) => GlassAlertDialog(
+                title: const Text('Change jeep?'),
                 content: Text(
                     'Your previous jeep departed or was skipped. Accept a seat on the current loading jeep when available. Your destination (${offer.destinationStopRef ?? "saved destination"}), fare and original expiry stay unchanged.'),
                 actions: [
@@ -1136,10 +1281,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                       child: const Text('Later')),
                   TextButton(
                       onPressed: () => Navigator.pop(context, false),
-                      child: const Text('Cancel booking')),
+                      child: const Text('Cancel')),
                   FilledButton(
                       onPressed: () => Navigator.pop(context, true),
-                      child: const Text('Accept transfer'))
+                      child: const Text('Change jeep'))
                 ]));
     if (accept == null || !mounted) return;
     final service =
@@ -1152,6 +1297,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   }
 
   Future<void> _board() async {
+    if (_selectedTripBooking?.flowVersion == 2) {
+      setState(() => _statusMessage =
+          'Keep your phone near the assigned jeep for 10 seconds. Your whole booking boards automatically.');
+      return;
+    }
+
     final acknowledgedRequests = _requests
         .where((request) => request.status == 'acknowledged')
         .toList()
@@ -1195,9 +1346,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
               capturedAt: _currentPassengerLocationAt);
         }
         if (request.partySize > 1) {
-          if (currentLocation == null)
+          if (currentLocation == null) {
             throw ApiException(400,
                 'Turn on location and stand near your assigned jeep before confirming your group is ready.');
+          }
           return passengerService.signalGroupReady(request.id);
         }
         return passengerService.validateBoarding(
@@ -1259,6 +1411,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       return;
     }
 
+    // New rides are completed by ordered driver GPS at each saved destination.
+    // Keep this legacy handler from opening a member picker or completing a v2 ride.
+    if (ride.flowVersion == 2) return;
     final confirmed = await _showUnloadConfirmationDialog(
       title: 'Confirm unload',
       message: ride.isGroup
@@ -1287,7 +1442,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   }) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => GlassAlertDialog(
         title: Text(title),
         content: Text(message),
         actions: [
@@ -1367,7 +1522,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     });
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+      GlassSnackBar(content: Text(message)),
     );
   }
 
@@ -1414,13 +1569,19 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     });
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+      GlassSnackBar(content: Text(message)),
     );
   }
 
   bool get _shouldReportPassengerLocationForRideAutomation =>
       _activeRide?.status == 'onboard' ||
-      _requests.any((request) => request.status == 'acknowledged');
+      _requests.any((request) =>
+          request.status == 'acknowledged' ||
+          (request.flowVersion == 2 && request.status == 'pending'));
+
+  bool get _shouldRefreshWaitingLocation =>
+      _shouldReportPassengerLocationForRideAutomation ||
+      _selectedTripBooking != null;
 
   Future<void> _reportPassengerLocationForAutoBoarding(LatLng location) async {
     if (!_shouldReportPassengerLocationForRideAutomation ||
@@ -1480,7 +1641,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       });
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
+        GlassSnackBar(content: Text(message)),
       );
       unawaited(_refreshPassengerMetadata(silent: true));
     } catch (_) {
@@ -1527,6 +1688,87 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   }
 
   Future<_PassengerBookingDetails?> _showPickupDialog() async {
+    final bookingService =
+        PassengerService(context.read<SessionController>().apiClient);
+    final capabilities = await bookingService.bookingCapabilities();
+    if (!mounted) return null;
+    if (capabilities['flowVersion'] == 2) {
+      final route = _selectedRoute!;
+      final terminal = _routeTerminalStop(route);
+      final pickup = _bookingMode == _PassengerBookingMode.terminal
+          ? terminal?.position
+          : _draftPickupPoint;
+      if (pickup == null) return null;
+      final candidates = _trips
+          .where((t) =>
+              t.routeId == route.id &&
+              t.flowVersion == 2 &&
+              t.status == 'active' &&
+              t.acceptRequests != false &&
+              (_bookingMode == _PassengerBookingMode.terminal
+                  ? t.operatingMode == 'terminal_queue' &&
+                      t.terminalQueueStatus == 'loading'
+                  : t.operatingMode != 'terminal_queue'))
+          .toList();
+      final seats = candidates.fold<int>(
+          0, (best, t) => math.max(best, _availableSeats(t) ?? 0));
+      if (seats < 1) {
+        setState(() => _statusMessage = candidates.isEmpty
+            ? (_bookingMode == _PassengerBookingMode.terminal
+                ? 'No jeep is loading at this terminal yet. Please wait for the next loading jeep.'
+                : 'No roadside jeep is ready for pickups yet. Choose terminal pickup if you are at the terminal.')
+            : 'No seats are available on this route.');
+        return null;
+      }
+      final choices = <Map<String, dynamic>>[
+        if (_draftUnloadPoint != null)
+          {
+            'destinationStopRef': _draftUnloadLabel ?? 'Selected drop-off',
+            'destinationLocation': {
+              'type': 'Point',
+              'coordinates': [
+                _draftUnloadPoint!.longitude,
+                _draftUnloadPoint!.latitude
+              ]
+            }
+          },
+        for (final stop in route.stopPoints)
+          {
+            'destinationStopRef': stop.name,
+            'destinationLocation': {
+              'type': 'Point',
+              'coordinates': [stop.position.longitude, stop.position.latitude]
+            }
+          },
+      ];
+      final body = await showDialog<Map<String, dynamic>>(
+          barrierDismissible: false,
+          context: context,
+          builder: (_) => GroupBookingDialog(
+                  service: bookingService,
+                  maxSeats: seats,
+                  destinations: choices,
+                  basePayload: {
+                    'routeId': route.id,
+                    'pickupType': _bookingMode.apiValue,
+                    'stopRef': _bookingMode == _PassengerBookingMode.terminal
+                        ? terminal?.name
+                        : _draftPickupLabel,
+                    'pickupLocation': {
+                      'type': 'Point',
+                      'coordinates': [pickup.longitude, pickup.latitude]
+                    }
+                  }));
+      if (body == null || !mounted) return null;
+      final member = (body['members'] as List).first as Map;
+      return _PassengerBookingDetails(
+          bookingMode: _bookingMode,
+          pickupStopRef: body['stopRef']?.toString() ?? 'Pickup',
+          destinationStopRef: member['destinationStopRef'].toString(),
+          partySize: (body['members'] as List).length,
+          quotedPayload: body);
+    }
+
     var groupsEnabled = false;
     try {
       groupsEnabled =
@@ -1608,17 +1850,16 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           );
         }
 
-        return AlertDialog(
+        return GlassAlertDialog(
           scrollable: true,
-          title: const Text('Book this route'),
+          title: const Text('Booking'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               if (groupsEnabled) ...[
                 DropdownButtonFormField<int>(
                   initialValue: selectedPartySize,
-                  decoration: const InputDecoration(
-                      labelText: 'People traveling, including you'),
+                  decoration: const InputDecoration(labelText: 'Passengers'),
                   items: List.generate(
                       maxPartySize,
                       (index) => DropdownMenuItem(
@@ -1630,10 +1871,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                     _draftPartySize = selectedPartySize;
                   }),
                 ),
-                const Text(
-                    'Everyone shares this pickup and destination. The driver confirms the actual boarded count. Change the group size by cancelling and booking again.'),
+                const Text('Shared drop-off ? Driver confirms count'),
                 if (selectedBookingMode == _PassengerBookingMode.terminal)
-                  Text('Loading jeep seats available: $terminalSeats'),
+                  Text('Seats: $terminalSeats'),
                 const SizedBox(height: 12),
               ],
               StatefulBuilder(
@@ -1643,7 +1883,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                     runSpacing: 8,
                     children: [
                       ChoiceChip(
-                        label: const Text('Roadside pickup'),
+                        label: const Text('Roadside'),
                         selected: selectedBookingMode ==
                             _PassengerBookingMode.roadside,
                         onSelected: (_) {
@@ -1656,7 +1896,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                         },
                       ),
                       ChoiceChip(
-                        label: const Text('Board from terminal'),
+                        label: const Text('Terminal'),
                         selected: selectedBookingMode ==
                             _PassengerBookingMode.terminal,
                         onSelected: terminalStop == null
@@ -1683,7 +1923,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'No jeep is loading at the terminal now. Choose roadside pickup, or try again when loading starts.',
+                      'Terminal full. Choose Roadside.',
                       style: TextStyle(color: Colors.deepOrange),
                     ),
                   ),
@@ -1704,8 +1944,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                       BookingFareReference(
                           regular: farePreview.amount,
                           partySize: selectedPartySize),
-                      const Text(
-                          'Be at your pickup before the booking expires. Remote booking does not extend the deadline.'),
+                      const Text('Arrive before booking expiry.'),
                       const SizedBox(height: 4),
                       Text(
                         '${farePreview.boardingStopRef} to ${farePreview.destinationStopRef}',
@@ -1723,7 +1962,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                     FocusManager.instance.primaryFocus?.unfocus(),
                 onSubmitted: (_) => FocusScope.of(context).nextFocus(),
                 decoration: const InputDecoration(
-                  labelText: 'Boarding landmark or stop reference',
+                  labelText: 'Pickup',
                 ),
               ),
               const SizedBox(height: 12),
@@ -1734,7 +1973,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                     FocusManager.instance.primaryFocus?.unfocus(),
                 onSubmitted: (_) => FocusScope.of(context).nextFocus(),
                 decoration: const InputDecoration(
-                  labelText: 'Unload landmark or stop reference',
+                  labelText: 'Drop-off',
                 ),
               ),
               const SizedBox(height: 12),
@@ -1745,7 +1984,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                     FocusManager.instance.primaryFocus?.unfocus(),
                 onSubmitted: (_) => submit(),
                 decoration: const InputDecoration(
-                  labelText: 'Optional note',
+                  labelText: 'Note',
                 ),
                 minLines: 2,
                 maxLines: 3,
@@ -1762,8 +2001,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
               child: Text(
                   selectedBookingMode == _PassengerBookingMode.terminal &&
                           !_hasTerminalSeats
-                      ? 'Switch to roadside'
-                      : 'Book now'),
+                      ? 'Roadside'
+                      : 'Book'),
             ),
           ],
         );
@@ -1777,7 +2016,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
 
   Future<_PassengerInput?> _showStopAlertDialog(RideSessionModel ride) async {
     final stopCtrl = TextEditingController(
-      text: ride.destinationStopRef ?? 'Next preferred drop-off point',
+      text: ride.flowVersion == 2
+          ? ride.members
+              .firstWhere((m) => m.status == 'onboard')
+              .destinationStopRef
+          : ride.destinationStopRef ?? 'Next preferred drop-off point',
     );
     final noteCtrl = TextEditingController();
     final result = await showDialog<_PassengerInput>(
@@ -1795,22 +2038,39 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           );
         }
 
-        return AlertDialog(
+        return GlassAlertDialog(
           scrollable: true,
-          title: const Text('Send digital para alert'),
+          title: const Text('Para'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(
-                controller: stopCtrl,
-                textInputAction: TextInputAction.next,
-                onTapOutside: (_) =>
-                    FocusManager.instance.primaryFocus?.unfocus(),
-                onSubmitted: (_) => FocusScope.of(context).nextFocus(),
-                decoration: const InputDecoration(
-                  labelText: 'Drop-off reference',
+              if (ride.flowVersion == 2)
+                DropdownButtonFormField<String>(
+                  initialValue: stopCtrl.text,
+                  isExpanded: true,
+                  items: ride.members
+                      .where((m) => m.status == 'onboard')
+                      .map((m) => m.destinationStopRef)
+                      .toSet()
+                      .map((name) => DropdownMenuItem(
+                          value: name,
+                          child: Text(name, overflow: TextOverflow.ellipsis)))
+                      .toList(),
+                  onChanged: (name) => stopCtrl.text = name!,
+                  decoration:
+                      const InputDecoration(labelText: 'Passenger drop-off'),
+                )
+              else
+                TextField(
+                  controller: stopCtrl,
+                  textInputAction: TextInputAction.next,
+                  onTapOutside: (_) =>
+                      FocusManager.instance.primaryFocus?.unfocus(),
+                  onSubmitted: (_) => FocusScope.of(context).nextFocus(),
+                  decoration: const InputDecoration(
+                    labelText: 'Drop-off reference',
+                  ),
                 ),
-              ),
               if (ride.destinationLatitude != null &&
                   ride.destinationLongitude != null) ...[
                 const SizedBox(height: 12),
@@ -1828,7 +2088,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                     FocusManager.instance.primaryFocus?.unfocus(),
                 onSubmitted: (_) => submit(),
                 decoration: const InputDecoration(
-                  labelText: 'Optional note for driver',
+                  labelText: 'Note for driver',
                 ),
                 minLines: 2,
                 maxLines: 3,
@@ -1842,7 +2102,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
             ),
             FilledButton(
               onPressed: submit,
-              child: const Text('Alert driver'),
+              child: const Text('Send'),
             ),
           ],
         );
@@ -2180,7 +2440,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         existingLocation != null &&
         existingTimestamp != null &&
         DateTime.now().difference(existingTimestamp) <
-            (_shouldReportPassengerLocationForRideAutomation
+            (_shouldRefreshWaitingLocation
                 ? const Duration(seconds: 5)
                 : const Duration(seconds: 20))) {
       return existingLocation;
@@ -2255,9 +2515,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
             capturedAt: capturedAt,
             now: DateTime.now(),
             accuracyMeters: position.accuracy)) {
+          _waitingMovement.rejectSample();
           if (mounted && _shouldReportPassengerLocationForRideAutomation) {
-            setState(() => _syncMessage =
-                'Fresh, accurate GPS is unavailable. Keep location enabled; use manual unload after getting off.');
+            setState(() => _syncMessage = 'GPS unavailable. Keep location on.');
           }
           return null;
         }
@@ -2285,6 +2545,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         if (!mounted) {
           return next;
         }
+        _checkWaitingMovement(position, rawNext);
         setState(() {
           _currentPassengerLocation = next;
           _currentPassengerLocationAt = capturedAt;
@@ -2947,21 +3208,20 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   }
 
   String _bookingStateText(PickupRequestModel request) {
-    final boardingLabel =
-        request.pickupType == 'terminal' ? 'terminal boarding' : 'pickup';
+    if (request.flowVersion == 2 && request.status == 'pending') {
+      return 'Waiting · Auto boarding';
+    }
     switch (request.status) {
       case 'pending':
-        return request.pickupType == 'terminal'
-            ? 'Waiting for terminal queue acknowledgement'
-            : 'Waiting for driver acknowledgement';
+        return 'Waiting';
       case 'acknowledged':
-        if (request.partySize > 1 && request.groupReadyAt != null)
-          return 'Group ready: waiting for driver confirmation of the boarded count';
-        return 'Driver acknowledged your $boardingLabel';
+        return request.partySize > 1 && request.groupReadyAt != null
+            ? 'Group ready'
+            : 'Ready';
       case 'completed':
-        return 'Boarding confirmed and ride is active';
+        return 'Onboard';
       case 'cancelled':
-        return 'Booking was cancelled';
+        return 'Cancelled';
       default:
         return ParagoFormat.statusLabel(request.status);
     }
@@ -2974,7 +3234,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     final canSetAsUnload = _draftPickupPoint != null &&
         _isUnloadAfterPickup(selectedRoute, _draftPickupPoint!, stop.position);
 
-    await showModalBottomSheet<void>(
+    await showGlassBottomSheet<void>(
       context: context,
       showDragHandle: true,
       backgroundColor: Colors.white,
@@ -3072,7 +3332,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                         });
                       },
                       icon: const Icon(Icons.flag_circle),
-                      label: const Text('Set as unload point'),
+                      label: const Text('Drop-off'),
                       style: FilledButton.styleFrom(
                         backgroundColor: const Color(0xFFD84315),
                       ),
@@ -3124,13 +3384,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   String _rideStatusMessage(RideSessionModel ride) {
     switch (ride.status) {
       case 'waiting':
-        return 'Boarding is being validated for this ride.';
+        return 'Boarding';
       case 'onboard':
-        return ride.canSendStopAlert == true
-            ? 'You are onboard and can send a digital para alert.'
-            : 'You are onboard for this ride.';
+        return 'Onboard';
       case 'completed':
-        return 'Drop-off completed. This ride session has been closed.';
+        return 'Arrived';
       default:
         return ParagoFormat.statusLabel(ride.status);
     }
@@ -3383,26 +3641,20 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       return Marker(
         rotate: true,
         point: _tripVehiclePoint(trip)!,
-        width: showDetails ? 220 : (trip.id == selectedTrip?.id ? 52 : 44),
-        height: showDetails ? 118 : (trip.id == selectedTrip?.id ? 52 : 44),
-        alignment: Alignment.bottomCenter,
-        child: _PassengerVehicleMarker(
-          color: trip.id == selectedTrip?.id
-              ? const Color(0xFF0F6A5F)
-              : const Color(0xFF2157A5),
-          size: trip.id == selectedTrip?.id ? 36 : 30,
+        width: RoadJeepMarker.extent,
+        height: RoadJeepMarker.extent,
+        alignment: Alignment.center,
+        child: RoadJeepMarker(
+          latitude: _tripVehiclePoint(trip)!.latitude,
           headingDegrees: _tripVehicleHeading(trip),
-          selected: showDetails,
-          plateNumber: etaPlateNumber?.isNotEmpty == true
-              ? etaPlateNumber!
-              : (trip.jeepneyPlateNumber ?? trip.jeepneyLabel),
-          etaLabel: _passengerEtaLabel(),
-          distanceLabel: _compactDistanceLabel(
-            etaDistance ?? directDistance,
-            fallback: 'Distance unavailable',
-          ),
-          seatsLabel: _availableSeatsLabel(trip),
-          freshnessLabel: _selectedJeepLocationFreshness(trip),
+          selected: trip.id == selectedTrip?.id,
+          label: 'Jeep ${trip.jeepneyPlateNumber ?? trip.jeepneyLabel}',
+          tooltip:
+              '${etaPlateNumber?.isNotEmpty == true ? etaPlateNumber : trip.jeepneyLabel} '
+              '${_passengerEtaLabel()} '
+              '${_compactDistanceLabel(etaDistance ?? directDistance, fallback: 'Distance unavailable')} '
+              '${_availableSeatsLabel(trip)} '
+              '${_selectedJeepLocationFreshness(trip)}',
           onTap: () => _selectPassengerJeep(trip),
         ),
       );
@@ -3429,23 +3681,29 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           rotate: true,
           point: _draftPickupPoint!,
           width: 180,
-          height: 78,
+          height: 112,
           alignment: Alignment.topCenter,
-          child: _PassengerMapPin(
-            label: 'PICKUP: ${_draftPickupLabel ?? "Meet here"}',
-            icon: Icons.person_pin_circle,
-            color: const Color(0xFF087F8C),
-          ),
+          child: _mapJourneyMembers.isNotEmpty
+              ? JourneyPickupPin(
+                  members: _mapJourneyMembers,
+                  pickup: _draftPickupLabel ?? 'Shared pickup')
+              : _PassengerMapPin(
+                  label: 'PICKUP: ${_draftPickupLabel ?? "Meet here"}',
+                  icon: Icons.person_pin_circle,
+                  color: const Color(0xFF087F8C),
+                ),
         ),
       );
     }
-    if (_draftUnloadPoint != null) {
+    if (_mapJourneyMembers.isNotEmpty) {
+      tripMarkers.insertAll(0, _memberDestinationMarkers());
+    } else if (_draftUnloadPoint != null) {
       tripMarkers.add(
         Marker(
           rotate: true,
           point: _draftUnloadPoint!,
           width: 180,
-          height: 78,
+          height: 112,
           alignment: Alignment.topCenter,
           child: _PassengerMapPin(
             label: 'DROP-OFF: ${_draftUnloadLabel ?? "Get off here"}',
@@ -3560,23 +3818,29 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           rotate: true,
           point: _draftPickupPoint!,
           width: 180,
-          height: 78,
+          height: 112,
           alignment: Alignment.topCenter,
-          child: _PassengerMapPin(
-            label: 'PICKUP: ${_draftPickupLabel ?? "Meet here"}',
-            icon: Icons.person_pin_circle,
-            color: const Color(0xFF087F8C),
-          ),
+          child: _mapJourneyMembers.isNotEmpty
+              ? JourneyPickupPin(
+                  members: _mapJourneyMembers,
+                  pickup: _draftPickupLabel ?? 'Shared pickup')
+              : _PassengerMapPin(
+                  label: 'PICKUP: ${_draftPickupLabel ?? "Meet here"}',
+                  icon: Icons.person_pin_circle,
+                  color: const Color(0xFF087F8C),
+                ),
         ),
       );
     }
-    if (_draftUnloadPoint != null) {
+    if (_mapJourneyMembers.isNotEmpty) {
+      tripMarkers.insertAll(0, _memberDestinationMarkers());
+    } else if (_draftUnloadPoint != null) {
       tripMarkers.add(
         Marker(
           rotate: true,
           point: _draftUnloadPoint!,
           width: 180,
-          height: 78,
+          height: 112,
           alignment: Alignment.topCenter,
           child: _PassengerMapPin(
             label: 'DROP-OFF: ${_draftUnloadLabel ?? "Get off here"}',
@@ -3994,7 +4258,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       final messenger = ScaffoldMessenger.of(context);
       messenger.hideCurrentSnackBar();
       messenger.showSnackBar(
-        SnackBar(
+        GlassSnackBar(
           content: Text(
             'Could not dismiss announcement. '
             '${ActionFeedback.messageOf(result.error!)}',
@@ -4005,7 +4269,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   }
 
   Future<void> _showPassengerNoticesSheet() async {
-    await showModalBottomSheet<void>(
+    await showGlassBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -4014,63 +4278,70 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         initialChildSize: 0.72,
         minChildSize: 0.45,
         maxChildSize: 0.94,
-        builder: (context, controller) => Material(
-          color: const Color(0xFFFFFEFB),
+        builder: (context, controller) => GlassSurface(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-          clipBehavior: Clip.antiAlias,
-          child: ListView(
-            controller: controller,
-            padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
-            children: [
-              Center(
-                child: Container(
-                  width: 52,
-                  height: 5,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFD9DDD7),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Text(
-                'Notices',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: 14),
-              if (_announcements.isEmpty && _notifications.isEmpty)
-                const Text('No notices yet.'),
-              for (final announcement in _announcements) ...[
-                AnnouncementCard(
-                  announcement: announcement,
-                  onDismiss: () {
-                    Navigator.pop(sheetContext);
-                    unawaited(_dismissAnnouncement(announcement));
-                  },
-                ),
-                const SizedBox(height: 12),
-              ],
-              for (final notification in _notifications) ...[
-                Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  child: ListTile(
-                    leading: Icon(
-                      notification.isRead
-                          ? Icons.mark_email_read_outlined
-                          : Icons.notifications_active,
-                    ),
-                    title: Text(notification.title, softWrap: true),
-                    subtitle: Text(
-                      '${notification.body}\n'
-                      '${ParagoFormat.relative(notification.createdAt)}',
-                      softWrap: true,
-                    ),
-                    isThreeLine: true,
-                  ),
-                ),
-              ],
-            ],
-          ),
+          child: Builder(
+              builder: (context) => ListView(
+                    controller: controller,
+                    padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 52,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFD9DDD7),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Text(
+                        'Notices',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: 14),
+                      if (_announcements.isEmpty && _notifications.isEmpty)
+                        const Text('No notices yet.'),
+                      for (final announcement in _announcements) ...[
+                        AnnouncementCard(
+                          announcement: announcement,
+                          onDismiss: () {
+                            Navigator.pop(sheetContext);
+                            unawaited(_dismissAnnouncement(announcement));
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      for (final notification in _notifications.where(
+                          (notice) =>
+                              !_hiddenNoticeIds.contains(notice.id))) ...[
+                        SwipeNotice(
+                            key: ValueKey(notification.id),
+                            onDismiss: () => setState(
+                                () => _hiddenNoticeIds.add(notification.id)),
+                            child: GlassCard(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              child: Builder(
+                                  builder: (context) => ListTile(
+                                        leading: Icon(
+                                          notification.isRead
+                                              ? Icons.mark_email_read_outlined
+                                              : Icons.notifications_active,
+                                        ),
+                                        title: Text(notification.title,
+                                            softWrap: true),
+                                        subtitle: Text(
+                                          '${notification.body}\n'
+                                          '${ParagoFormat.relative(notification.createdAt)}',
+                                          softWrap: true,
+                                        ),
+                                        isThreeLine: true,
+                                      )),
+                            )),
+                      ],
+                    ],
+                  )),
         ),
       ),
     );
@@ -5065,7 +5336,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   Future<void> _confirmPassengerLogout(SessionController session) async {
     final shouldLogout = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => GlassAlertDialog(
         title: const Text('Log out?'),
         content: const Text(
           'Are you sure you want to log out of the passenger application?',
@@ -5100,7 +5371,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         .where((route) => route.status == 'active')
         .toList(growable: false);
 
-    final result = await showModalBottomSheet<_PassengerProfileSettingsResult>(
+    final result = await showGlassBottomSheet<_PassengerProfileSettingsResult>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -5163,7 +5434,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       return;
     }
 
-    final selectedRouteId = await showModalBottomSheet<String>(
+    final selectedRouteId = await showGlassBottomSheet<String>(
       context: context,
       showDragHandle: true,
       backgroundColor: Colors.white,
@@ -5321,11 +5592,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
             target.latitude, target.longitude);
     if (!force &&
         previous != null &&
-        distanceMeters < _passengerMapFollowJitterMeters) return;
+        distanceMeters < _passengerMapFollowJitterMeters) {
+      return;
+    }
     if (!force &&
         _lastPassengerMapFollowAt != null &&
         now.difference(_lastPassengerMapFollowAt!) <
-            _passengerMapFollowThrottle) return;
+            _passengerMapFollowThrottle) {
+      return;
+    }
     final nextCenter = target;
     _lastPassengerFollowTarget = target;
     _lastPassengerMapFollowAt = now;
@@ -5370,8 +5645,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           target: 'passenger',
           sample: _currentPassengerLocationAt,
           now: DateTime.now());
-      if (_currentPassengerLocation != null)
+      if (_currentPassengerLocation != null) {
         _syncPassengerMapCamera(_currentPassengerLocation!, force: force);
+      }
       return;
     }
     if (tripId != null && onboardTrip.id != tripId) {
@@ -5405,9 +5681,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       return 'Choose a route';
     }
     if (_mapSelectionMode == _PassengerMapSelectionMode.pickup) {
-      return 'Tap the route to set pickup';
+      return 'Tap for pickup';
     }
-    return 'Tap ahead to set drop-off';
+    return 'Tap for drop-off';
   }
 
   void _dismissMapPromptNotification() {
@@ -5560,6 +5836,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   }
 
   int? _availableSeats(TripSession? trip) {
+    if (trip?.availableSeats != null) return trip!.availableSeats;
     final capacity = trip?.jeepneyCapacity;
     final occupancy = trip?.occupancyCount;
     if (capacity == null) {
@@ -5574,14 +5851,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       return 'Capacity sync pending';
     }
     return '$seats seat${seats == 1 ? '' : 's'} available';
-  }
-
-  String _passengerCountLabel(TripSession? trip) {
-    final passengerCount = trip?.occupancyCount;
-    if (passengerCount == null) {
-      return 'Passenger count syncing';
-    }
-    return '$passengerCount passenger${passengerCount == 1 ? '' : 's'} onboard';
   }
 
   double? _distanceFromJeepneyToBooking(
@@ -5761,7 +6030,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                       'Saved Places',
                       style: TextStyle(fontWeight: FontWeight.w600),
                     ),
-                    subtitle: const Text('Manage favorite locations'),
+                    subtitle: const Text('Places'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () {
                       Navigator.of(context).pop();
@@ -5786,7 +6055,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                       'Support',
                       style: TextStyle(fontWeight: FontWeight.w600),
                     ),
-                    subtitle: const Text('Chat with the admin team'),
+                    subtitle: const Text('Admin'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () {
                       Navigator.of(context).pop();
@@ -5842,7 +6111,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   }
 
   Future<void> _showHistoryBottomSheet() async {
-    await showModalBottomSheet<void>(
+    await showGlassBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -5975,7 +6244,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                                           unawaited(_cancelRequest(request.id));
                                         },
                                         icon: const Icon(Icons.close),
-                                        label: const Text('Cancel booking'),
+                                        label: const Text('Cancel'),
                                       ),
                                     ],
                                   ],
@@ -6102,163 +6371,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         : _PassengerMapSelectionMode.unload);
     await _onPassengerMapTap(selected.point);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    ScaffoldMessenger.of(context).showSnackBar(GlassSnackBar(
         content: Text(_statusMessage ??
             'Review your map pins before requesting pickup.')));
-  }
-
-  Future<void> _showSupportBottomSheet() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      backgroundColor: Colors.white,
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Support',
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Get help with your ParaGO experience',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: const Color(0xFF67726E),
-                      ),
-                ),
-                const SizedBox(height: 16),
-                FilledButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    unawaited(_openSupportCenter());
-                  },
-                  icon: const Icon(Icons.chat_bubble_outline_rounded),
-                  label: const Text('Open support chat'),
-                ),
-                const SizedBox(height: 24),
-                Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEAF5F2),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            width: 48,
-                            height: 48,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF0F6A5F),
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: const Icon(
-                              Icons.support_agent_rounded,
-                              color: Colors.white,
-                            ),
-                          ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Need assistance?',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleMedium
-                                      ?.copyWith(
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'We\'re here to help',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .bodyMedium
-                                      ?.copyWith(
-                                        color: const Color(0xFF4E5A56),
-                                      ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 20),
-                      _SupportTile(
-                        icon: Icons.email_outlined,
-                        title: 'Email Support',
-                        subtitle: 'support@parago.com',
-                        onTap: () {},
-                      ),
-                      const SizedBox(height: 12),
-                      _SupportTile(
-                        icon: Icons.phone_outlined,
-                        title: 'Hotline',
-                        subtitle: '+63 XXX XXX XXXX',
-                        onTap: () {},
-                      ),
-                      const SizedBox(height: 12),
-                      _SupportTile(
-                        icon: Icons.help_outline_rounded,
-                        title: 'FAQs',
-                        subtitle: 'Common questions answered',
-                        onTap: () {},
-                      ),
-                      const SizedBox(height: 12),
-                      _SupportTile(
-                        icon: Icons.info_outline_rounded,
-                        title: 'About ParaGO',
-                        subtitle: 'Version 1.0.0 (Thesis)',
-                        onTap: () {},
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFDF7E8),
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: const Color(0xFFFFE1A6)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.info_outline,
-                        color: Color(0xFFE29B2D),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'This is a thesis project for transportation support system research.',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-              ],
-            ),
-          ),
-        );
-      },
-    );
   }
 
   Future<void> _openSupportCenter() async {
@@ -6275,80 +6390,74 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     );
   }
 
-  String _routeQuickMeta(RouteSummaryModel route) {
-    final liveCount = _routeTrips(route.id).length;
-    final eta = _compactDurationLabel(
-      route.durationSeconds,
-      fallback: '${route.stopsCount} stops',
-    );
-    return '$eta · $liveCount live jeep${liveCount == 1 ? '' : 's'}';
-  }
-
   Widget _buildRouteSearchBar({
     required RouteSummaryModel? selectedRoute,
     required int liveTripCount,
   }) {
-    return Material(
-      color: Colors.white.withValues(alpha: 0.95),
-      borderRadius: BorderRadius.circular(26),
-      child: InkWell(
-        onTap: () {
-          unawaited(_openRoutePicker());
-        },
-        borderRadius: BorderRadius.circular(26),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.search_rounded,
-                color: Color(0xFF0F6A5F),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      selectedRoute?.label ?? 'Where are you going?',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: selectedRoute == null
-                                ? const Color(0xFF7D8784)
-                                : const Color(0xFF1F2B2A),
-                          ),
-                    ),
-                    if (selectedRoute != null) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        '$liveTripCount live jeep${liveTripCount == 1 ? '' : 's'} on this route',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: const Color(0xFF67726E),
+    return GlassCard(
+      child: Builder(
+          builder: (context) => InkWell(
+                onTap: () {
+                  unawaited(_openRoutePicker());
+                },
+                borderRadius: BorderRadius.circular(26),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.search_rounded,
+                        color: Colors.white,
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              selectedRoute?.label ?? 'Route',
+                              softWrap: true,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleSmall
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
                             ),
+                            if (selectedRoute != null) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                '$liveTripCount jeep${liveTripCount == 1 ? '' : 's'}',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
+                                      color: Colors.white,
+                                    ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFEAF5F2),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.keyboard_arrow_down_rounded,
+                          color: Color(0xFF0F6A5F),
+                        ),
                       ),
                     ],
-                  ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Container(
-                width: 40,
-                height: 40,
-                decoration: const BoxDecoration(
-                  color: Color(0xFFEAF5F2),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.keyboard_arrow_down_rounded,
-                  color: Color(0xFF0F6A5F),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+              )),
     );
   }
 
@@ -6393,243 +6502,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
               ),
             ],
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSelectedRouteCard({
-    required RouteSummaryModel? selectedRoute,
-    required TripSession? selectedTrip,
-    required PickupRequestModel? selectedBooking,
-    required List<TripSession> routeTrips,
-  }) {
-    if (selectedRoute == null) {
-      return Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF8F8F5),
-          borderRadius: BorderRadius.circular(28),
-        ),
-        child: const Text(
-          'Choose a route to unlock the pickup map, quick routes, and ride actions.',
-        ),
-      );
-    }
-
-    final nearestDistance = _distanceFromPassengerToTrip(selectedTrip);
-    final routeMeta = _compactDurationLabel(
-      selectedRoute.durationSeconds,
-      fallback: _compactDistanceLabel(
-        selectedRoute.distanceMeters,
-        fallback: 'Route ready',
-      ),
-    );
-
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(28),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 74,
-                height: 74,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEAF5F2),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: const Icon(
-                  Icons.directions_bus_filled_rounded,
-                  size: 40,
-                  color: Color(0xFF0F6A5F),
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            selectedRoute.name,
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleLarge
-                                ?.copyWith(fontWeight: FontWeight.w800),
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: routeTrips.isEmpty
-                                ? const Color(0xFFF0F2ED)
-                                : const Color(0xFFFFE083),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Text(
-                            routeTrips.isEmpty ? 'WAITING' : 'FASTEST',
-                            style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF5A4A14),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${selectedRoute.code} · ${selectedRoute.direction}',
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                            color: const Color(0xFF0F6A5F),
-                            fontWeight: FontWeight.w800,
-                          ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      selectedTrip == null
-                          ? 'No live jeepney is broadcasting on this route yet.'
-                          : '${_compactDistanceLabel(nearestDistance)} away · ${selectedTrip.jeepneyLabel}',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: const Color(0xFF4E5A56),
-                          ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      selectedTrip?.driverName?.isNotEmpty == true
-                          ? 'Driver ${selectedTrip!.driverName}'
-                          : routeMeta,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: const Color(0xFF67726E),
-                          ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF6F7F2),
-                    borderRadius: BorderRadius.circular(18),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Route est.',
-                        style:
-                            Theme.of(context).textTheme.labelMedium?.copyWith(
-                                  color: const Color(0xFF8A928F),
-                                  fontWeight: FontWeight.w700,
-                                ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        routeMeta,
-                        style:
-                            Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.w800,
-                                ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF6F7F2),
-                    borderRadius: BorderRadius.circular(18),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Seats available',
-                        style:
-                            Theme.of(context).textTheme.labelMedium?.copyWith(
-                                  color: const Color(0xFF8A928F),
-                                  fontWeight: FontWeight.w700,
-                                ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _availableSeatsLabel(selectedTrip),
-                        style:
-                            Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.w800,
-                                ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _passengerCountLabel(selectedTrip),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: const Color(0xFF67726E),
-                              fontWeight: FontWeight.w600,
-                            ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          if (selectedBooking != null) ...[
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFDF7E8),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: const Color(0xFFFFE1A6)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.place_outlined,
-                    color: Color(0xFFE29B2D),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      '${selectedBooking.stopRef ?? 'Pickup saved'} to ${selectedBooking.destinationStopRef ?? 'Unload saved'}',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                    ),
-                  ),
-                  StatusBadge(status: selectedBooking.status),
-                ],
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -6829,75 +6701,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     );
   }
 
-  Widget _buildRideSnapshotCard(RideSessionModel? displayRide) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8F8F5),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFE8E9E3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          PassengerSectionHeading(
-            title: 'Ride snapshot',
-            actionLabel: displayRide == null ? null : 'DETAILS',
-            onActionPressed: _expandPassengerSheet,
-          ),
-          const SizedBox(height: 10),
-          if (displayRide == null)
-            const Text(
-              'No verified ride session yet. Book a route, board, and your live ride details will appear here.',
-            )
-          else ...[
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                StatusBadge(status: displayRide.status),
-                if (displayRide.canSendStopAlert == true)
-                  const StatusBadge(status: 'para enabled'),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(_rideStatusMessage(displayRide)),
-            const SizedBox(height: 12),
-            _DetailRow(
-              label: 'Ride',
-              value: ParagoFormat.shortId(displayRide.id),
-            ),
-            _DetailRow(
-              label: 'Boarded',
-              value: ParagoFormat.dateTime(displayRide.boardedAt),
-            ),
-            _DetailRow(
-              label: 'Destination',
-              value: displayRide.destinationStopRef ?? 'Not saved',
-            ),
-            if (displayRide.estimatedFare != null)
-              _DetailRow(
-                label: 'Fare',
-                value: _formatFareAmount(displayRide.estimatedFare),
-              ),
-            if (displayRide.fareBoardingStopRef != null &&
-                displayRide.fareDestinationStopRef != null)
-              _DetailRow(
-                label: 'Fare landmarks',
-                value:
-                    '${displayRide.fareBoardingStopRef} to ${displayRide.fareDestinationStopRef}',
-              ),
-            if (displayRide.endedAt != null)
-              _DetailRow(
-                label: 'Dropped off',
-                value: ParagoFormat.dateTime(displayRide.endedAt),
-              ),
-          ],
-        ],
-      ),
-    );
-  }
-
   Widget _buildPassengerBottomSheet({
     required List<RouteSummaryModel> quickRoutes,
     required RouteSummaryModel? selectedRoute,
@@ -6911,12 +6714,30 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     required int onboardCount,
     required int unreadCount,
   }) {
+    final waiting = selectedBooking != null &&
+        {'pending', 'acknowledged', 'transfer_offered'}
+            .contains(selectedBooking.status);
+    final riding = activeRide?.status == 'onboard';
+    final members = riding
+        ? activeRide!.members
+        : waiting
+            ? selectedBooking.members
+            : const <JourneyMemberModel>[];
+    final pickup = waiting ? selectedBooking.stopRef : _draftPickupLabel;
+    final destination = riding
+        ? (activeRide!.flowVersion == 2
+            ? JourneyMemberModel.destinationSummary(activeRide.members
+                .where((member) => member.status == 'onboard')
+                .toList())
+            : activeRide.destinationsLabel)
+        : waiting
+            ? selectedBooking.destinationsLabel
+            : _draftUnloadLabel;
     return NotificationListener<DraggableScrollableNotification>(
       onNotification: (notification) {
-        final shouldCollapse =
-            notification.extent <= (_sheetCollapsedSize + 0.01);
-        if (shouldCollapse != _passengerSheetCollapsed && mounted) {
-          setState(() => _passengerSheetCollapsed = shouldCollapse);
+        final collapsed = notification.extent <= _sheetCollapsedSize + 0.01;
+        if (collapsed != _passengerSheetCollapsed && mounted) {
+          setState(() => _passengerSheetCollapsed = collapsed);
         }
         return false;
       },
@@ -6928,90 +6749,78 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         maxChildSize: _sheetExpandedSize,
         snap: true,
         snapSizes: const [_sheetCollapsedSize, _sheetPeekSize],
-        builder: (context, scrollController) {
-          return Container(
-            decoration: const BoxDecoration(
-              color: Color(0xFFFFFEFB),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(34)),
-            ),
-            child: RefreshIndicator(
-              onRefresh: _refreshPassengerData,
-              child: CustomScrollView(
-                controller: scrollController,
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                slivers: [
-                  SliverToBoxAdapter(
-                    child: Padding(
+        builder: (context, scrollController) => GlassSurface(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          child: Builder(
+              builder: (context) => RefreshIndicator(
+                    onRefresh: _refreshPassengerData,
+                    child: ListView(
+                      controller: scrollController,
                       padding: EdgeInsets.fromLTRB(
-                        18,
-                        12,
-                        18,
-                        24 + MediaQuery.of(context).padding.bottom,
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Center(
-                            child: Semantics(
-                              button: true,
-                              label: _passengerSheetCollapsed
-                                  ? 'Show trip details'
-                                  : 'Hide trip details',
-                              child: GestureDetector(
-                                onTap: _togglePassengerSheet,
-                                child: Container(
-                                  width: 92,
-                                  height: 8,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFD9DDD7),
-                                    borderRadius: BorderRadius.circular(999),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          if (_passengerSheetCollapsed) ...[
-                            Center(
-                              child: Text(
-                                'Trip details',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodyMedium
-                                    ?.copyWith(
-                                      color: const Color(0xFF67726E),
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                          ] else ...[
-                            const SizedBox(height: 8),
-                            if (_announcements.isNotEmpty) ...[
-                              AnnouncementCard(
-                                announcement: _announcements.first,
-                                compact: true,
-                                onDismiss: () => _dismissAnnouncement(
-                                  _announcements.first,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                            ],
-                            if (_statusMessage != null) ...[
-                              _InfoBanner(
+                          18, 8, 18, 18 + MediaQuery.paddingOf(context).bottom),
+                      children: [
+                        TextButton(
+                          onPressed: _togglePassengerSheet,
+                          child: Text(
+                              _passengerSheetCollapsed ? 'Show ride' : 'Ride'),
+                        ),
+                        if (!_passengerSheetCollapsed) ...[
+                          if (_statusMessage != null)
+                            _InfoBanner(
                                 message: _statusMessage!,
-                                onClose: () {
-                                  setState(() => _statusMessage = null);
-                                },
-                              ),
-                              const SizedBox(height: 16),
-                            ],
+                                onClose: () =>
+                                    setState(() => _statusMessage = null)),
+                          if (riding || waiting) ...[
+                            Row(children: [
+                              Expanded(
+                                  child: Text(
+                                      riding
+                                          ? 'Onboard'
+                                          : _bookingStateText(selectedBooking!),
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium)),
+                              if (riding)
+                                Text('${activeRide!.remainingCount} onboard'),
+                              if (waiting)
+                                TextButton(
+                                    onPressed: _loading
+                                        ? null
+                                        : () =>
+                                            _cancelRequest(selectedBooking.id),
+                                    child: const Text('Cancel')),
+                            ]),
+                            const SizedBox(height: 8),
+                          ],
+                          if (riding)
                             PassengerPrimaryButton(
-                              label: _pickupBlockedReason ??
-                                  (_pickupSubmitting
-                                      ? 'Preparing pickup...'
-                                      : 'Request pickup'),
+                                label: 'Para',
+                                icon: Icons.notifications_active_outlined,
+                                onPressed: _loading ? null : _sendPara),
+                          if (!riding)
+                            _DetailRow(
+                                label: 'Pickup',
+                                value: pickup ?? 'Choose on map'),
+                          _DetailRow(
+                              label: 'Drop-off',
+                              value: destination ?? 'Choose on map'),
+                          if (members.isNotEmpty)
+                            _DetailRow(
+                                label: 'Total',
+                                value: _formatFareAmount(members.fold<double>(
+                                    0, (sum, member) => sum + member.fare))),
+                          if (selectedTrip != null)
+                            _DetailRow(
+                                label: 'Jeep',
+                                value: selectedTrip.jeepneyLabel),
+                          if (waiting && selectedBooking.flowVersion == 2)
+                            const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 8),
+                                child: Text('Keep your phone near your jeep.')),
+                          const SizedBox(height: 12),
+                          if (!riding && !waiting)
+                            PassengerPrimaryButton(
+                              label: _pickupSubmitting ? 'Booking…' : 'Book',
                               icon: Icons.near_me_rounded,
                               onPressed: _loading ||
                                       _pickupSubmitting ||
@@ -7019,111 +6828,62 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                                   ? null
                                   : _sendPickup,
                             ),
-                            const SizedBox(height: 12),
-                            if (activeRide?.status != 'onboard' &&
-                                selectedBooking != null)
-                              PassengerSecondaryActionCard(
-                                icon: Icons.fact_check_outlined,
-                                title:
-                                    (_selectedTripBooking?.partySize ?? 1) > 1
-                                        ? 'My group is ready'
-                                        : 'I boarded',
-                                subtitle: '',
-                                color: const Color(0xFF2157A5),
-                                enabled: !_loading,
-                                onTap: _loading ? null : _board,
-                              ),
-                            const SizedBox(height: 12),
-                            if (activeRide?.status == 'onboard')
-                              PassengerSecondaryActionCard(
-                                icon: Icons.notifications_active_outlined,
-                                title: 'Send para alert',
-                                subtitle: '',
-                                color: const Color(0xFFE29B2D),
-                                enabled: !_loading &&
-                                    activeRide?.status == 'onboard',
-                                onTap:
-                                    _loading || activeRide?.status != 'onboard'
-                                        ? null
-                                        : _sendPara,
-                              ),
-                            const SizedBox(height: 12),
-                            if (activeRide?.status == 'onboard')
-                              PassengerSecondaryActionCard(
-                                icon: Icons.exit_to_app_outlined,
-                                title: 'I unloaded',
-                                subtitle: '',
-                                color: const Color(0xFF0F6A5F),
-                                enabled: !_loading &&
-                                    activeRide?.status == 'onboard',
-                                onTap:
-                                    _loading || activeRide?.status != 'onboard'
-                                        ? null
-                                        : _markUnloaded,
-                              ),
-                            if (_loading) ...[
-                              const SizedBox(height: 14),
-                              const LinearProgressIndicator(),
-                            ],
-                            if (displayRide != null) ...[
-                              const SizedBox(height: 20),
-                              Container(
-                                padding: const EdgeInsets.all(18),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF8F8F5),
-                                  borderRadius: BorderRadius.circular(24),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            'Current Ride',
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .titleMedium
-                                                ?.copyWith(
-                                                  fontWeight: FontWeight.w800,
-                                                ),
-                                          ),
-                                        ),
-                                        StatusBadge(status: displayRide.status),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 12),
-                                    Text(
-                                      displayRide.destinationStopRef ??
-                                          'Ride in progress',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyLarge
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      _rideStatusMessage(displayRide),
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ],
+                          if (!riding &&
+                              !waiting &&
+                              _pickupBlockedReason != null)
+                            Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Text(_pickupBlockedReason!)),
+                          if (waiting && selectedBooking.flowVersion != 2)
+                            PassengerPrimaryButton(
+                                label: selectedBooking.partySize > 1
+                                    ? 'Group ready'
+                                    : 'Boarded',
+                                icon: Icons.check,
+                                onPressed: _loading ? null : _board),
+                          if (members.isNotEmpty)
+                            JourneySummary(members: members),
+                          if (riding && activeRide!.flowVersion == 2)
+                            AutomaticDropoffStatus(members: members),
+                          if (riding && activeRide!.flowVersion != 2)
+                            ExpansionTile(
+                              title: const Text('Controls'),
+                              tilePadding: EdgeInsets.zero,
+                              childrenPadding:
+                                  const EdgeInsets.symmetric(vertical: 12),
+                              children: [
+                                SizedBox(
+                                    width: double.infinity,
+                                    child: OutlinedButton.icon(
+                                        icon: const Icon(
+                                            Icons.edit_location_alt_outlined),
+                                        label: const Text('Unloaded'),
+                                        onPressed:
+                                            _loading ? null : _markUnloaded))
+                              ],
+                            ),
+                          if (!riding && !waiting && selectedTrip != null)
+                            _DetailRow(
+                                label: 'Seats',
+                                value: _availableSeatsLabel(selectedTrip)),
+                          if (_announcements.isNotEmpty)
+                            ExpansionTile(
+                              title: const Text('Notice'),
+                              tilePadding: EdgeInsets.zero,
+                              children: [
+                                AnnouncementCard(
+                                    announcement: _announcements.first,
+                                    compact: true,
+                                    onDismiss: () => _dismissAnnouncement(
+                                        _announcements.first))
+                              ],
+                            ),
+                          if (_loading) const LinearProgressIndicator(),
                         ],
-                      ),
+                      ],
                     ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
+                  )),
+        ),
       ),
     );
   }
@@ -7131,6 +6891,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   @override
   Widget build(BuildContext context) {
     final session = context.read<SessionController>();
+    final movementBooking = _movementPromptBooking;
     final unreadCount =
         _notifications.where((notification) => !notification.isRead).length;
     final pendingCount = _requests
@@ -7175,16 +6936,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
               child: IgnorePointer(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Colors.black.withValues(alpha: 0.04),
-                        Colors.transparent,
-                        const Color(0xFF17312C).withValues(alpha: 0.28),
-                      ],
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      stops: const [0.0, 0.38, 1.0],
-                    ),
+                    color: Colors.transparent,
                   ),
                 ),
               ),
@@ -7208,120 +6960,94 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                         unawaited(_handleDashboardAction(session, action));
                       },
                     ),
-                    if (_terminalBookingFull)
-                      const Material(
-                          child: Padding(
-                              padding: EdgeInsets.all(8),
-                              child: Text(
-                                  'No terminal seats are available right now. Open booking to switch to roadside pickup, or try again when loading starts.'))),
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Tooltip(
-                          message:
-                              'Terminal loading: 4:30 AM to 7:30 PM. Departures depend on available jeeps; roadside trips may continue.',
-                          triggerMode: TooltipTriggerMode.tap,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: const Color(0xF7FFFFFF),
-                              borderRadius: BorderRadius.circular(16),
-                              border:
-                                  Border.all(color: const Color(0x22075E54)),
-                            ),
-                            child: const Text('Terminal · 4:30 AM–7:30 PM',
-                                style: TextStyle(
-                                    color: Color(0xFF19363A), fontSize: 11)),
-                          ),
-                        ),
+                    if (movementBooking != null) ...[
+                      const SizedBox(height: 12),
+                      WaitingCheckCard(
+                        reason: _waitingMovement.reason!,
+                        onWaiting: _loading ? null : _confirmStillWaiting,
+                        onCancel: _loading
+                            ? null
+                            : () => _cancelRequest(movementBooking.id),
                       ),
-                    ),
+                    ],
                     if (_transferOffers.isNotEmpty)
                       FilledButton.icon(
                           onPressed: _loading ? null : _showTransferOffers,
                           icon: const Icon(Icons.swap_horiz),
-                          label: Text(
-                              'Review terminal transfers (${_transferOffers.length})')),
+                          label:
+                              Text('Change jeep (${_transferOffers.length})')),
                     if (selectedTrip?.operatingMode == 'terminal_queue')
                       TerminalLoadingClock(
                           summary: selectedTrip?.terminalSummary),
-                    if (selectedTrip?.operatingMode == 'terminal_queue')
-                      Material(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Padding(
-                              padding: const EdgeInsets.all(8),
-                              child: Text(
-                                  'Terminal jeep: ${selectedTrip!.terminalQueueStatus}. ${selectedTrip.terminalSummary?["availableSeats"] ?? 0} unreserved seats. ${selectedTrip.terminalSummary?["availableSeats"] == 0 ? "Wait for departure before booking." : ""}'))),
                     const SizedBox(height: 14),
                     _buildRouteSearchBar(
                       selectedRoute: selectedRoute,
                       liveTripCount: routeTrips.length,
                     ),
                     const SizedBox(height: 12),
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          PassengerMapControlChip(
-                            label: 'Pickup',
-                            icon: Icons.person_pin_circle_outlined,
-                            selected: _mapSelectionMode ==
-                                _PassengerMapSelectionMode.pickup,
-                            onTap: () {
-                              setState(() {
-                                _mapSelectionMode =
-                                    _PassengerMapSelectionMode.pickup;
-                              });
-                              _showMapPromptNotification(
-                                route: selectedRoute,
-                                force: true,
-                              );
-                            },
-                          ),
-                          const SizedBox(width: 10),
-                          PassengerMapControlChip(
-                            label: 'Drop-off',
-                            icon: Icons.flag_circle_outlined,
-                            selected: _mapSelectionMode ==
-                                _PassengerMapSelectionMode.unload,
-                            onTap: _draftPickupPoint == null
-                                ? null
-                                : () {
-                                    setState(() {
-                                      _mapSelectionMode =
-                                          _PassengerMapSelectionMode.unload;
-                                    });
-                                    _showMapPromptNotification(
-                                      route: selectedRoute,
-                                      force: true,
-                                    );
-                                  },
-                          ),
-                          const SizedBox(width: 10),
-                          PassengerMapControlChip(
-                            label: 'Clear pins',
-                            icon: Icons.layers_clear_outlined,
-                            selected: false,
-                            onTap: _draftPickupPoint == null &&
-                                    _draftUnloadPoint == null
-                                ? null
-                                : () {
-                                    setState(() {
-                                      _draftPickupPoint = null;
-                                      _draftUnloadPoint = null;
-                                      _draftPickupLabel = null;
-                                      _draftUnloadLabel = null;
-                                      _mapSelectionMode =
-                                          _PassengerMapSelectionMode.pickup;
-                                    });
-                                    _refreshPassengerEtaForTargetChange();
-                                  },
-                          ),
-                        ],
+                    if (_pickupBlockedReason == null)
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            PassengerMapControlChip(
+                              label: 'Pickup',
+                              icon: Icons.person_pin_circle_outlined,
+                              selected: _mapSelectionMode ==
+                                  _PassengerMapSelectionMode.pickup,
+                              onTap: () {
+                                setState(() {
+                                  _mapSelectionMode =
+                                      _PassengerMapSelectionMode.pickup;
+                                });
+                                _showMapPromptNotification(
+                                  route: selectedRoute,
+                                  force: true,
+                                );
+                              },
+                            ),
+                            const SizedBox(width: 10),
+                            PassengerMapControlChip(
+                              label: 'Drop-off',
+                              icon: Icons.flag_circle_outlined,
+                              selected: _mapSelectionMode ==
+                                  _PassengerMapSelectionMode.unload,
+                              onTap: _draftPickupPoint == null
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        _mapSelectionMode =
+                                            _PassengerMapSelectionMode.unload;
+                                      });
+                                      _showMapPromptNotification(
+                                        route: selectedRoute,
+                                        force: true,
+                                      );
+                                    },
+                            ),
+                            const SizedBox(width: 10),
+                            PassengerMapControlChip(
+                              label: 'Clear',
+                              icon: Icons.layers_clear_outlined,
+                              selected: false,
+                              onTap: _draftPickupPoint == null &&
+                                      _draftUnloadPoint == null
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        _draftPickupPoint = null;
+                                        _draftUnloadPoint = null;
+                                        _draftPickupLabel = null;
+                                        _draftUnloadLabel = null;
+                                        _mapSelectionMode =
+                                            _PassengerMapSelectionMode.pickup;
+                                      });
+                                      _refreshPassengerEtaForTargetChange();
+                                    },
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -7354,19 +7080,19 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
             },
             itemBuilder: (context) => const [
               // Passenger user-menu items temporarily disabled:
-              // PopupMenuItem<String>(
+              // GlassPopupMenuItem<String>(
               //   value: 'profile',
               //   child: Text('Profile & settings'),
               // ),
-              // PopupMenuItem<String>(
+              // GlassPopupMenuItem<String>(
               //   value: 'refresh',
               //   child: Text('Refresh data'),
               // ),
-              PopupMenuItem<String>(
+              GlassPopupMenuItem<String>(
                 value: 'mark_all_read',
                 child: Text('Mark alerts read'),
               ),
-              PopupMenuItem<String>(
+              GlassPopupMenuItem<String>(
                 value: 'logout',
                 child: Text('Log out'),
               ),
@@ -7441,8 +7167,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                       value: pendingCount.toString(),
                       icon: Icons.event_seat_outlined,
                       accent: const Color(0xFFE29B2D),
-                      caption:
-                          'Bookings waiting for acknowledgement or boarding',
+                      caption: 'Bookings waiting for boarding',
                     ),
                     MetricCard(
                       label: 'Onboard rides',
@@ -7652,7 +7377,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                                       : () =>
                                           _cancelRequest(selectedBooking.id),
                                   icon: const Icon(Icons.close),
-                                  label: const Text('Cancel booking'),
+                                  label: const Text('Cancel'),
                                 ),
                               ),
                             ],
@@ -7663,7 +7388,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                     ],
                     _PassengerActionButton(
                       icon: Icons.event_seat_outlined,
-                      title: 'Book this route',
+                      title: 'Booking',
                       subtitle:
                           'Send your pinned pickup and unload points to the nearest eligible jeep',
                       onPressed: _loading ? null : _sendPickup,
@@ -7671,17 +7396,22 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                     const SizedBox(height: 12),
                     _PassengerActionButton(
                       icon: Icons.fact_check_outlined,
-                      title: (_selectedTripBooking?.partySize ?? 1) > 1
-                          ? 'My group is ready'
-                          : 'I boarded',
+                      title: _selectedTripBooking?.flowVersion == 2
+                          ? 'Automatic boarding'
+                          : (_selectedTripBooking?.partySize ?? 1) > 1
+                              ? 'My group is ready'
+                              : 'I boarded',
                       subtitle:
                           'Validate boarding using the unload point already saved in your booking',
-                      onPressed: _loading ? null : _board,
+                      onPressed:
+                          _loading || _selectedTripBooking?.flowVersion == 2
+                              ? null
+                              : _board,
                     ),
                     const SizedBox(height: 12),
                     _PassengerActionButton(
                       icon: Icons.notifications_active_outlined,
-                      title: 'Send digital para alert',
+                      title: 'Para',
                       subtitle:
                           'Available only for verified onboard passengers',
                       onPressed: _loading || activeRide?.status != 'onboard'
@@ -7690,16 +7420,19 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                       highlight: const Color(0xFFE29B2D),
                     ),
                     const SizedBox(height: 12),
-                    _PassengerActionButton(
-                      icon: Icons.exit_to_app_outlined,
-                      title: 'I unloaded',
-                      subtitle:
-                          'Manually close your ride after you get off the jeepney',
-                      onPressed: _loading || activeRide?.status != 'onboard'
-                          ? null
-                          : _markUnloaded,
-                      highlight: const Color(0xFF0F6A5F),
-                    ),
+                    if (activeRide?.flowVersion == 2)
+                      AutomaticDropoffStatus(members: activeRide!.members),
+                    if (activeRide?.flowVersion != 2)
+                      _PassengerActionButton(
+                        icon: Icons.exit_to_app_outlined,
+                        title: 'I unloaded',
+                        subtitle:
+                            'Manually close your ride after you get off the jeepney',
+                        onPressed: _loading || activeRide?.status != 'onboard'
+                            ? null
+                            : _markUnloaded,
+                        highlight: const Color(0xFF0F6A5F),
+                      ),
                     if (_loading) ...[
                       const SizedBox(height: 16),
                       const LinearProgressIndicator(),
@@ -8315,6 +8048,7 @@ class _PassengerInput {
 
 class _PassengerBookingDetails {
   const _PassengerBookingDetails({
+    this.quotedPayload,
     this.partySize = 1,
     required this.bookingMode,
     required this.pickupStopRef,
@@ -8322,6 +8056,7 @@ class _PassengerBookingDetails {
     this.note,
   });
 
+  final Map<String, dynamic>? quotedPayload;
   final _PassengerBookingMode bookingMode;
   final int partySize;
   final String pickupStopRef;
@@ -8432,177 +8167,6 @@ class _PassengerMapPin extends StatelessWidget {
   }
 }
 
-class _PassengerVehicleMarker extends StatelessWidget {
-  const _PassengerVehicleMarker({
-    required this.color,
-    required this.size,
-    required this.selected,
-    required this.plateNumber,
-    required this.etaLabel,
-    required this.distanceLabel,
-    required this.seatsLabel,
-    required this.freshnessLabel,
-    required this.onTap,
-    this.headingDegrees,
-  });
-
-  final Color color;
-  final double size;
-  final bool selected;
-  final String plateNumber;
-  final String etaLabel;
-  final String distanceLabel;
-  final String seatsLabel;
-  final String freshnessLabel;
-  final VoidCallback onTap;
-  final double? headingDegrees;
-
-  @override
-  Widget build(BuildContext context) {
-    final icon = Icon(
-      Icons.directions_bus_filled,
-      color: color,
-      size: size,
-    );
-
-    return Semantics(
-      button: true,
-      label: selected
-          ? '$plateNumber, $etaLabel, $distanceLabel'
-          : 'Select jeepney $plateNumber',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: selected
-            ? Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 214,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: const Color(0xFF0F6A5F).withValues(alpha: 0.24),
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.18),
-                          blurRadius: 14,
-                          offset: const Offset(0, 6),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                plateNumber,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Color(0xFF17312C),
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                            ),
-                            Text(
-                              etaLabel,
-                              style: const TextStyle(
-                                color: Color(0xFF0F6A5F),
-                                fontSize: 12,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          '$distanceLabel · $seatsLabel',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Color(0xFF55615D),
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          freshnessLabel,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Color(0xFF7A8580),
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Transform.rotate(
-                    angle: (((headingDegrees ?? 0) +
-                                MapCamera.of(context).rotation) *
-                            math.pi) /
-                        180,
-                    child: icon,
-                  ),
-                ],
-              )
-            : Center(
-                child: Transform.rotate(
-                  angle: (((headingDegrees ?? 0) +
-                              MapCamera.of(context).rotation) *
-                          math.pi) /
-                      180,
-                  child: icon,
-                ),
-              ),
-      ),
-    );
-  }
-}
-
-class _PassengerMapLabel extends StatelessWidget {
-  const _PassengerMapLabel({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(999),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.14),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Text(
-        label,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
-}
-
 class _RoleHero extends StatelessWidget {
   const _RoleHero({
     required this.title,
@@ -8676,42 +8240,40 @@ class _InfoBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.info_outline,
-              color: Theme.of(context).colorScheme.primary),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              message,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-          ),
-          if (onClose != null) ...[
-            const SizedBox(width: 8),
-            IconButton(
-              icon: const Icon(Icons.close, size: 20),
-              onPressed: onClose,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(
-                minWidth: 32,
-                minHeight: 32,
-              ),
-              tooltip: 'Dismiss',
-            ),
-          ],
-        ],
-      ),
-    );
+    return SwipeNotice(
+        key: ValueKey(message),
+        duration: onClose == null ? null : const Duration(seconds: 8),
+        onDismiss: () => onClose?.call(),
+        child: GlassSurface(
+          padding: const EdgeInsets.all(16),
+          child: Builder(
+              builder: (context) => Row(
+                    children: [
+                      Icon(Icons.info_outline,
+                          color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          message,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      if (onClose != null) ...[
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 20),
+                          onPressed: onClose,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 32,
+                            minHeight: 32,
+                          ),
+                          tooltip: 'Dismiss',
+                        ),
+                      ],
+                    ],
+                  )),
+        ));
   }
 }
 
@@ -8783,114 +8345,8 @@ class _DetailRow extends StatelessWidget {
   final String value;
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 92,
-            child: Text(
-              label,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              value,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({
-    required this.title,
-    this.trailing,
-  });
-
-  final String title;
-  final Widget? trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: Text(title, style: Theme.of(context).textTheme.titleLarge),
-        ),
-        if (trailing != null) trailing!,
-      ],
-    );
-  }
-}
-
-class _SupportTile extends StatelessWidget {
-  const _SupportTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: const Color(0xFF0F6A5F)),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: const Color(0xFF67726E),
-                        ),
-                  ),
-                ],
-              ),
-            ),
-            const Icon(
-              Icons.chevron_right,
-              color: Color(0xFF8A928F),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      ReadableDetailRow(label: label, value: value);
 }
 
 class _PassengerBookingSnapshot {

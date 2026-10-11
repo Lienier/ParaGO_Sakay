@@ -62,6 +62,20 @@ class AppTheme {
           letterSpacing: 0.2,
         ),
       ),
+      dialogTheme: const DialogThemeData(barrierColor: Color(0x52173033)),
+      popupMenuTheme: PopupMenuThemeData(
+        color: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        menuPadding: EdgeInsets.zero,
+        elevation: 8,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        labelTextStyle:
+            WidgetStateProperty.all(const TextStyle(color: _ink, fontSize: 14)),
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+      ),
       cardTheme: CardThemeData(
         color: _card,
         elevation: 0,

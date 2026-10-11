@@ -1,3 +1,4 @@
+import 'glass_surface.dart';
 import 'package:flutter/material.dart';
 
 class PassengerDashboardTopBar extends StatelessWidget {
@@ -18,108 +19,38 @@ class PassengerDashboardTopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.94),
-        borderRadius: BorderRadius.circular(26),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF0A3A35).withValues(alpha: 0.10),
-            blurRadius: 26,
-            offset: const Offset(0, 12),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          _IconBubble(
-            icon: Icons.menu_rounded,
-            onPressed: onMenuPressed,
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Text(
-              'Transit Flow',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFF0F6A5F),
-                  ),
-            ),
-          ),
-          Material(
-            color: const Color(0xFFEAF5F2),
-            borderRadius: BorderRadius.circular(999),
-            child: InkWell(
-              onTap: onNoticesPressed,
-              borderRadius: BorderRadius.circular(999),
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.notifications_active_outlined,
-                      size: 18,
-                      color: Color(0xFF0F6A5F),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '$unreadCount',
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                            fontWeight: FontWeight.w800,
-                            color: const Color(0xFF0F6A5F),
-                          ),
-                    ),
+    return GlassCard(
+      child: Builder(
+          builder: (context) => Row(children: [
+                IconButton(
+                    tooltip: 'Menu',
+                    icon: const Icon(Icons.menu),
+                    onPressed: onMenuPressed),
+                Expanded(
+                    child: Text('SAKAY',
+                        style: Theme.of(context).textTheme.titleMedium)),
+                IconButton(
+                    tooltip: 'Notices',
+                    onPressed: onNoticesPressed,
+                    icon: Badge(
+                        isLabelVisible: unreadCount > 0,
+                        label: Text('$unreadCount'),
+                        child: const Icon(Icons.notifications_none))),
+                PopupMenuButton<String>(
+                  clipBehavior: Clip.antiAlias,
+                  tooltip: 'More',
+                  onSelected: (action) => action == 'refresh'
+                      ? onRefreshPressed()
+                      : onAccountSelected(action),
+                  itemBuilder: (_) => const [
+                    GlassPopupMenuItem(
+                        value: 'refresh', child: Text('Refresh')),
+                    GlassPopupMenuItem(
+                        value: 'mark_all_read', child: Text('Read all')),
+                    GlassPopupMenuItem(value: 'logout', child: Text('Log out')),
                   ],
                 ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          _IconBubble(
-            icon: Icons.refresh_rounded,
-            onPressed: onRefreshPressed,
-          ),
-          const SizedBox(width: 10),
-          PopupMenuButton<String>(
-            onSelected: onAccountSelected,
-            itemBuilder: (context) => const [
-              // Passenger user-menu items temporarily disabled:
-              // PopupMenuItem<String>(
-              //   value: 'profile',
-              //   child: Text('Profile & settings'),
-              // ),
-              // PopupMenuItem<String>(
-              //   value: 'refresh',
-              //   child: Text('Refresh data'),
-              // ),
-              PopupMenuItem<String>(
-                value: 'mark_all_read',
-                child: Text('Mark alerts read'),
-              ),
-              PopupMenuItem<String>(
-                value: 'logout',
-                child: Text('Log out'),
-              ),
-            ],
-            child: Container(
-              width: 42,
-              height: 42,
-              decoration: const BoxDecoration(
-                color: Color(0xFF0F6A5F),
-                shape: BoxShape.circle,
-              ),
-              child: const Center(
-                child: Icon(
-                  Icons.person_outline_rounded,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+              ])),
     );
   }
 }
@@ -545,32 +476,6 @@ class PassengerMapControlChip extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _IconBubble extends StatelessWidget {
-  const _IconBubble({
-    required this.icon,
-    required this.onPressed,
-  });
-
-  final IconData icon;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 42,
-      height: 42,
-      decoration: const BoxDecoration(
-        color: Color(0xFFEAF5F2),
-        shape: BoxShape.circle,
-      ),
-      child: IconButton(
-        onPressed: onPressed,
-        icon: Icon(icon, color: const Color(0xFF0F6A5F)),
       ),
     );
   }

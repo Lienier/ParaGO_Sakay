@@ -1160,6 +1160,8 @@ String _sectionLabel(_AdminWorkspaceSection section) {
       return 'Overview';
     case _AdminWorkspaceSection.dispatch:
       return 'Terminal dispatch';
+    case _AdminWorkspaceSection.fleet:
+      return 'Live fleet map';
     case _AdminWorkspaceSection.reports:
       return 'Reports';
     case _AdminWorkspaceSection.drivers:

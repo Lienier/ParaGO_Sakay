@@ -17,6 +17,8 @@ const fareSnapshotSchema = new Schema(
 
 const rideSessionSchema = new Schema(
   {
+    flowVersion: { type: Number, enum: [1, 2], default: 1 },
+    members: { type: [require('./journeyMember')], default: undefined },
     passengerId: { type: Schema.Types.ObjectId, ref: 'Passenger', required: true },
     tripSessionId: { type: Schema.Types.ObjectId, ref: 'TripSession', required: true },
     pickupRequestId: { type: Schema.Types.ObjectId, ref: 'PickupRequest', required: true },
@@ -57,6 +59,7 @@ const rideSessionSchema = new Schema(
     regularTotal: { type: Number, min: 0 },
     boardingMutationId: String,
     unloadMutations: { type: [new Schema({
+      memberIds: [String], destinationStopRef: String, destinationLocation: { type: { type: String, enum: ['Point'] }, coordinates: [Number] },
       requestId: String, actorId: String, count: Number, revision: Number,
       actorRole: String, method: String,
       remainingCount: Number, at: Date,
@@ -66,9 +69,11 @@ const rideSessionSchema = new Schema(
       enum: ['waiting', 'onboard', 'completed'],
       default: 'waiting',
     },
+    destinationArrival: { streamId: String, sequence: Number, destinationKey: String, startedAt: Date, lastCapturedAt: Date, observations: Number },
+    lastAutomationCheck: { at: Date, reason: String, streamId: String, sequence: Number },
     offboardingMethod: {
       type: String,
-      enum: ['manual', 'auto_separation', 'trip_ended'],
+      enum: ['manual', 'auto_separation', 'auto_destination', 'trip_ended'],
     },
     autoOffboarding: {
       lastPassengerSampleAt: { type: Date },
@@ -86,6 +91,16 @@ const rideSessionSchema = new Schema(
   },
   { timestamps: true }
 );
+
+rideSessionSchema.pre('validate', function(next) {
+  if (this.flowVersion !== 2) return next();
+  if (!this.members?.length || this.members.filter(m => m.organizer).length !== 1 || new Set(this.members.map(m => m.memberId)).size !== this.members.length) return next(new Error('A booking needs one organizer and unique members'));
+  this.partySize = this.members.length;
+  this.regularTotal = Math.round(this.members.reduce((sum, m) => sum + m.fareSnapshot.amount, 0) * 100) / 100;
+  this.boardedCount = this.members.filter(m => m.status === 'onboard' || m.status === 'completed').length;
+  this.remainingCount = this.members.filter(m => m.status === 'onboard').length;
+  next();
+});
 
 rideSessionSchema.index({ passengerId: 1, tripSessionId: 1, status: 1 });
 rideSessionSchema.index({ tripSessionId: 1, status: 1 });

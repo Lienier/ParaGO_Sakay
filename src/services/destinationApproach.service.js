@@ -72,6 +72,7 @@ const processDestinationApproachAlerts = async ({
   const rides = await RideSession.find({
     tripSessionId,
     status: 'onboard',
+    flowVersion: { $ne: 2 },
     'destinationLocation.coordinates.1': { $exists: true },
     ...unresolvedDestinationApproachQuery,
   }).select('passengerId tripSessionId destinationStopRef destinationLocation');
@@ -115,15 +116,34 @@ const processDestinationApproachAlerts = async ({
       continue;
     }
 
-    await publishDestinationApproachNotifications({
+    try { await publishDestinationApproachNotifications({
       ride: claimedRide,
       driverUserId,
       thresholdMeters,
       triggeredAt,
     });
+    } catch (_) { console.error('[Destination approach] Notification failed after claim'); }
     notifiedRideIds.push(claimedRide._id.toString());
   }
 
+  const groups = await RideSession.find({ tripSessionId, flowVersion: 2, status: 'onboard' });
+  for (const ride of groups) {
+    const destinations = new Set();
+    for (const member of ride.members.filter(m => m.status === 'onboard' && !m.approachAlertedAt)) {
+      const key = require('../utils/destinationArrival').destinationKey(member);
+      if (destinations.has(key)) continue;
+      destinations.add(key);
+      const memberRide = { ...ride.toObject(), destinationLocation: member.destinationLocation, destinationStopRef: member.destinationStopRef };
+      if (!isRideWithinDestinationApproachThreshold({ ride: memberRide, latitude, longitude, thresholdMeters, previousLatitude, previousLongitude })) continue;
+      const triggeredAt = new Date();
+      const updated = await RideSession.findOneAndUpdate({ _id: ride._id, status: 'onboard', members: { $elemMatch: { memberId: member.memberId, approachAlertedAt: null, status: 'onboard' } } },
+        { $set: { 'members.$[member].approachAlertedAt': triggeredAt } }, { new: true, arrayFilters: [{ 'member.destinationLocation.coordinates': member.destinationLocation.coordinates, 'member.status': 'onboard' }] });
+      if (updated) {
+        try { await publishDestinationApproachNotifications({ ride: memberRide, driverUserId, thresholdMeters, triggeredAt }); }
+        catch (_) { console.error('[Destination approach] Notification failed after claim'); }
+      }
+    }
+  }
   return notifiedRideIds;
 };
 

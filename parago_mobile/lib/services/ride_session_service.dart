@@ -33,17 +33,23 @@ class RideSessionService {
   }
 
   Future<RideSessionModel> completeRideSession(String rideSessionId,
-      {RideSessionModel? ride, int? count}) async {
+      {RideSessionModel? ride, int? count, List<String>? memberIds}) async {
     final response = await _client.request(
       method: 'PATCH',
       path: '/ride-sessions/$rideSessionId/complete',
-      body: ride?.isGroup == true
+      body: ride?.flowVersion == 2
           ? {
-              'count': count,
+              'memberIds': memberIds,
               'revision': ride!.revision,
-              'requestId': 'driver-$rideSessionId-${ride.revision}-$count',
+              'requestId': '$rideSessionId-${ride.revision}-manual-correction',
             }
-          : const <String, dynamic>{},
+          : ride?.isGroup == true
+              ? {
+                  'count': count,
+                  'revision': ride!.revision,
+                  'requestId': 'driver-$rideSessionId-${ride.revision}-$count',
+                }
+              : const <String, dynamic>{},
     );
     return RideSessionModel.fromJson(response['data'] as Map<String, dynamic>);
   }

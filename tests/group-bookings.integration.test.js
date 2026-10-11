@@ -27,7 +27,8 @@ async function fixture(capacity = 6) {
   const driverUser = await User.create({ email: `${new mongoose.Types.ObjectId()}@group.test`, fullName: 'Group driver', role: 'DRIVER' });
   const driver = await Driver.create({ userId: driverUser._id, status: 'active' });
   const jeep = await Jeep.create({ plateNumber: `TEST ${Date.now()}1`, capacity, lastKnownLocation: point, lastSeenAt: new Date() });
-  const trip = await Trip.create({ driverId: driver._id, jeepneyId: jeep._id, routeId: new mongoose.Types.ObjectId(), status: 'active', operatingMode: 'route', acceptRequests: true });
+  const route = await require('../src/models/route').create({ name: 'Group test route', code: String(new mongoose.Types.ObjectId()), status: 'active' });
+  const trip = await Trip.create({ driverId: driver._id, jeepneyId: jeep._id, routeId: route._id, status: 'active', operatingMode: 'route', acceptRequests: true });
   return { passenger, driver, jeep, trip };
 }
 function booking(f, size = 3) { return { passengerId: f.passenger._id, tripSessionId: f.trip._id, routeId: f.trip.routeId,

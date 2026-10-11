@@ -43,7 +43,7 @@ async function createTerminalIntent({ driverId, routeId, jeepneyId, assignedRout
     }
     if (!trip) {
       [trip] = await Trip.create([{
-        driverId, jeepneyId, routeId, status: 'scheduled', active: false,
+        flowVersion: require('../config/env').automaticGroupFlowEnabled ? 2 : 1, driverId, jeepneyId, routeId, status: 'scheduled', active: false,
         acceptRequests: false, operatingMode: 'terminal_queue', terminalQueueStatus: 'off_queue',
         routePathSnapshot: route.path?.coordinates?.length >= 2 ? route.path : undefined,
         terminalStopRef: terminal.stopRef, terminalLocation: terminal.location,

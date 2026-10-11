@@ -79,8 +79,8 @@ router.patch(
       actorRole: req.user.role,
       actorUserId: req.user._id,
       completionMethod: 'manual',
-      groupAction: (session.partySize ?? 1) > 1 ? {
-        count: req.body.count, requestId: req.body.requestId, revision: req.body.revision,
+      groupAction: session.flowVersion === 2 || (session.partySize ?? 1) > 1 ? {
+        memberIds: req.body.memberIds, count: req.body.count, requestId: req.body.requestId, revision: req.body.revision,
       } : null,
     });
     return ok(res, completedSession, completedSession.status === 'completed' ? 'Ride session completed' : 'Group passenger count updated');

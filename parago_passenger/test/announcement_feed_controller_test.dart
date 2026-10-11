@@ -117,12 +117,7 @@ void main() {
     final bodyText = tester.widget<Text>(find.text(body));
     expect(bodyText.maxLines, isNull);
     expect(
-      tester.widgetList<Container>(find.byType(Container)).any(
-            (container) =>
-                container.decoration is BoxDecoration &&
-                (container.decoration! as BoxDecoration).color ==
-                    const Color(0xFFFFF1CE),
-          ),
+      tester.widget<Icon>(find.byIcon(Icons.campaign_rounded)).color == const Color(0xFFFFD77A),
       isTrue,
     );
     expect(tester.takeException(), isNull);
@@ -145,9 +140,9 @@ void main() {
   testWidgets('announcement card applies every severity palette',
       (tester) async {
     const expectedColors = {
-      'info': Color(0xFFE1F4F1),
-      'warning': Color(0xFFFFF1CE),
-      'critical': Color(0xFFFFE4E1),
+      'info': Color(0xFFB8EFE0),
+      'warning': Color(0xFFFFD77A),
+      'critical': Color(0xFFFFB4AB),
     };
 
     for (final entry in expectedColors.entries) {
@@ -165,11 +160,7 @@ void main() {
         ),
       );
       expect(
-        tester.widgetList<Container>(find.byType(Container)).any(
-              (container) =>
-                  container.decoration is BoxDecoration &&
-                  (container.decoration! as BoxDecoration).color == entry.value,
-            ),
+        tester.widget<Icon>(find.byIcon(Icons.campaign_rounded)).color == entry.value,
         isTrue,
       );
     }

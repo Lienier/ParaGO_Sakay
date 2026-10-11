@@ -1,3 +1,4 @@
+import 'glass_surface.dart';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -107,7 +108,11 @@ class _AppUpdateGateState extends State<AppUpdateGate>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(required ? 'Major update available' : 'Update available',
-              style: Theme.of(context).textTheme.titleLarge),
+              softWrap: true,
+              style: Theme.of(context)
+                  .textTheme
+                  .titleLarge
+                  ?.copyWith(color: Colors.white)),
           const SizedBox(height: 8),
           Text(required
               ? (deferred
@@ -147,17 +152,21 @@ class _AppUpdateGateState extends State<AppUpdateGate>
                             child: ConstrainedBox(
                                 constraints:
                                     const BoxConstraints(maxWidth: 480),
-                                child: content))))))
+                                child: GlassSurface(
+                                    padding: const EdgeInsets.all(20),
+                                    child: Builder(
+                                        builder: (context) => content))))))))
       else if (_dismissed != build)
         Positioned(
             left: 12,
             right: 12,
             top: 0,
             child: SafeArea(
-                child: Card(
-                    elevation: 6,
-                    child: Padding(
-                        padding: const EdgeInsets.all(16), child: content)))),
+                child: GlassCard(
+                    child: Builder(
+                        builder: (context) => Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: content))))),
     ]);
   }
 }

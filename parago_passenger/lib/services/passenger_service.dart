@@ -7,6 +7,29 @@ class PassengerService {
 
   final ApiClient _client;
 
+  Future<Map<String, dynamic>> bookingCapabilities() async {
+    final response = await _client.request(
+        method: 'GET', path: '/pickup-requests/capabilities', useCache: false);
+    return Map<String, dynamic>.from(response['data'] as Map);
+  }
+
+  Future<Map<String, dynamic>> quoteBooking(Map<String, dynamic> body) async {
+    final response = await _client.request(
+        method: 'POST',
+        path: '/pickup-requests/quote',
+        body: body,
+        useCache: false);
+    return Map<String, dynamic>.from(response['data'] as Map);
+  }
+
+  Future<PickupRequestModel> createQuotedBooking(
+      Map<String, dynamic> body) async {
+    final response = await _client.request(
+        method: 'POST', path: '/pickup-requests', body: body);
+    return PickupRequestModel.fromJson(
+        Map<String, dynamic>.from(response['data'] as Map));
+  }
+
   Future<bool> groupBookingsEnabled() async {
     final response = await _client.request(
         method: 'GET', path: '/pickup-requests/capabilities', useCache: false);
@@ -172,18 +195,24 @@ class PassengerService {
   }
 
   Future<RideSessionModel> completeRideSession(String rideSessionId,
-      {RideSessionModel? ride}) async {         
+      {RideSessionModel? ride, int? count, List<String>? memberIds}) async {
     final response = await _client.request(
       method: 'PATCH',
       path: '/ride-sessions/$rideSessionId/complete',
-      body: ride?.isGroup == true
+      body: ride?.flowVersion == 2
           ? {
-              'count': ride!.remainingCount,
-              'revision': ride.revision,
-              'requestId':
-                  'passenger-$rideSessionId-${ride.revision}-${ride.remainingCount}',
+              'memberIds': memberIds,
+              'revision': ride!.revision,
+              'requestId': '$rideSessionId-${ride.revision}-manual-correction',
             }
-          : const <String, dynamic>{},
+          : ride?.isGroup == true
+              ? {
+                  'count': ride!.remainingCount,
+                  'revision': ride.revision,
+                  'requestId':
+                      'passenger-$rideSessionId-${ride.revision}-${ride.remainingCount}',
+                }
+              : const <String, dynamic>{},
     );
     return RideSessionModel.fromJson(response['data'] as Map<String, dynamic>);
   }

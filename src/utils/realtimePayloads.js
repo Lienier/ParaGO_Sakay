@@ -45,6 +45,9 @@ const serializePickupRequest = (request) => {
     tripSessionId: request.tripSessionId?.toString() || '',
     routeId: request.routeId?.toString() || '',
     status: request.status?.toString() || '',
+    flowVersion: request.flowVersion ?? 1,
+    members: request.members?.map(m => m.toObject?.() || m),
+    regularTotal: request.regularTotal,
     partySize: request.partySize ?? 1,
     groupReadyAt: toIsoString(request.groupReadyAt),
     transferOfferId: request.transferOfferId || null,
@@ -82,6 +85,8 @@ const serializeRideSession = (session) => {
       'destinationLocation'
     ),
     status: session.status?.toString() || '',
+    flowVersion: session.flowVersion ?? 1,
+    members: session.members?.map(m => m.toObject?.() || m),
     partySize: session.partySize ?? 1,
     boardedCount: session.boardedCount ?? 1,
     remainingCount: session.status === 'completed' ? 0 : session.remainingCount ?? 1,

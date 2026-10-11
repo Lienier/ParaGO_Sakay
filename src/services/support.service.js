@@ -1,4 +1,5 @@
 const User = require('../models/user');
+const mongoose = require('mongoose');
 const Driver = require('../models/driver');
 const Passenger = require('../models/passenger');
 const Route = require('../models/route');
@@ -158,7 +159,10 @@ const validatePassengerContext = async ({ passenger, tripSessionId, pickupReques
 
 const validateDriverContext = async ({ driver, tripSessionId, routeId }) => {
   if (!tripSessionId) {
-    throw new ApiError(400, 'tripSessionId is required for driver support threads');
+    if (routeId && String(routeId) !== String(driver.assignedRouteId)) {
+      throw new ApiError(403, 'You can only link your assigned route');
+    }
+    return { tripSessionId: null, routeId: routeId || driver.assignedRouteId || null };
   }
 
   const tripSession = await TripSession.findById(tripSessionId);
@@ -300,6 +304,7 @@ const sendSupportNotifications = async ({ thread, message, senderRole }) => {
 const createSupportThread = async ({ user, subject, category, message, tripSessionId, pickupRequestId, rideSessionId, routeId }) => {
   const role = normalizeThreadRole(user);
   ensureSupportRole(role);
+  const messageBody = normalizeSupportMessageBody(message);
 
   const context = await resolveThreadContext({
     user,
@@ -309,7 +314,10 @@ const createSupportThread = async ({ user, subject, category, message, tripSessi
     routeId,
   });
 
-  const thread = await SupportThread.create({
+  const session = await mongoose.startSession();
+  let thread, supportMessage;
+  try { await session.withTransaction(async () => {
+  [thread] = await SupportThread.create([{
     userId: user._id,
     userRole: role,
     subject: normalizeSupportSubject(subject),
@@ -322,29 +330,30 @@ const createSupportThread = async ({ user, subject, category, message, tripSessi
     unreadAdminCount: 1,
     unreadUserCount: 0,
     lastMessageAt: new Date(),
-    lastMessagePreview: String(message || '').trim().slice(0, 160),
+    lastMessagePreview: messageBody.slice(0, 160),
     lastMessageSenderRole: role,
-  });
+  }], { session });
 
-  const supportMessage = await SupportMessage.create({
+  [supportMessage] = await SupportMessage.create([{
     threadId: thread._id,
     senderId: user._id,
     senderRole: role,
-    body: normalizeSupportMessageBody(message),
-  });
+    body: messageBody,
+  }], { session });
 
   thread.subject = thread.subject || thread.category.replace(/_/g, ' ');
   thread.lastMessageAt = supportMessage.createdAt || new Date();
   thread.lastMessagePreview = supportMessage.body.slice(0, 160);
   thread.lastMessageSenderRole = role;
-  await thread.save();
+  await thread.save({ session });
+  }); } finally { await session.endSession(); }
 
   const populatedThread = await populateThread(thread);
   await sendSupportNotifications({
     thread: populatedThread,
     message: supportMessage,
     senderRole: role,
-  });
+  }).catch(() => console.error('[Support] Notification delivery failed after the thread was saved'));
   await emitSupportThreadEvent({
     thread: populatedThread,
     eventName: 'support.thread.created',
@@ -396,7 +405,7 @@ const listThreadMessages = async ({ user, threadId }) => {
 };
 
 const addSupportMessage = async ({ user, threadId, body }) => {
-  const thread = await resolveThreadAccess({ user, threadId });
+  let thread = await resolveThreadAccess({ user, threadId });
   const role = normalizeThreadRole(user);
   ensureSupportRole(role);
 
@@ -404,32 +413,33 @@ const addSupportMessage = async ({ user, threadId, body }) => {
     throw new ApiError(409, 'Closed support threads must be reopened before sending new messages');
   }
 
-  const message = await SupportMessage.create({
+  const messageBody = normalizeSupportMessageBody(body);
+  const session = await mongoose.startSession();
+  let message;
+  try { await session.withTransaction(async () => {
+  const now = new Date();
+  thread = await SupportThread.findOneAndUpdate({ _id: threadId, status: { $ne: 'closed' } }, {
+    $set: { lastMessageAt: now, lastMessagePreview: messageBody.slice(0, 160), lastMessageSenderRole: role,
+      status: role === 'ADMIN' ? 'awaiting_user' : 'awaiting_admin',
+      ...(role === 'ADMIN' ? { unreadAdminCount: 0, lastAdminReadAt: now } : { unreadUserCount: 0, lastUserReadAt: now }),
+    },
+    $inc: role === 'ADMIN' ? { unreadUserCount: 1 } : { unreadAdminCount: 1 },
+  }, { new: true, session });
+  if (!thread) throw new ApiError(409, 'Closed support threads must be reopened before sending new messages');
+  [message] = await SupportMessage.create([{
     threadId: thread._id,
     senderId: user._id,
     senderRole: role,
-    body: normalizeSupportMessageBody(body),
-  });
-
-  thread.lastMessageAt = message.createdAt || new Date();
-  thread.lastMessagePreview = message.body.slice(0, 160);
-  thread.lastMessageSenderRole = role;
-  thread.unreadAdminCount = role === 'ADMIN' ? 0 : (thread.unreadAdminCount || 0) + 1;
-  thread.unreadUserCount = role === 'ADMIN' ? (thread.unreadUserCount || 0) + 1 : 0;
-  thread.status = role === 'ADMIN' ? 'awaiting_user' : 'awaiting_admin';
-  if (role === 'ADMIN') {
-    thread.lastAdminReadAt = new Date();
-  } else {
-    thread.lastUserReadAt = new Date();
-  }
-  await thread.save();
+    body: messageBody,
+  }], { session });
+  }); } finally { await session.endSession(); }
 
   const populatedThread = await populateThread(thread);
   await sendSupportNotifications({
     thread: populatedThread,
     message,
     senderRole: role,
-  });
+  }).catch(() => console.error('[Support] Notification delivery failed after the message was saved'));
   await emitSupportThreadEvent({
     thread: populatedThread,
     eventName: 'support.message.created',

@@ -19,6 +19,7 @@ const {
 
 let ioInstance = null;
 let routeLocationBatcher = null;
+let fleetLocationBatcher = null;
 let stopOperationalEventSubscriber = null;
 const subscriptionWindowMs = 10_000;
 const maxSubscriptionEventsPerWindow = 20;
@@ -502,6 +503,14 @@ const emitToTripLocal = (tripId, eventName, payload) => {
 
 const emitToTrip = (tripId, eventName, payload) => {
   if (!tripId || !eventName) return;
+  if (['pickup_request.updated', 'ride_session.updated'].includes(eventName)) {
+    // Only a refresh signal goes to the route room. Each driver reloads the
+    // authorized, redacted route feed; private trip payloads stay in trip rooms.
+    void require('../models/tripSession').findById(tripId).select('routeId').lean()
+      .then(trip => { if (trip?.routeId) emitToRoute(String(trip.routeId), 'route.pickups.changed', { routeId: String(trip.routeId) }); })
+      .catch(() => {});
+  }
+
   if (emitToTripLocal(tripId, eventName, payload)) return;
   void publishOperationalEvent({
     target: 'trip',
@@ -542,7 +551,20 @@ const emitJeepneyLocationUpdate = ({
   }
 };
 
+const emitFleetLocationUpdate = (update) => {
+  if (!fleetLocationBatcher) {
+    const { FleetLocationBatcher } = require('./fleetLocationBatcher');
+    fleetLocationBatcher = new FleetLocationBatcher({
+      onBatch: payload => emitToRole('admin', 'fleet.locations.updated', payload),
+    });
+  }
+  fleetLocationBatcher.enqueue(update);
+};
+
 const closeSocketServer = async () => {
+  fleetLocationBatcher?.flush();
+  fleetLocationBatcher?.stop();
+  fleetLocationBatcher = null;
   if (stopSecuritySubscriber) await stopSecuritySubscriber();
   stopSecuritySubscriber = null;
   routeLocationBatcher?.flushAll();
@@ -568,6 +590,7 @@ module.exports = {
   emitNotificationCreated,
   emitOperationsChanged,
   emitJeepneyLocationUpdate,
+  emitFleetLocationUpdate,
   emitToRole,
   emitToUser,
   emitToRoute,

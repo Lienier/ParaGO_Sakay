@@ -12,7 +12,7 @@ const { publishNotification } = require('./notificationPublisher');
 const { serializeRideSession } = require('../utils/realtimePayloads');
 const INACTIVITY_MS = 5 * 60 * 1000;
 
-async function createTripRecord(Model, document, { accepting = false } = {}) {
+async function createTripRecord(Model, document, { accepting = false, beforeCreate } = {}) {
   const terminal = document.pickupType === 'terminal' && accepting;
   const queue = require('./terminalQueue.service');
   if (terminal) await queue.prepare(document.routeId);
@@ -27,13 +27,22 @@ async function createTripRecord(Model, document, { accepting = false } = {}) {
         await journey.assertCanBook(document.passengerId, session);
       }
       const trip = await Trip.findOneAndUpdate({ _id: document.tripSessionId, status: 'active',
-        ...(accepting ? { acceptRequests: true } : {}) },
+        ...(accepting ? { acceptRequests: true, ...(document.flowVersion === 2 ? { flowVersion: 2 } : {}) } : {}) },
       { $inc: { lifecycleRevision: 1 } }, { new: true, session });
       if (!trip) throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE,
         'This trip is closed or is no longer accepting pickup requests.', 'Refresh the trip status and choose an available trip.');
-      if (accepting) await require('./operatingRules.service').assertVehicleAllowed(await Jeepney.findById(trip.jeepneyId).session(session), session);
+      if (accepting) {
+        const vehicle = await Jeepney.findById(trip.jeepneyId).session(session);
+        const driver = trip.driverId && await require('../models/driver').findById(trip.driverId).session(session);
+        const route = await require('../models/route').findById(trip.routeId).session(session);
+        if (vehicle?.status !== 'active' || driver?.status !== 'active' || route?.status !== 'active') {
+          throw new (require('../utils/apiError'))(409, 'This driver, jeep or route is no longer available for bookings');
+        }
+        await require('./operatingRules.service').assertVehicleAllowed(vehicle, session);
+      }
       if (terminal) await queue.reserve(trip, session, document.partySize ?? 1);
       else if (accepting) await require('./seatAccounting.service').assertCapacity(trip, document.partySize ?? 1, session);
+      if (beforeCreate) await beforeCreate(session);
       [record] = await Model.create([document], { session });
     });
   } finally { await session.endSession(); }
@@ -41,7 +50,7 @@ async function createTripRecord(Model, document, { accepting = false } = {}) {
 }
 
 // Trip writes serialize this transaction with boarding's occupancy write.
-async function endTrip(tripId, { actor, requestId, reason } = {}) {
+async function endTrip(tripId, { actor, requestId, reason, automatic = false, onlyIfEmpty = false } = {}) {
   const original = await Trip.findById(tripId);
   const terminal = original?.operatingMode === 'terminal_queue';
   const queue = require('./terminalQueue.service');
@@ -53,16 +62,35 @@ async function endTrip(tripId, { actor, requestId, reason } = {}) {
     await session.withTransaction(async () => {
       if (terminal) await queue.lock(original.routeId, session);
       const now = new Date();
-      trip = await Trip.findOneAndUpdate({ _id: tripId, status: { $in: ['active', 'scheduled'] } },
+      trip = await Trip.findOneAndUpdate({ _id: tripId, status: { $in: ['active', 'scheduled'] }, ...(onlyIfEmpty ? { occupancyCount: 0, manualOccupancyCount: 0 } : {}) },
         { $set: { status: 'completed', endedAt: now, active: false, acceptRequests: false,
           occupancyCount: 0, manualOccupancyCount: 0, terminalQueueStatus: 'departed' },
         $unset: { inactivityPausedAt: 1 } }, { new: true, session });
       if (!trip) throw driverError(409, DRIVER_ERROR_CODES.TRIP_ALREADY_CLOSED,
         'This trip has already ended.', 'Refresh the trip status before trying again.');
+      if (onlyIfEmpty) {
+        const seats = await require('./seatAccounting.service').counts(original, session);
+        if (seats.occupied > 0 || seats.reserved > 0) throw driverError(409, 'TRIP_NOT_EMPTY', 'Passengers or bookings still remain.', 'Automatic completion waits for them to finish.');
+      }
+      await require('../models/activityLog').create([{ actorId: actor?._id, actorRole: automatic ? 'system' : actor?.role,
+        action: automatic ? 'automatic_trip_completed' : 'trip_completed', entity: 'TripSession', entityId: String(tripId), details: { reason } }], { session });
       rides = await Ride.find({ tripSessionId: tripId, status: { $in: ['onboard', 'waiting'] } }).session(session);
-      await Ride.updateMany({ tripSessionId: tripId, status: { $in: ['onboard', 'waiting'] } },
+      for (const ride of rides.filter(r => r.flowVersion === 2)) {
+        const activeMembers = ride.members.filter(m => m.status === 'onboard');
+        // Early closure is an actual unloading event at the jeep position, never a planned destination visit.
+        const vehicle = await Jeepney.findById(trip.jeepneyId).session(session);
+        const priorEvents = ride.unloadMutations.length;
+        require('./memberUnloading.service').finishMembers(ride, activeMembers, { now, method: 'trip_ended', requestId: `end-${tripId}`, actorRole: 'system', actorId: 'system' });
+        for (const event of ride.unloadMutations.slice(priorEvents)) { event.destinationStopRef = 'Trip ended early'; event.destinationLocation = vehicle?.lastKnownLocation?.toObject?.() || vehicle?.lastKnownLocation; }
+        await ride.save({ session });
+        await Pickup.updateOne({ _id: ride.pickupRequestId, flowVersion: 2 },
+          { $set: { members: ride.members.map(m => m.toObject()) } }, { session });
+      }
+      await Ride.updateMany({ tripSessionId: tripId, flowVersion: { $ne: 2 }, status: { $in: ['onboard', 'waiting'] } },
         { $set: { status: 'completed', remainingCount: 0, endedAt: now, canSendStopAlert: false, offboardingMethod: 'trip_ended' }, $inc: { revision: 1 } }, { session });
-      await Pickup.updateMany({ tripSessionId: tripId, status: { $in: ['pending', 'acknowledged'] } },
+      await Pickup.updateMany({ tripSessionId: tripId, flowVersion: 2, status: { $in: ['pending', 'acknowledged'] } },
+        { $set: { status: 'cancelled', 'members.$[].status': 'cancelled' } }, { session });
+      await Pickup.updateMany({ tripSessionId: tripId, flowVersion: { $ne: 2 }, status: { $in: ['pending', 'acknowledged'] } },
         { $set: { status: 'cancelled' } }, { session });
       await Alert.updateMany({ tripSessionId: tripId, status: { $in: ['sent', 'seen', 'acknowledged'] } },
         { $set: { status: 'dismissed', acknowledgedAt: now } }, { session });
@@ -74,6 +102,7 @@ async function endTrip(tripId, { actor, requestId, reason } = {}) {
   } finally { await session.endSession(); }
   await invalidateDriverActiveContext(trip.driverId);
   if (terminal) await queue.publish(original.routeId);
+  require('../realtime/socketServer').emitOperationsChanged({ type: 'trip.completed', routeId: String(original.routeId), role: 'driver' });
   // Notifications follow commit; delivery failure must not undo a closed trip.
   for (const ride of rides) {
     try {

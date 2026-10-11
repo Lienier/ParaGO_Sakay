@@ -48,6 +48,11 @@ const completeRideSession = async ({
   groupAction = null,
 }) => {
   actorRole = String(actorRole).toLowerCase();
+  if (session.flowVersion === 2) {
+    if (completionMethod === 'auto_separation') return session;
+    if (!groupAction?.requestId || !/^[a-zA-Z0-9-]{8,80}$/.test(groupAction.requestId) || !Number.isSafeInteger(groupAction.revision)) throw new ApiError(400, 'Refresh and select passengers for manual correction.');
+    return require('./memberUnloading.service').processRide({ rideId: session._id, manual: { ...groupAction, actorId: String(actorUserId), actorRole } });
+  }
   const isGroup = (session.partySize ?? 1) > 1;
   if (isGroup && completionMethod === 'auto_separation') return session;
   if (isGroup && (!groupAction || !Number.isSafeInteger(groupAction.revision) ||

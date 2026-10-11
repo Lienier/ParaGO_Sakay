@@ -13,8 +13,10 @@ flutter config --enable-web
 flutter pub get
 
 : "${PARAGO_API_BASE_URL:?PARAGO_API_BASE_URL is required}"
-PARAGO_ENABLE_REALTIME="${PARAGO_ENABLE_REALTIME:-false}"
+PARAGO_ENABLE_REALTIME="${PARAGO_ENABLE_REALTIME:-true}"
 
 flutter build web --release \
   --dart-define=PARAGO_API_BASE_URL="${PARAGO_API_BASE_URL}" \
   --dart-define=PARAGO_ENABLE_REALTIME="${PARAGO_ENABLE_REALTIME}"
+
+node ./write-release.cjs

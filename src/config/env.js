@@ -31,6 +31,9 @@ const positiveInteger = (value, fallback, name) => {
 };
 
 module.exports = {
+  automaticGroupFlowEnabled: booleanValue(process.env.AUTOMATIC_GROUP_FLOW_ENABLED, false),
+  automaticDriverLifecycleEnabled: booleanValue(process.env.AUTOMATIC_DRIVER_LIFECYCLE_ENABLED, false),
+  automaticGroupMinimumBuild: positiveInteger(process.env.AUTOMATIC_GROUP_MINIMUM_BUILD, 21, 'AUTOMATIC_GROUP_MINIMUM_BUILD'),
   groupBookingsEnabled: booleanValue(process.env.GROUP_BOOKINGS_ENABLED, false),
   nodeEnv: process.env.NODE_ENV || 'development',
   deploymentEnvironment:

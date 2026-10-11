@@ -50,7 +50,7 @@ router.post(
       ? await Driver.findById(trip.driverId).select('userId')
       : null;
 
-    await publishNotification({
+    try { await publishNotification({
       userId: driver?.userId,
       type: 'stop_alert_created',
       title: 'New passenger stop alert',
@@ -62,7 +62,7 @@ router.post(
         stopAlert: serializeStopAlert(alert),
       },
       category: 'ride',
-    });
+    }); } catch (_) { console.error('[Stop alert] Notification delivery failed after the alert was saved'); }
 
     return ok(res, alert, 'Stop alert sent', 201);
   })

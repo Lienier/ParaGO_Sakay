@@ -25,12 +25,14 @@ import 'admin_route_builder_screen.dart';
 import 'admin_route_fare_settings_screen.dart';
 import 'admin_route_management_screen.dart';
 import 'admin_support_inbox_screen.dart';
+import 'admin_fleet_screen.dart';
 
 part 'admin_home_sections.dart';
 
 enum _AdminWorkspaceSection {
   overview,
   dispatch,
+  fleet,
   reports,
   drivers,
   routeBuilder,
@@ -60,14 +62,18 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   final Map<String, DateTime> _sectionTimes = {};
   final Set<String> _sectionLoading = {};
   DateTimeRange _reportRange = DateTimeRange(
-      start: DateTime.now().subtract(const Duration(days: 7)),
-      end: DateTime.now());
+      start:
+          DateUtils.dateOnly(DateTime.now()).subtract(const Duration(days: 7)),
+      end: DateUtils.dateOnly(DateTime.now())
+          .add(const Duration(days: 1))
+          .subtract(const Duration(milliseconds: 1)));
   int _reportGeneration = 0;
   String? _dispatchRoute;
 
   Timer? _pollingTimer;
   StreamSubscription<Map<String, dynamic>>? _operationsSubscription;
   final RealtimeSocketService _realtimeSocketService = RealtimeSocketService();
+  final _fleetKey = GlobalKey<AdminFleetScreenState>();
   _AdminWorkspaceSection _selectedSection = _AdminWorkspaceSection.overview;
 
   Future<void> _confirmAdminLogout(SessionController session) async {
@@ -414,6 +420,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
 
   Widget _buildWorkspaceContent() {
     switch (_selectedSection) {
+      case _AdminWorkspaceSection.fleet:
+        return AdminFleetScreen(
+            key: _fleetKey, realtimeSocketService: _realtimeSocketService);
       case _AdminWorkspaceSection.overview:
       case _AdminWorkspaceSection.dispatch:
       case _AdminWorkspaceSection.reports:
@@ -554,6 +563,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                         for (final section in const [
                           _AdminWorkspaceSection.overview,
                           _AdminWorkspaceSection.dispatch,
+                          _AdminWorkspaceSection.fleet,
                           _AdminWorkspaceSection.drivers,
                           _AdminWorkspaceSection.routes,
                           _AdminWorkspaceSection.fareSettings,
@@ -642,7 +652,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                 onPressed: () =>
                     _selectedSection == _AdminWorkspaceSection.reports
                         ? _loadReport()
-                        : _load(),
+                        : _selectedSection == _AdminWorkspaceSection.fleet
+                            ? _fleetKey.currentState?.refresh()
+                            : _load(),
                 child: const Text('Refresh')),
             const SizedBox(width: 12),
             PopupMenuButton<String>(

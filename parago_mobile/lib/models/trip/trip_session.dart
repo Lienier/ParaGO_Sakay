@@ -9,6 +9,7 @@ class TripSession {
     required this.driverId,
     required this.routeId,
     required this.status,
+    this.flowVersion = 1,
     this.routePathSnapshotPoints = const <LatLng>[],
     this.routeName,
     this.routeCode,
@@ -42,6 +43,7 @@ class TripSession {
   final String driverId;
   final String routeId;
   final String status;
+  final int flowVersion;
   final List<LatLng> routePathSnapshotPoints;
   final String? routeName;
   final String? routeCode;
@@ -133,6 +135,7 @@ class TripSession {
         jeepneyLocation is Map ? jeepneyLocation['coordinates'] : null;
     final jeepneyCoordinates = _readCoordinatePair(coordinates);
     return TripSession(
+      flowVersion: (json['flowVersion'] as num?)?.toInt() ?? 1,
       id: json['_id']?.toString() ?? '',
       jeepneyId: _readId(jeepney),
       driverId: _readId(driver),
@@ -229,6 +232,7 @@ class TripSession {
     bool clearSnapshotUpdatedAt = false,
   }) {
     return TripSession(
+      flowVersion: flowVersion,
       id: id ?? this.id,
       jeepneyId: jeepneyId ?? this.jeepneyId,
       driverId: driverId ?? this.driverId,

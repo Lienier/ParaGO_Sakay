@@ -13,7 +13,7 @@ class DriverLocationUpdate {
   final double latitude;
   final double longitude;
   final double accuracyMeters;
-  final double speedMetersPerSecond;
+  final double? speedMetersPerSecond;
   final double headingDegrees;
   final String streamId;
   final int sequence;

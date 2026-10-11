@@ -25,7 +25,8 @@ before(async () => {
   const driverId = new mongoose.Types.ObjectId();
   await Driver.collection.insertOne({ _id: driverId, userId: user._id, status: 'active' });
   const jeep = await Jeep.create({ plateNumber: 'TEST 123', capacity: 1 });
-  trip = await Trip.create({ driverId, jeepneyId: jeep._id, routeId: new mongoose.Types.ObjectId(), status: 'active', operatingMode: 'terminal_queue', terminalQueueStatus: 'waiting' });
+  const route = await require('../src/models/route').create({ name: 'Terminal test route', code: 'TERMINAL-TEST', status: 'active' });
+  trip = await Trip.create({ driverId, jeepneyId: jeep._id, routeId: route._id, status: 'active', operatingMode: 'terminal_queue', terminalQueueStatus: 'waiting' });
 });
 after(async () => { await mongoose.disconnect(); if (repl) await repl.stop(); });
 const destinationLocation = { type: 'Point', coordinates: [121, 14] };

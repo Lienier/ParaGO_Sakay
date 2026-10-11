@@ -246,6 +246,7 @@ class AsyncWorker {
         now,
       });
       await this.dependencies.processAutomaticOffboardingForTrip({
+        observation: job,
         tripSessionId: job.tripId,
         jeepneyLocation,
         now,

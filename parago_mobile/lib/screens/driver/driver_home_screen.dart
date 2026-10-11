@@ -1,9 +1,12 @@
+import 'package:parago_map_ui/road_jeep_marker.dart';
+import '../../widgets/walk_in_controls.dart';
+import '../../widgets/glass_surface.dart';
 import '../../widgets/terminal_map_marker.dart';
 import '../../widgets/map_follow_control.dart';
 import '../../widgets/driver_action_toast.dart';
 import '../../core/utils/navigation_follow.dart';
 import 'dart:async';
-import 'dart:ui' as ui;
+import '../../widgets/journey_members.dart';
 import '../../widgets/terminal_loading_clock.dart';
 import 'dart:math' as math;
 
@@ -91,6 +94,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   List<NotificationModel> _notifications = [];
   List<AnnouncementModel> _announcements = [];
   Map<String, List<PickupRequestModel>> _tripRequests = {};
+  List<PickupRequestModel> _routeRequests = [];
+  String? _subscribedRealtimeRouteId;
   Map<String, List<StopAlertModel>> _tripAlerts = {};
   Map<String, List<RideSessionModel>> _tripRides = {};
   bool _driverMutationInFlight = false;
@@ -136,12 +141,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   StreamSubscription<Map<String, dynamic>>? _realtimeAnnouncementSubscription;
   bool _locationTrackingSyncInFlight = false;
   bool _silentRefreshActive = false;
+  bool _silentRefreshQueued = false;
   bool _realtimePrimed = false;
   bool _availabilitySyncInFlight = false;
   bool? _lastPublishedOnline;
   AppLifecycleState? _appLifecycleState;
   int _loadGeneration = 0;
-  DateTime? _lastRealtimeOpsRefreshAt;
   DateTime? _lastAnnouncementRefreshAttemptAt;
   Set<String> _knownNotificationIds = <String>{};
   Set<String> _knownActiveStopAlertIds = <String>{};
@@ -161,7 +166,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   bool get _driverFollowLocationFresh => NavigationFollow.isFresh(
       _vehicleLastAuthoritativeSampleAt, DateTime.now());
   String get _driverFollowStatus => !_driverFollowLocationFresh
-      ? 'Location unavailable or old. View retained.'
+      ? 'GPS unavailable'
       : _mapFollow.following
           ? 'Following'
           : 'Free view';
@@ -193,14 +198,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         final session = context.read<SessionController>();
         unawaited(_paraSound.start(session).then((enabled) {
           if (mounted && !enabled) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            ScaffoldMessenger.of(context).showSnackBar(GlassSnackBar(
               content: Text(
                   'Para notification sound is unavailable. Check notification permissions and connection.'),
             ));
           }
         }).catchError((Object _) {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            ScaffoldMessenger.of(context).showSnackBar(GlassSnackBar(
               content: Text(
                   'Background para notifications could not be enabled. Keep the app open.'),
             ));
@@ -499,7 +504,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Future<void> _confirmLogoutDriver() async {
     final shouldLogout = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => GlassAlertDialog(
         title: const Text('Log out?'),
         content: const Text(
           'Are you sure you want to log out of the driver application?',
@@ -617,7 +622,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       final messenger = ScaffoldMessenger.of(context);
       messenger.hideCurrentSnackBar();
       messenger.showSnackBar(
-        SnackBar(
+        GlassSnackBar(
           content: Text(
             'Could not dismiss announcement. '
             '${ActionFeedback.messageOf(result.error!)}',
@@ -663,12 +668,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return;
     }
 
-    final now = DateTime.now();
-    final last = _lastRealtimeOpsRefreshAt;
-    if (last != null && now.difference(last) < const Duration(seconds: 1)) {
-      return;
-    }
-    _lastRealtimeOpsRefreshAt = now;
     await _refreshFromSocketEvent();
   }
 
@@ -729,12 +728,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   Future<void> _refreshFromSocketEvent() async {
-    if (!mounted || _silentRefreshActive) {
+    if (!mounted) return;
+    if (_silentRefreshActive) {
+      _silentRefreshQueued = true;
       return;
     }
     _silentRefreshActive = true;
     try {
-      await _load(silent: true);
+      do {
+        _silentRefreshQueued = false;
+        await _load(silent: true);
+      } while (mounted && _silentRefreshQueued);
     } finally {
       _silentRefreshActive = false;
     }
@@ -771,6 +775,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       final driverProfile = initialResults[3] as Map<String, dynamic>;
       final assignedRouteId = _readAssignedRouteId(driverProfile);
       final driverStatus = driverProfile['status']?.toString().toLowerCase();
+      final routeRequests = assignedRouteId == null ||
+              assignedRouteId.isEmpty ||
+              driverStatus != 'active'
+          ? const <PickupRequestModel>[]
+          : await driverService.getRequestsForRoute(assignedRouteId);
       final nextFocus = _resolveNextFocusId(trips);
       final previousTrackingContext =
           '${_focusedTripId ?? ''}|${_assignedRouteId ?? ''}|'
@@ -812,6 +821,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         _routes = routes;
         _cachedRoutePreviewPoints = cachedRoutePreviewPoints;
         _driverProfile = driverProfile;
+        _routeRequests = routeRequests;
         _assignedRouteId = assignedRouteId;
         if (driverStatus == 'active' || driverStatus == 'inactive') {
           _isOnline = driverStatus == 'active';
@@ -909,6 +919,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   void _syncRealtimeTripSubscriptions(List<TripSession> trips) {
+    if (_subscribedRealtimeRouteId != _assignedRouteId) {
+      if (_subscribedRealtimeRouteId != null) {
+        _realtimeSocketService
+            .unsubscribeFromRoute(_subscribedRealtimeRouteId!);
+      }
+      if (_assignedRouteId != null) {
+        _realtimeSocketService.subscribeToRoute(_assignedRouteId!);
+      }
+      _subscribedRealtimeRouteId = _assignedRouteId;
+    }
     final nextTripIds = trips.map((trip) => trip.id).toSet();
     final previousTripIds = _subscribedRealtimeTripIds;
     for (final tripId in previousTripIds.difference(nextTripIds)) {
@@ -1090,15 +1110,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
               const Duration(seconds: 30)) {
         unawaited(_refreshAnnouncements());
       }
-      if (_realtimeSocketService.isConnected) {
+      final expiredPin = _routeRequests.any((request) =>
+          DateTime.tryParse(request.expiresAt ?? '')
+              ?.isBefore(DateTime.now()) ??
+          false);
+      if (_realtimeSocketService.isConnected &&
+          !expiredPin &&
+          !_silentRefreshQueued) {
         return;
       }
-      _silentRefreshActive = true;
-      try {
-        await _load(silent: true);
-      } finally {
-        _silentRefreshActive = false;
-      }
+      await _refreshFromSocketEvent();
     });
   }
 
@@ -1148,7 +1169,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (newActiveAlerts.isNotEmpty) {
       final firstAlert = newActiveAlerts.first;
       messenger.showSnackBar(
-        SnackBar(
+        GlassSnackBar(
           content: Text(
             newActiveAlerts.length == 1
                 ? 'New stop alert: ${firstAlert.stopRef}'
@@ -1161,7 +1182,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
     final firstNotification = newNotifications.first;
     messenger.showSnackBar(
-      SnackBar(
+      GlassSnackBar(
         content: Text(
           newNotifications.length == 1
               ? '${firstNotification.title}: ${firstNotification.body}'
@@ -1407,7 +1428,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (notification.type == 'passenger_near_destination') {
       final stopLabel = _destinationApproachStopLabel(notification.payload);
       messenger.showSnackBar(
-        SnackBar(
+        GlassSnackBar(
           content: Text('Passenger nearing destination: $stopLabel'),
         ),
       );
@@ -1424,12 +1445,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       final message = alert == null
           ? '${notification.title}: ${notification.body}'
           : 'New stop alert: ${alert.stopRef}';
-      messenger.showSnackBar(SnackBar(content: Text(message)));
+      messenger.showSnackBar(GlassSnackBar(content: Text(message)));
       return;
     }
 
     messenger.showSnackBar(
-      SnackBar(content: Text('${notification.title}: ${notification.body}')),
+      GlassSnackBar(
+          content: Text('${notification.title}: ${notification.body}')),
     );
   }
 
@@ -1469,7 +1491,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       setState(() => _statusMessage = message);
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(message)));
+        ..showSnackBar(GlassSnackBar(content: Text(message)));
     } catch (error) {
       if (!mounted) return;
       debugPrint('Driver action failed: $error');
@@ -1491,7 +1513,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       setState(() => _statusMessage = message);
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(message)));
+        ..showSnackBar(GlassSnackBar(content: Text(message)));
     } finally {
       if (mounted) setState(() => _driverMutationInFlight = false);
     }
@@ -1574,7 +1596,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         return StatefulBuilder(
           builder: (context, setState) {
             final terminalAvailable = _routeHasTerminalStop(selectedRoute);
-            return AlertDialog(
+            return GlassAlertDialog(
               title: const Text('Choose route'),
               content: SingleChildScrollView(
                 child: SizedBox(
@@ -1650,7 +1672,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                 ),
                 FilledButton(
                   onPressed: () => Navigator.of(dialogContext).pop(true),
-                  child: const Text('Begin terminal entry'),
+                  child: const Text('Start'),
                 ),
               ],
             );
@@ -1692,14 +1714,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Future<void> _endTrip(String tripId) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('End this trip?'),
         content: const Text(
             'This closes all remaining passenger rides, cancels waiting pickups, and dismisses stop alerts. End only when the journey is finished.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('Keep trip active')),
+              child: const Text('Cancel')),
           FilledButton(
               onPressed: () => Navigator.pop(context, true),
               child: const Text('End trip')),
@@ -1726,7 +1748,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       if (action == 'depart') {
         final confirmed = await showDialog<bool>(
             context: context,
-            builder: (context) => AlertDialog(
+            builder: (context) => GlassAlertDialog(
                     title: const Text('Depart terminal?'),
                     content: Text(
                         '${trip.terminalSummary?["onboardSeats"] ?? trip.occupancyCount ?? 0} onboard passengers stay on this trip. ${trip.terminalSummary?["reservedSeats"] ?? 0} unboarded bookings will receive transfer offers.'),
@@ -1736,7 +1758,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                           child: const Text('Stay')),
                       FilledButton(
                           onPressed: () => Navigator.pop(context, true),
-                          child: const Text('Depart terminal'))
+                          child: const Text('Depart'))
                     ]));
         if (confirmed != true || !mounted) return;
       }
@@ -1804,6 +1826,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Future<void> _completeRideDestination(RideSessionModel ride) async {
     if (ride.status != 'onboard' || !_pendingUnloads.add(ride.id)) return;
     try {
+      if (ride.flowVersion == 2) {
+        final memberIds = await chooseUnloadedMembers(context, ride.members);
+        if (memberIds == null || !mounted) return;
+        await _runDriverAction(
+            loadingMessage: 'Correcting unloading...',
+            successMessage: 'Unloading corrected.',
+            action: () =>
+                RideSessionService(context.read<SessionController>().apiClient)
+                    .completeRideSession(ride.id,
+                        ride: ride, memberIds: memberIds));
+        return;
+      }
       int? count;
       if (ride.isGroup) {
         count = await confirmPassengerCount(context,
@@ -2562,27 +2596,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   String? _driverOperationsBannerMessage(TripSession? trip) {
     if (trip == null) return _driverStartRequirementMessage(trip: trip);
-    final state = trip.driverStateLabel;
-    final detail = trip.driverStateDetail;
-    final next = trip.driverNextAction;
     if (trip.operatingMode == 'terminal_queue') {
       final summary = trip.terminalSummary;
       final queuePosition = summary?['queuePosition'];
-      final gpsWarning = summary?['gpsWarning'] == true
-          ? ' Live jeep GPS is unavailable or old; the queue position is retained.'
-          : '';
-      return '$state. ${detail ?? ''} Queue position: ${queuePosition ?? 'not assigned'}. '
-              'Reserved seats: ${summary?['reservedSeats'] ?? 0}. '
-              'Onboard: ${summary?['onboardSeats'] ?? 0}.$gpsWarning '
-              '${next ?? ''}'
-          .trim();
+      if (summary?['gpsWarning'] == true) return 'GPS unavailable · Queue kept';
+      return queuePosition == null ? 'Terminal' : 'Queue: $queuePosition';
     }
     if (trip.status == 'active' && trip.inactivityPausedAt != null) {
-      return 'No driver location was received for five minutes. Pickups are paused. Reopen pickup requests to resume, or end this trip.';
+      return 'GPS lost · Pickups paused';
     }
     if (trip.status == 'active') {
-      return '$state. ${detail ?? ''} ${next ?? _driverPickupRequirementMessage(trip: trip) ?? ''}'
-          .trim();
+      return _driverPickupRequirementMessage(trip: trip);
     }
     return _driverStartRequirementMessage(trip: trip);
   }
@@ -2605,7 +2629,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       setState(() => _statusMessage = message);
       final messenger = ScaffoldMessenger.maybeOf(context);
       messenger?.hideCurrentSnackBar();
-      messenger?.showSnackBar(SnackBar(content: Text(message)));
+      messenger?.showSnackBar(GlassSnackBar(content: Text(message)));
     }
     return false;
   }
@@ -2615,7 +2639,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     setState(() => _statusMessage = message);
     final messenger = ScaffoldMessenger.maybeOf(context);
     messenger?.hideCurrentSnackBar();
-    messenger?.showSnackBar(SnackBar(content: Text(message)));
+    messenger?.showSnackBar(GlassSnackBar(content: Text(message)));
   }
 
   bool _isNotificationDismissed(String notificationId) {
@@ -2825,24 +2849,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       });
       final messenger = ScaffoldMessenger.maybeOf(context);
       messenger?.hideCurrentSnackBar();
-      messenger?.showSnackBar(SnackBar(content: Text(message)));
+      messenger?.showSnackBar(GlassSnackBar(content: Text(message)));
     }
   }
 
   String _routeLabel(TripSession trip) {
     final effectiveRoute = _effectiveRouteSummaryForTrip(trip);
     if (effectiveRoute != null) {
-      final baseLabel = effectiveRoute.label;
-      final modeLabel = trip.operatingMode == 'terminal_queue'
-          ? 'Terminal queue'
-          : trip.driverStateLabel;
-      return '$baseLabel | $modeLabel';
+      return effectiveRoute.name;
     }
     if (trip.routeName != null && trip.routeName!.isNotEmpty) {
-      final modeLabel = trip.operatingMode == 'terminal_queue'
-          ? 'Terminal queue'
-          : trip.driverStateLabel;
-      return '${trip.routeLabel} | $modeLabel';
+      return trip.routeName!;
     }
     for (final route in _routes) {
       if (route.id == trip.routeId) return route.label;
@@ -2864,7 +2881,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   List<DriverToastAction> _driverToastActions() {
     final actions = <DriverToastAction>[];
     for (final trip in _trips.where((t) => t.status == 'active')) {
+      if (trip.flowVersion == 2) {
+        continue; // Information only; corrections remain in fallback controls.
+      }
       for (final request in _tripRequests[trip.id] ?? <PickupRequestModel>[]) {
+        if (request.flowVersion == 2) continue;
         if (request.partySize > 1 &&
             request.status == 'acknowledged' &&
             request.groupReadyAt != null &&
@@ -2930,7 +2951,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           title: hasPara ? 'Passenger para alert' : 'Passenger onboard',
           detail:
               '${ride.remainingCount} onboard | ${ride.passengerLabel} | ${ride.bookingLabel} | ${ride.destinationStopRef ?? "Saved destination"}',
-          label: 'Mark unloaded',
+          label: ride.flowVersion == 2 ? 'Fix drop-off' : 'Unload',
           run: () => _completeRideDestination(ride),
         ));
       }
@@ -2942,7 +2963,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                 ? 'Terminal departure required'
                 : 'Loading at terminal',
             detail: 'Onboard passengers remain on this trip.',
-            label: 'Depart terminal',
+            label: 'Depart',
             run: () => _toggleAccept(trip, false)));
       }
     }
@@ -2967,25 +2988,36 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       appBar: AppBar(
         title: Text(_tabTitle()),
         actions: [
-          IconButton(
-            tooltip: 'Driver profile',
-            onPressed: _openDriverProfile,
-            icon: const Icon(Icons.badge_outlined),
-          ),
-          IconButton(
-            tooltip: 'Support',
-            onPressed: _loading ? null : _openSupportCenter,
-            icon: const Icon(Icons.support_agent_rounded),
-          ),
-          IconButton(
-            tooltip: 'Refresh',
-            onPressed: _loading ? null : _load,
-            icon: const Icon(Icons.refresh),
-          ),
-          IconButton(
-            tooltip: 'Logout',
-            onPressed: _confirmLogoutDriver,
-            icon: const Icon(Icons.logout),
+          PopupMenuButton<String>(
+            clipBehavior: Clip.antiAlias,
+            tooltip: 'More',
+            onSelected: (action) {
+              switch (action) {
+                case 'profile':
+                  _openDriverProfile();
+                  break;
+                case 'help':
+                  _openSupportCenter();
+                  break;
+                case 'refresh':
+                  _load();
+                  break;
+                case 'logout':
+                  _confirmLogoutDriver();
+                  break;
+              }
+            },
+            itemBuilder: (_) => [
+              const GlassPopupMenuItem(
+                  value: 'profile', child: Text('Profile')),
+              GlassPopupMenuItem(
+                  value: 'help', enabled: !_loading, child: const Text('Help')),
+              GlassPopupMenuItem(
+                  value: 'refresh',
+                  enabled: !_loading,
+                  child: const Text('Refresh')),
+              const GlassPopupMenuItem(value: 'logout', child: Text('Log out')),
+            ],
           ),
         ],
       ),
@@ -3071,17 +3103,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           NavigationDestination(
             icon: Icon(Icons.playlist_add_check_circle_outlined),
             selectedIcon: Icon(Icons.playlist_add_check_circle),
-            label: 'Requests',
+            label: 'Pickups',
           ),
           NavigationDestination(
             icon: Icon(Icons.notifications_active_outlined),
             selectedIcon: Icon(Icons.notifications_active),
-            label: 'Alerts',
+            label: 'Drop-offs',
           ),
           NavigationDestination(
             icon: Icon(Icons.notifications_none_outlined),
             selectedIcon: Icon(Icons.notifications),
-            label: 'Notifications',
+            label: 'Notices',
           ),
         ],
       ),
@@ -3094,23 +3126,12 @@ class _TerminalArrivalCard extends StatelessWidget {
 
   final TripSession trip;
 
-  String _coordinateLabel(dynamic point) {
-    final coordinates = point is Map ? point['coordinates'] : null;
-    if (coordinates is! List || coordinates.length < 2) {
-      return 'Location unavailable';
-    }
-    return '${coordinates[1]}, ${coordinates[0]}';
-  }
-
   @override
   Widget build(BuildContext context) {
     final arrival = trip.terminalSummary?['terminalArrival'];
     final data = arrival is Map
         ? Map<String, dynamic>.from(arrival)
         : const <String, dynamic>{};
-    final endTerminal = data['endTerminal'];
-    final endData =
-        endTerminal is Map ? Map<String, dynamic>.from(endTerminal) : null;
     final distance = data['distanceMeters'];
     final distanceLabel = distance == null
         ? 'Distance unavailable'
@@ -3121,26 +3142,11 @@ class _TerminalArrivalCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Awaiting terminal arrival',
-              style: TextStyle(fontWeight: FontWeight.w700)),
+          const Text('Terminal', style: TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 6),
-          Text(
-              'Arrival terminal: ${trip.terminalStopRef ?? 'Configured terminal'}'),
-          Text(
-              'Terminal location: ${_coordinateLabel(data['terminalLocation'])}'),
-          if (endData != null)
-            Text(
-                'End terminal: ${endData['name'] ?? 'Route end'} · ${_coordinateLabel(endData['location'])}'),
-          const SizedBox(height: 6),
-          Text(
-              'GPS progress: ${data['validFixes'] ?? 0} / ${data['requiredValidFixes'] ?? 2} valid fixes'),
+          Text(trip.terminalStopRef ?? 'Terminal'),
           Text(distanceLabel),
-          Text('Status: ${data['status'] ?? 'no_ordered_update'}'),
-          const SizedBox(height: 6),
-          Text(
-              data['reason']?.toString() ??
-                  'Driver has not provided an ordered location update',
-              style: const TextStyle(fontWeight: FontWeight.w600)),
+          Text(data['status'] == 'accepted' ? 'Arrived' : 'Checking GPS'),
         ]),
       ),
     );
@@ -3159,144 +3165,43 @@ class _DriverStatusBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: scheme.secondaryContainer.withValues(alpha: 0.82),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: scheme.secondary.withValues(alpha: 0.16)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: scheme.secondary.withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(Icons.info_outline, color: scheme.onSecondaryContainer),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              message,
-              style: TextStyle(
-                color: scheme.onSecondaryContainer,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          IconButton(
-            tooltip: 'Close info',
-            onPressed: onClose,
-            icon: const Icon(Icons.close),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DriverStatusTimeline extends StatelessWidget {
-  const _DriverStatusTimeline({required this.trip});
-
-  final TripSession? trip;
-
-  static const _states = <String>[
-    'scheduled',
-    'driving_to_terminal',
-    'waiting',
-    'loading',
-    'on_route',
-    'completed',
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final current = trip?.driverState ?? 'scheduled';
-    final rawIndex = _states.indexOf(current);
-    final currentIndex = rawIndex < 0 ? 0 : rawIndex;
-    const labels = <String>[
-      'Scheduled',
-      'To terminal',
-      'Waiting',
-      'Loading',
-      'On route',
-      'Completed',
-    ];
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Trip status',
-              style: TextStyle(
-                  color: Colors.white70, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 6),
-          Text(trip?.driverStateLabel ?? 'Ready to start',
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800)),
-          if (trip?.driverStateDetail != null) ...[
-            const SizedBox(height: 3),
-            Text(trip!.driverStateDetail!,
-                style: const TextStyle(color: Colors.white70)),
-          ],
-          const SizedBox(height: 12),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                for (var index = 0; index < labels.length; index++) ...[
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: index == currentIndex
-                          ? Theme.of(context)
-                              .colorScheme
-                              .secondary
-                              .withValues(alpha: 0.85)
-                          : Colors.white.withValues(
-                              alpha: index < currentIndex ? 0.16 : 0.06),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(labels[index],
-                        style: TextStyle(
+    return SwipeNotice(
+        key: ValueKey(message),
+        duration: onClose == null ? null : const Duration(seconds: 8),
+        onDismiss: () => onClose?.call(),
+        child: GlassSurface(
+          padding: const EdgeInsets.all(14),
+          child: Builder(
+              builder: (context) => Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: scheme.secondary.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.info_outline, color: Colors.white),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          message,
+                          style: TextStyle(
                             color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: index == currentIndex
-                                ? FontWeight.w800
-                                : FontWeight.w600)),
-                  ),
-                  if (index < labels.length - 1)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 4),
-                      child: Icon(Icons.chevron_right,
-                          size: 16, color: Colors.white54),
-                    ),
-                ],
-              ],
-            ),
-          ),
-          if (trip?.driverNextAction != null) ...[
-            const SizedBox(height: 10),
-            Text('Next: ${trip!.driverNextAction}',
-                style: const TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.w600)),
-          ],
-        ],
-      ),
-    );
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Close info',
+                        onPressed: onClose,
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  )),
+        ));
   }
 }
 
@@ -3353,6 +3258,7 @@ class _DriveMapPanel extends StatefulWidget {
     required this.availabilityNote,
     required this.isOnline,
     required this.activePickupCount,
+    this.automaticLifecycleEnabled = false,
     required this.routeLabel,
     required this.displayedOnboard,
     required this.seatCapacity,
@@ -3386,6 +3292,7 @@ class _DriveMapPanel extends StatefulWidget {
   final String availabilityNote;
   final bool isOnline;
   final int activePickupCount;
+  final bool automaticLifecycleEnabled;
   final String routeLabel;
   final int displayedOnboard;
   final int? seatCapacity;
@@ -3414,11 +3321,6 @@ class _DriveMapPanel extends StatefulWidget {
 }
 
 class _DriveMapPanelState extends State<_DriveMapPanel> {
-  static const Duration _idleCollapseDelay = Duration(seconds: 10);
-
-  Timer? _idleCollapseTimer;
-  bool _isChromeCollapsed = false;
-
   MapController get mapController => widget.mapController;
   TripSession? get trip => widget.trip;
   LatLng get cameraTarget => widget.cameraTarget;
@@ -3451,481 +3353,104 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
   _DrivePanelLiveData Function() get readLiveData => widget.readLiveData;
   double? get height => widget.height;
 
-  @override
-  void initState() {
-    super.initState();
-    _scheduleIdleCollapse();
-  }
-
-  @override
-  void dispose() {
-    _idleCollapseTimer?.cancel();
-    super.dispose();
-  }
-
-  void _handleUserInteraction({bool expandChrome = true}) {
-    if (expandChrome && _isChromeCollapsed && mounted) {
-      setState(() {
-        _isChromeCollapsed = false;
-      });
-    }
-    _scheduleIdleCollapse();
-  }
-
-  void _scheduleIdleCollapse() {
-    _idleCollapseTimer?.cancel();
-    _idleCollapseTimer = Timer(_idleCollapseDelay, () {
-      if (!mounted || _isChromeCollapsed) return;
-      setState(() {
-        _isChromeCollapsed = true;
-      });
-    });
-  }
-
   void _handleMapPositionChanged(MapCamera camera, bool hasGesture) {
     onPositionChanged(camera, hasGesture);
-    if (hasGesture) {
-      _handleUserInteraction();
-    }
   }
 
-  void _openControls(BuildContext context) {
-    _handleUserInteraction();
-    _openControlSheet(context);
-  }
+  void _openControls(BuildContext context) => _openControlSheet(context);
 
   void _openControlSheet(BuildContext context) {
-    showModalBottomSheet(
+    showGlassBottomSheet<void>(
       context: context,
+      showDragHandle: true,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.18),
-      builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.45,
-        minChildSize: 0.35,
-        maxChildSize: 0.78,
-        builder: (context, scrollController) {
-          return StreamBuilder<int>(
-            stream: Stream<int>.periodic(
-              const Duration(milliseconds: 500),
-              (value) => value,
-            ),
+      builder: (context) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(context).height * 0.78,
+          child: StreamBuilder<int>(
+            stream: Stream<int>.periodic(const Duration(seconds: 1), (i) => i),
             builder: (context, _) {
               final live = readLiveData();
-              final trip = live.trip;
-              final hasTrip = trip != null;
-              final isTripActive = trip?.status == 'active';
-              final routeLabel = live.routeLabel;
-              final isOnline = live.isOnline;
-              final availabilityNote = live.availabilityNote;
-              final displayedOnboard = live.displayedOnboard;
-              final seatCapacity = live.seatCapacity;
-              final manualPassengerCount = live.manualPassengerCount;
-              final activePickupCount = live.activePickupCount;
-              final activeDestinationAlerts = live.activeDestinationAlerts;
-              final onAdjustManualCount = live.onAdjustManualCount;
-              final onStartTrip = live.onStartTrip;
-              final onEndTrip = live.onEndTrip;
-              final onTogglePickup = live.onTogglePickup;
-              final scheme = Theme.of(context).colorScheme;
-              final reduceBlur = MediaQuery.of(context).disableAnimations;
-              final blurSigma = reduceBlur ? 0.0 : 16.0;
-              final waitingForTerminalArrival = trip?.status == 'scheduled' &&
-                  trip?.operatingMode == 'terminal_queue' &&
-                  trip?.terminalQueueStatus == 'off_queue';
-
-              return Container(
-                decoration: const BoxDecoration(
-                  boxShadow: [
-                    BoxShadow(
-                      color: Color(0x55000000),
-                      blurRadius: 24,
-                      offset: Offset(0, -6),
-                    ),
-                  ],
-                  borderRadius: BorderRadius.vertical(
-                    top: Radius.circular(28),
-                  ),
-                ),
-                child: ClipRRect(
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(28),
-                  ),
-                  child: BackdropFilter(
-                    filter: ui.ImageFilter.blur(
-                      sigmaX: blurSigma,
-                      sigmaY: blurSigma,
-                    ),
-                    child: DecoratedBox(
-                      decoration: const BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            Color(0x80132F2E),
-                            Color(0x800F6A5F),
-                          ],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        border: Border(
-                          top: BorderSide(
-                            color: Color(0x66FFFFFF),
-                            width: 1,
-                          ),
-                        ),
+              final current = live.trip;
+              final waiting = current?.status == 'scheduled' &&
+                  current?.operatingMode == 'terminal_queue' &&
+                  current?.terminalQueueStatus == 'off_queue';
+              final automatic = widget.automaticLifecycleEnabled &&
+                  (current == null || current.flowVersion == 2);
+              return ListView(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                children: [
+                  Text('Trip', style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 12),
+                  _SummaryRow(label: 'Route', value: live.routeLabel),
+                  _SummaryRow(
+                      label: 'Status',
+                      value: current?.driverStateLabel ??
+                          (live.isOnline ? 'Ready' : 'Offline')),
+                  _SummaryRow(
+                      label: 'Seats',
+                      value:
+                          '${live.displayedOnboard} / ${live.seatCapacity ?? '—'}'),
+                  _SummaryRow(
+                      label: 'Mode', value: automatic ? 'Auto' : 'Manual'),
+                  if (current?.operatingMode == 'terminal_queue')
+                    TerminalLoadingClock(summary: current?.terminalSummary),
+                  if (live.requirementMessage != null)
+                    Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Text(live.requirementMessage!)),
+                  ExpansionTile(
+                    title: const Text('Controls'),
+                    tilePadding: EdgeInsets.zero,
+                    childrenPadding: const EdgeInsets.only(bottom: 12),
+                    children: [
+                      const SizedBox(height: 8),
+                      WalkInControls(
+                        enabled: current?.status == 'active',
+                        manualCount: live.manualPassengerCount,
+                        displayedOnboard: live.displayedOnboard,
+                        capacity: live.seatCapacity,
+                        onAdjust: live.onAdjustManualCount,
                       ),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
-                        child: SingleChildScrollView(
-                          controller: scrollController,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Center(
-                                child: Container(
-                                  width: 48,
-                                  height: 4,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.4),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 14),
-                              Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.08),
-                                  borderRadius: BorderRadius.circular(24),
-                                  border: Border.all(
-                                    color: Colors.white.withValues(alpha: 0.10),
-                                  ),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                driverName,
-                                                style: Theme.of(context)
-                                                    .textTheme
-                                                    .titleLarge
-                                                    ?.copyWith(
-                                                      color: Colors.white,
-                                                      fontWeight:
-                                                          FontWeight.w800,
-                                                    ),
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                availabilityNote,
-                                                style: Theme.of(context)
-                                                    .textTheme
-                                                    .bodyMedium
-                                                    ?.copyWith(
-                                                      color: Colors.white70,
-                                                    ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        StatusBadge(
-                                          status: isOnline
-                                              ? (trip?.status ?? 'ready')
-                                              : 'offline',
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 14),
-                                    Wrap(
-                                      spacing: 10,
-                                      runSpacing: 10,
-                                      children: [
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 12,
-                                            vertical: 8,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: scheme.secondary.withValues(
-                                              alpha: 0.15,
-                                            ),
-                                            borderRadius:
-                                                BorderRadius.circular(999),
-                                          ),
-                                          child: Text(
-                                            trip?.acceptRequests == false
-                                                ? 'Pickup paused'
-                                                : 'Pickup active',
-                                            style: TextStyle(
-                                              color: scheme.onSecondary,
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              _DriverStatusTimeline(trip: trip),
-                              const SizedBox(height: 16),
-                              Text(
-                                'Passengers onboard',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .labelLarge
-                                    ?.copyWith(
-                                      color: Colors.white70,
-                                      letterSpacing: 0.3,
-                                    ),
-                              ),
-                              const SizedBox(height: 6),
-                              Row(
-                                children: [
-                                  Text(
-                                    displayedOnboard.toString(),
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .displaySmall
-                                        ?.copyWith(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color:
-                                          Colors.white.withValues(alpha: 0.08),
-                                      borderRadius: BorderRadius.circular(999),
-                                    ),
-                                    child: Text(
-                                      seatCapacity == null || seatCapacity <= 0
-                                          ? 'capacity open'
-                                          : '$displayedOnboard / $seatCapacity seats',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                'Walk-in passengers: $manualPassengerCount',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodyMedium
-                                    ?.copyWith(
-                                      color: Colors.white70,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                              ),
-                              const SizedBox(height: 16),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 12,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.06),
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                    color: Colors.white.withValues(alpha: 0.08),
-                                  ),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        '$activePickupCount route ride alerts',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ),
-                                    Container(
-                                      width: 1,
-                                      height: 18,
-                                      color:
-                                          Colors.white.withValues(alpha: 0.16),
-                                    ),
-                                    Expanded(
-                                      child: Text(
-                                        '${activeDestinationAlerts.length} unload alerts',
-                                        textAlign: TextAlign.right,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              _PassengerAdjustmentControls(
-                                enabled: hasTrip && isTripActive,
-                                manualCount: manualPassengerCount,
-                                displayedOnboard: displayedOnboard,
-                                capacity: seatCapacity,
-                                onAdjust: onAdjustManualCount,
-                              ),
-                              const SizedBox(height: 16),
-                              Wrap(
-                                spacing: 10,
-                                runSpacing: 10,
-                                children: [
-                                  FilledButton.icon(
-                                    onPressed: waitingForTerminalArrival
-                                        ? null
-                                        : onStartTrip,
-                                    icon: Icon(waitingForTerminalArrival
-                                        ? Icons.location_searching
-                                        : Icons.play_arrow),
-                                    label: Text(waitingForTerminalArrival
-                                        ? 'Await terminal arrival'
-                                        : 'Start trip'),
-                                  ),
-                                  OutlinedButton.icon(
-                                    onPressed: onEndTrip,
-                                    icon:
-                                        const Icon(Icons.stop_circle_outlined),
-                                    label: const Text('End trip'),
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: Colors.white,
-                                      side: BorderSide(
-                                        color:
-                                            Colors.white.withValues(alpha: 0.4),
-                                      ),
-                                    ),
-                                  ),
-                                  OutlinedButton.icon(
-                                    onPressed: onTogglePickup,
-                                    icon: Icon(
-                                      trip?.acceptRequests == false
-                                          ? Icons
-                                              .playlist_add_check_circle_outlined
-                                          : Icons.pause_circle_outline,
-                                    ),
-                                    label: Text(
-                                      trip?.operatingMode == 'terminal_queue'
-                                          ? (trip?.terminalQueueStatus ==
-                                                  'loading'
-                                              ? 'Depart terminal'
-                                              : trip?.terminalQueueStatus ==
-                                                      'skipped'
-                                                  ? 'Rejoin at back'
-                                                  : 'Skip my turn')
-                                          : trip?.acceptRequests == false
-                                              ? 'Resume pickup'
-                                              : 'Pause pickup',
-                                    ),
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: Colors.white,
-                                      side: BorderSide(
-                                        color:
-                                            Colors.white.withValues(alpha: 0.4),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              if (!hasTrip) ...[
-                                const SizedBox(height: 10),
-                                const Text(
-                                  'No active trip selected yet. Start terminal entry when you are ready; passenger alerts become available after terminal departure.',
-                                  style: TextStyle(color: Colors.white70),
-                                ),
-                              ] else if (!isTripActive) ...[
-                                const SizedBox(height: 10),
-                                const Text(
-                                  'Drive to the configured terminal. Fresh GPS arrival is required before queue loading begins.',
-                                  style: TextStyle(color: Colors.white70),
-                                ),
-                              ],
-                              const SizedBox(height: 16),
-                              Card(
-                                child: Padding(
-                                  padding: const EdgeInsets.all(20),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        'Focused trip snapshot',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleLarge,
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        trip == null
-                                            ? 'Start terminal entry to join the queue. After departure, passenger pickup alerts appear here.'
-                                            : 'Passengers can alert along the route, and multiple riders can already be onboard.',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodyMedium,
-                                      ),
-                                      const SizedBox(height: 14),
-                                      _SummaryRow(
-                                        label: 'Route',
-                                        value: trip == null
-                                            ? 'No active route'
-                                            : routeLabel,
-                                      ),
-                                      _SummaryRow(
-                                        label: 'Trip status',
-                                        value: trip == null
-                                            ? (isOnline ? 'Ready' : 'Offline')
-                                            : trip.operatingMode == 'route' &&
-                                                    trip.terminalQueueStatus ==
-                                                        'departed'
-                                                ? 'Active · Departed terminal'
-                                                : ParagoFormat.statusLabel(
-                                                    trip.status),
-                                      ),
-                                      _SummaryRow(
-                                        label: 'Route ride alerts',
-                                        value: activePickupCount.toString(),
-                                      ),
-                                      _SummaryRow(
-                                        label: 'Unload alerts',
-                                        value: activeDestinationAlerts.length
-                                            .toString(),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 24),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
+                      const SizedBox(height: 12),
+                      Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            OutlinedButton.icon(
+                              onPressed: waiting ? null : live.onStartTrip,
+                              icon: const Icon(Icons.play_arrow),
+                              label: Text(waiting ? 'Terminal' : 'Start'),
+                            ),
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: live.onEndTrip,
+                              icon: const Icon(Icons.stop_circle_outlined),
+                              label: const Text('End'),
+                            ),
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: live.onTogglePickup,
+                              icon: const Icon(Icons.swap_horiz),
+                              label: Text(current?.operatingMode ==
+                                      'terminal_queue'
+                                  ? current?.terminalQueueStatus == 'loading'
+                                      ? 'Depart'
+                                      : current?.terminalQueueStatus ==
+                                              'skipped'
+                                          ? 'Rejoin'
+                                          : 'Skip'
+                                  : current?.acceptRequests == false
+                                      ? 'Resume'
+                                      : 'Pause'),
+                            ),
+                          ]),
+                    ],
                   ),
-                ),
+                ],
               );
             },
-          );
-        },
+          ),
+        ),
       ),
     );
   }
@@ -3933,11 +3458,9 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
   @override
   Widget build(BuildContext context) {
     final hasTrip = trip != null;
-    final scheme = Theme.of(context).colorScheme;
-
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(32),
+        borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.08),
@@ -3947,12 +3470,11 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
         ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(32),
+        borderRadius: BorderRadius.circular(16),
         child: SizedBox(
           height: height,
           child: Listener(
             behavior: HitTestBehavior.translucent,
-            onPointerDown: (_) => _handleUserInteraction(),
             child: Stack(
               children: [
                 Positioned.fill(
@@ -3984,13 +3506,24 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                           ],
                         ),
                       MarkerLayer(
-                        markers: markers
+                        markers: [
+                          ...markers.where(
+                              (entry) => entry.kind != _DriveMarkerKind.vehicle),
+                          ...markers.where(
+                              (entry) => entry.kind == _DriveMarkerKind.vehicle),
+                        ]
                             .map(
                               (entry) => Marker(
                                 rotate: true,
                                 point: entry.position,
-                                width: 150,
-                                height: 92,
+                                width: entry.kind == _DriveMarkerKind.vehicle
+                                    ? RoadJeepMarker.extent
+                                    : 150,
+                                height: entry.kind == _DriveMarkerKind.vehicle
+                                    ? RoadJeepMarker.extent
+                                    : entry.members.isNotEmpty
+                                        ? 112
+                                        : 92,
                                 child: _DriveMapMarker(entry: entry),
                               ),
                             )
@@ -4008,274 +3541,49 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                   child: IgnorePointer(
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            Colors.white.withValues(alpha: 0.04),
-                            Colors.white.withValues(alpha: 0.0),
-                            const Color(0xFF102725).withValues(alpha: 0.12),
-                          ],
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                        ),
+                        color: Colors.transparent,
                       ),
                     ),
                   ),
                 ),
-                if (_isChromeCollapsed)
+                Positioned(
+                  top: 12,
+                  left: 12,
+                  right: 12,
+                  child: _DriveMapMiniOverlay(
+                    status: isOnline
+                        ? hasTrip
+                            ? trip!.status
+                            : 'ready'
+                        : 'offline',
+                    routeLabel: routeLabel,
+                    displayedOnboard: displayedOnboard,
+                    activePickupCount: activePickupCount,
+                    activeDropOffCount: activeDestinationAlerts.length,
+                    dropOffLabel: activeDestinationAlerts.isEmpty
+                        ? null
+                        : activeDestinationAlerts.first.stopRef,
+                    onOpenControls: () => _openControls(context),
+                    onAcknowledgeDropOff: onAcknowledgeAlert == null
+                        ? null
+                        : () {
+                            onAcknowledgeAlert?.call();
+                          },
+                  ),
+                ),
+                if (requirementMessage != null ||
+                    (statusMessage?.isNotEmpty ?? false))
                   Positioned(
-                    top: 12,
                     left: 12,
                     right: 12,
-                    child: _DriveMapMiniOverlay(
-                      status: isOnline
-                          ? hasTrip
-                              ? trip!.status
-                              : 'ready'
-                          : 'offline',
-                      routeLabel: routeLabel,
-                      displayedOnboard: displayedOnboard,
-                      activePickupCount: activePickupCount,
-                      activeDropOffCount: activeDestinationAlerts.length,
-                      dropOffLabel: activeDestinationAlerts.isEmpty
-                          ? null
-                          : activeDestinationAlerts.first.stopRef,
-                      onOpenControls: () => _openControls(context),
-                      onAcknowledgeDropOff: onAcknowledgeAlert == null
-                          ? null
-                          : () {
-                              _handleUserInteraction();
-                              onAcknowledgeAlert?.call();
-                            },
-                    ),
-                  ),
-                if (!_isChromeCollapsed)
-                  Positioned(
-                    top: 16,
-                    left: 16,
-                    right: 16,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (trip != null && trip!.terminalStopRef != null)
-                          Center(
-                            child: TerminalMapBanner(
-                              name: trip!.terminalStopRef!,
-                            ),
-                          ),
-                        if (trip != null && trip!.terminalStopRef != null)
-                          const SizedBox(height: 8),
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color:
-                                const Color(0xFF102725).withValues(alpha: 0.84),
-                            borderRadius: BorderRadius.circular(26),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.08),
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.18),
-                                blurRadius: 24,
-                                offset: const Offset(0, 14),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Expanded(
-                                    flex: 3,
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          driverName,
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleMedium
-                                              ?.copyWith(
-                                                color: Colors.white,
-                                                fontWeight: FontWeight.w800,
-                                              ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          availabilityNote,
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .bodySmall
-                                              ?.copyWith(
-                                                color: Colors.white70,
-                                              ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Flexible(
-                                    flex: 2,
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.end,
-                                      children: [
-                                        StatusBadge(
-                                          status: isOnline
-                                              ? hasTrip
-                                                  ? trip!.status
-                                                  : 'ready'
-                                              : 'offline',
-                                        ),
-                                        const SizedBox(height: 8),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 12,
-                                            vertical: 8,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white.withValues(
-                                              alpha: 0.10,
-                                            ),
-                                            borderRadius:
-                                                BorderRadius.circular(999),
-                                          ),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              const Icon(
-                                                Icons.route,
-                                                size: 16,
-                                                color: Colors.white,
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Flexible(
-                                                child: Text(
-                                                  routeLabel,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: const TextStyle(
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.w700,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 14),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: _MapStatTile(
-                                      label: 'On board',
-                                      value: displayedOnboard.toString(),
-                                      accent: scheme.primary,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: _MapStatTile(
-                                      label: 'Pickup alerts',
-                                      value: activePickupCount.toString(),
-                                      accent: const Color(0xFFE29B2D),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: _MapStatTile(
-                                      label: 'Unload alerts',
-                                      value: activeDestinationAlerts.length
-                                          .toString(),
-                                      accent: const Color(0xFFCC4B7A),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (activeDestinationAlerts.isNotEmpty) ...[
-                          const SizedBox(height: 12),
-                          _DriverPopupAlert(
-                            title: 'Passenger nearing destination',
-                            message: activeDestinationAlerts.length == 1
-                                ? '${activeDestinationAlerts.first.stopRef} is ready for unloading.'
-                                : '${activeDestinationAlerts.first.stopRef} plus ${activeDestinationAlerts.length - 1} more unloading alerts are active.',
-                            onClose: onDismissAlert,
-                          ),
-                        ],
-                        if (trip?.operatingMode == 'terminal_queue')
-                          TerminalLoadingClock(summary: trip?.terminalSummary),
-                        if (requirementMessage != null) ...[
-                          const SizedBox(height: 12),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.95),
-                              borderRadius: BorderRadius.circular(18),
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    requirementMessage!,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ),
-                                IconButton(
-                                  tooltip: 'Close info',
-                                  onPressed: onDismissRequirementMessage,
-                                  icon: const Icon(Icons.close),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                        if (statusMessage != null &&
-                            statusMessage!.isNotEmpty) ...[
-                          const SizedBox(height: 12),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.95),
-                              borderRadius: BorderRadius.circular(18),
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    statusMessage!,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ),
-                                IconButton(
-                                  tooltip: 'Close info',
-                                  onPressed: onDismissStatusMessage,
-                                  icon: const Icon(Icons.close),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ],
+                    top: 154,
+                    child: _DriverStatusBanner(
+                      message: statusMessage?.isNotEmpty == true
+                          ? statusMessage!
+                          : requirementMessage!,
+                      onClose: statusMessage?.isNotEmpty == true
+                          ? onDismissStatusMessage
+                          : onDismissRequirementMessage,
                     ),
                   ),
                 Positioned(
@@ -4296,49 +3604,13 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onVerticalDragEnd: (details) {
-                      _handleUserInteraction();
                       if (details.primaryVelocity != null &&
                           details.primaryVelocity! < -120) {
                         _openControlSheet(context);
                       }
                     },
                     onTap: () => _openControls(context),
-                    child: _isChromeCollapsed
-                        ? _DriveMapMiniControl(hasTrip: trip != null)
-                        : Container(
-                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [
-                                  scheme.primary.withValues(alpha: 0.94),
-                                  const Color(0xFF0D4E47)
-                                      .withValues(alpha: 0.96),
-                                ],
-                                begin: Alignment.centerLeft,
-                                end: Alignment.centerRight,
-                              ),
-                              borderRadius: BorderRadius.circular(28),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.18),
-                                  blurRadius: 18,
-                                  offset: const Offset(0, 10),
-                                ),
-                              ],
-                            ),
-                            child: Center(
-                              child: Text(
-                                trip == null
-                                    ? 'No trip selected · tap for controls'
-                                    : 'Trip controls · tap to open',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ),
+                    child: const _DriveMapMiniControl(),
                   ),
                 ),
               ],
@@ -4393,7 +3665,8 @@ class _DriveMapMiniOverlay extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Center(
+            SizedBox(
+              width: double.infinity,
               child: InkWell(
                 onTap: onOpenControls,
                 borderRadius: BorderRadius.circular(18),
@@ -4405,8 +3678,7 @@ class _DriveMapMiniOverlay extends StatelessWidget {
                     children: [
                       StatusBadge(status: status),
                       const SizedBox(width: 8),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 220),
+                      Expanded(
                         child: Text(
                           routeLabel,
                           maxLines: 1,
@@ -4444,7 +3716,7 @@ class _DriveMapMiniOverlay extends StatelessWidget {
                 Expanded(
                   child: _MiniMetric(
                     icon: Icons.flag_outlined,
-                    label: 'Drop-off',
+                    label: 'Para',
                     value: activeDropOffCount.toString(),
                     accent: hasDropOff
                         ? const Color(0xFFFFC3D4)
@@ -4474,8 +3746,8 @@ class _DriveMapMiniOverlay extends StatelessWidget {
                     Expanded(
                       child: Text(
                         dropOffLabel == null
-                            ? '$activeDropOffCount passenger drop-off alerts'
-                            : '$dropOffLabel drop-off ready',
+                            ? 'Para: $activeDropOffCount'
+                            : 'Para: $dropOffLabel',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -4497,11 +3769,7 @@ class _DriveMapMiniOverlay extends StatelessWidget {
 }
 
 class _DriveMapMiniControl extends StatelessWidget {
-  const _DriveMapMiniControl({
-    required this.hasTrip,
-  });
-
-  final bool hasTrip;
+  const _DriveMapMiniControl();
 
   @override
   Widget build(BuildContext context) {
@@ -4524,7 +3792,7 @@ class _DriveMapMiniControl extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              hasTrip ? 'Controls' : 'Trip controls',
+              'Trip',
               style: const TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.w800,
@@ -4560,16 +3828,16 @@ class _MiniMetric extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: accent, size: 17),
-          const SizedBox(width: 7),
-          Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
+          Row(
+            children: [
+              Icon(icon, color: accent, size: 17),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
                   value,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -4579,65 +3847,17 @@ class _MiniMetric extends StatelessWidget {
                     fontSize: 15,
                   ),
                 ),
-                Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MapStatTile extends StatelessWidget {
-  const _MapStatTile({
-    required this.label,
-    required this.value,
-    required this.accent,
-  });
-
-  final String label;
-  final String value;
-  final Color accent;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              color: accent,
-              fontWeight: FontWeight.w800,
-              fontSize: 20,
-            ),
-          ),
-          const SizedBox(height: 2),
           Text(
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ],
@@ -4748,64 +3968,72 @@ class _NotificationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: Theme.of(context)
-                    .colorScheme
-                    .secondary
-                    .withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Icon(
-                notification.isRead
-                    ? Icons.drafts_outlined
-                    : Icons.mark_email_unread,
-                color: Theme.of(context).colorScheme.secondary,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          notification.title,
-                          style: Theme.of(context).textTheme.titleMedium,
+    return SwipeNotice(
+        key: ValueKey(notification.id),
+        onDismiss: () => onClose?.call(),
+        child: GlassCard(
+          child: Builder(
+              builder: (context) => Padding(
+                    padding: const EdgeInsets.all(18),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .secondary
+                                .withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Icon(
+                            notification.isRead
+                                ? Icons.drafts_outlined
+                                : Icons.mark_email_unread,
+                            color: Theme.of(context).colorScheme.secondary,
+                          ),
                         ),
-                      ),
-                      StatusBadge(status: notification.isRead ? 'read' : 'new'),
-                      IconButton(
-                        tooltip: 'Close notification',
-                        onPressed: onClose,
-                        icon: const Icon(Icons.close),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(notification.body),
-                  const SizedBox(height: 8),
-                  Text(
-                    ParagoFormat.relative(notification.createdAt),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      notification.title,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium,
+                                    ),
+                                  ),
+                                  StatusBadge(
+                                      status:
+                                          notification.isRead ? 'read' : 'new'),
+                                  IconButton(
+                                    tooltip: 'Close notification',
+                                    onPressed: onClose,
+                                    icon: const Icon(Icons.close),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(notification.body),
+                              const SizedBox(height: 8),
+                              Text(
+                                ParagoFormat.relative(notification.createdAt),
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  )),
+        ));
   }
 }
 
@@ -4864,218 +4092,8 @@ class _SummaryRow extends StatelessWidget {
   final String value;
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Text(
-              label,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Flexible(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PassengerAdjustmentControls extends StatelessWidget {
-  const _PassengerAdjustmentControls({
-    required this.enabled,
-    required this.manualCount,
-    required this.displayedOnboard,
-    required this.capacity,
-    required this.onAdjust,
-  });
-
-  final bool enabled;
-  final int manualCount;
-  final int displayedOnboard;
-  final int? capacity;
-  final void Function(int delta)? onAdjust;
-
-  bool _canApply(int delta) {
-    if (!enabled || onAdjust == null) return false;
-    if (manualCount + delta < 0) return false;
-    if (delta > 0 && capacity != null && capacity! > 0) {
-      return displayedOnboard + delta <= capacity!;
-    }
-    return true;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    const negative = [-1, -2, -3, -5];
-    const positive = [1, 2, 3, 5];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Walk-in passenger adjustments',
-          style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                color: Colors.white70,
-                letterSpacing: 0.2,
-              ),
-        ),
-        const SizedBox(height: 8),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              for (final delta in negative) ...[
-                _PassengerAdjustmentChip(
-                  delta: delta,
-                  enabled: _canApply(delta),
-                  onTap: onAdjust == null ? null : () => onAdjust!(delta),
-                ),
-                const SizedBox(width: 8),
-              ],
-              for (final delta in positive) ...[
-                _PassengerAdjustmentChip(
-                  delta: delta,
-                  enabled: _canApply(delta),
-                  onTap: onAdjust == null ? null : () => onAdjust!(delta),
-                ),
-                const SizedBox(width: 8),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _PassengerAdjustmentChip extends StatelessWidget {
-  const _PassengerAdjustmentChip({
-    required this.delta,
-    required this.enabled,
-    required this.onTap,
-  });
-
-  final int delta;
-  final bool enabled;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final sign = delta > 0 ? '+' : '−';
-    return Semantics(
-      button: true,
-      enabled: enabled,
-      label:
-          '${delta > 0 ? 'Add' : 'Remove'} ${delta.abs()} walk-in passengers',
-      child: OutlinedButton(
-        onPressed: enabled ? onTap : null,
-        style: OutlinedButton.styleFrom(
-          foregroundColor: Colors.white,
-          disabledForegroundColor: Colors.white38,
-          minimumSize: const Size(60, 52),
-          side: BorderSide(
-            color: Colors.white.withValues(alpha: enabled ? 0.42 : 0.14),
-          ),
-          backgroundColor:
-              Colors.white.withValues(alpha: enabled ? 0.10 : 0.04),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
-        ),
-        child: Text(
-          '$sign${delta.abs()}',
-          style: const TextStyle(fontWeight: FontWeight.w800),
-        ),
-      ),
-    );
-  }
-}
-
-class _DriverPopupAlert extends StatelessWidget {
-  const _DriverPopupAlert({
-    required this.title,
-    required this.message,
-    this.onClose,
-  });
-
-  final String title;
-  final String message;
-  final VoidCallback? onClose;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF2EE).withValues(alpha: 0.96),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFFFC8BA)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.10),
-            blurRadius: 18,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFB24E34).withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(Icons.notifications_active,
-                    color: Color(0xFFB24E34)),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      message,
-                      style: const TextStyle(height: 1.35),
-                    ),
-                  ],
-                ),
-              ),
-              IconButton(
-                tooltip: 'Close alert',
-                onPressed: onClose,
-                icon: const Icon(Icons.close),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      ReadableDetailRow(label: label, value: value);
 }
 
 class _DriveMapMarker extends StatelessWidget {
@@ -5092,6 +4110,20 @@ class _DriveMapMarker extends StatelessWidget {
           isEnd: entry.kind == _DriveMarkerKind.endTerminal,
           isCombined: entry.detail == 'Departure terminal and route end');
     }
+    if (entry.members.isNotEmpty) {
+      return JourneyPickupPin(
+          members: entry.members,
+          pickup: entry.detail,
+          assignedJeepneyLabel: entry.assignedJeepneyLabel);
+    }
+    if (entry.kind == _DriveMarkerKind.vehicle) {
+      return RoadJeepMarker(
+        latitude: entry.position.latitude,
+        headingDegrees: entry.headingDegrees,
+        label: 'Jeep ${entry.label}',
+        tooltip: '${entry.label}: ${entry.detail}',
+      );
+    }
     final icon = Icon(entry.icon, color: Colors.white, size: 20);
     final markerIcon = entry.rotateWithHeading && entry.headingDegrees != null
         ? Transform.rotate(
@@ -5101,6 +4133,19 @@ class _DriveMapMarker extends StatelessWidget {
             child: icon,
           )
         : icon;
+
+    if (entry.kind == _DriveMarkerKind.landmark) {
+      return Align(
+        alignment: Alignment.bottomCenter,
+        child: Tooltip(
+          message: '${entry.label}: ${entry.detail}',
+          child: CircleAvatar(
+              radius: 18,
+              backgroundColor: entry.markerColor,
+              child: markerIcon),
+        ),
+      );
+    }
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -5184,9 +4229,13 @@ class _DriveMarkerData {
     required this.markerColor,
     required this.kind,
     this.headingDegrees,
+    this.members = const [],
+    this.assignedJeepneyLabel,
     this.rotateWithHeading = false,
   });
 
+  final List<JourneyMemberModel> members;
+  final String? assignedJeepneyLabel;
   final String label;
   final String detail;
   final LatLng position;

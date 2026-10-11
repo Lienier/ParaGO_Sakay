@@ -280,18 +280,22 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       final request = activeRequests[index];
       markers.add(
         _DriveMarkerData(
+          members: request.members,
+          assignedJeepneyLabel: trip.jeepneyLabel,
           label: request.pickupType == 'terminal'
               ? (request.terminalStopRef ??
                   request.stopRef ??
                   'Terminal passenger')
               : (request.stopRef ?? 'Pickup ${index + 1}'),
-          detail: request.status == 'acknowledged'
-              ? request.pickupType == 'terminal'
-                  ? 'Acknowledged terminal boarding'
-                  : 'Acknowledged pickup'
-              : request.pickupType == 'terminal'
-                  ? 'Waiting at terminal'
-                  : 'Waiting pickup',
+          detail: request.flowVersion == 2
+              ? request.stopRef ?? 'Shared pickup'
+              : request.status == 'acknowledged'
+                  ? request.pickupType == 'terminal'
+                      ? 'Acknowledged terminal boarding'
+                      : 'Acknowledged pickup'
+                  : request.pickupType == 'terminal'
+                      ? 'Waiting at terminal'
+                      : 'Waiting pickup',
           position: _pickupPosition(request) ??
               routePath[math.min(index, routePath.length - 1)],
           icon: Icons.person_pin_circle,
@@ -339,6 +343,27 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         .toList(growable: false);
     for (var index = 0; index < onboardDestinationRides.length; index += 1) {
       final ride = onboardDestinationRides[index];
+      if (ride.flowVersion == 2) {
+        final destinations = <String>{};
+        for (final member in ride.members.where((m) => m.status == 'onboard')) {
+          final key = '${member.longitude},${member.latitude}';
+          if (!destinations.add(key)) continue;
+          final count = ride.members
+              .where((m) =>
+                  m.status == 'onboard' &&
+                  m.longitude == member.longitude &&
+                  m.latitude == member.latitude)
+              .length;
+          markers.add(_DriveMarkerData(
+              label: member.destinationStopRef,
+              detail: '$count passengers remaining at this destination',
+              position: LatLng(member.latitude, member.longitude),
+              icon: Icons.flag_outlined,
+              markerColor: const Color(0xFF7B61C8),
+              kind: _DriveMarkerKind.unload));
+        }
+        continue;
+      }
       markers.add(
         _DriveMarkerData(
           label: (ride.destinationStopRef ?? '').trim().isEmpty
@@ -375,13 +400,13 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
   String _tabTitle() {
     switch (_tabIndex) {
       case 1:
-        return 'Driver Requests';
+        return 'Pickups';
       case 2:
-        return 'Driver Alerts';
+        return 'Drop-offs';
       case 3:
-        return 'Driver Notifications';
+        return 'Notices';
       default:
-        return 'Driver Drive';
+        return 'Drive';
     }
   }
 
@@ -434,9 +459,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     required List<RideSessionModel> focusedRides,
     required double mapHeight,
   }) {
-    final startRequirementMessage = focusedTrip == null
-        ? null
-        : _driverStartRequirementMessage(trip: focusedTrip);
+    final startRequirementMessage =
+        _driverStartRequirementMessage(trip: focusedTrip);
     final pickupRequirementMessage = focusedTrip == null
         ? null
         : _driverPickupRequirementMessage(trip: focusedTrip);
@@ -502,6 +526,25 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       );
     }
 
+    // Other jeeps' reserved pickups are informative pins only. Operational
+    // lists and manual correction actions still use this driver's own trip.
+    for (final request
+        in _routeRequests.where((r) => r.tripSessionId != focusedTrip?.id)) {
+      final position = _pickupPosition(request);
+      if (position == null) continue;
+      markers.add(_DriveMarkerData(
+        members: request.members,
+        assignedJeepneyLabel: request.assignedJeepneyLabel,
+        label: request.destinationsLabel,
+        detail:
+            '${request.stopRef ?? 'Shared pickup'} · Assigned jeep: ${request.assignedJeepneyLabel ?? 'Another jeep'} · ${request.partySize} passenger(s)',
+        position: position,
+        icon: Icons.person_pin_circle,
+        markerColor: const Color(0xFF49779B),
+        kind: _DriveMarkerKind.pickup,
+      ));
+    }
+
     final mapCenter = liveVehicleLocation ??
         tripVehicleLocation ??
         (routePath.isEmpty
@@ -515,6 +558,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     );
 
     return _DriveMapPanel(
+      automaticLifecycleEnabled:
+          _driverProfile['automaticLifecycleEnabled'] == true,
       mapController: _driverMapController,
       cameraTarget: mapCenter,
       trip: focusedTrip,
@@ -698,33 +743,39 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         ],
         if (focusedTrip == null)
           const _DriverEmptyState(
-            title: 'No trip selected',
-            message: 'Select a trip to view and manage pickup requests.',
+            title: 'No trip',
+            message: 'Start a trip first.',
           )
         else if (requests.isEmpty)
           const _DriverEmptyState(
-            title: 'Pickup queue clear',
-            message: 'No active pickup requests are waiting on this trip.',
+            title: 'No pickups',
+            message: 'No passengers waiting.',
           )
         else
           for (final request in requests) ...[
             _DriverActionCard(
-              title: request.stopRef ?? 'Unspecified pickup point',
+              title: request.stopRef ?? 'Pickup',
               subtitle:
                   '${ParagoFormat.statusLabel(request.status)} - ${ParagoFormat.relative(request.createdAt)}',
-              detail: request.status == 'acknowledged'
-                  ? request.pickupType == 'terminal'
-                      ? 'Terminal boarding acknowledged. Wait for the passenger to validate boarding from the passenger app.'
-                      : 'Pickup acknowledged. Wait for the passenger to validate boarding from the passenger app.'
-                  : request.status == 'completed'
-                      ? 'Passenger boarding has been validated and the ride is already active.'
-                      : request.sourceNote ??
-                          (request.pickupType == 'terminal'
-                              ? 'Passenger requested terminal boarding.'
-                              : 'Passenger requested a roadside pickup.'),
+              detail: request.flowVersion == 2
+                  ? 'Drop-off: ${request.destinationsLabel}'
+                  : request.status == 'acknowledged'
+                      ? request.pickupType == 'terminal'
+                          ? 'Terminal boarding acknowledged. Wait for the passenger to validate boarding from the passenger app.'
+                          : 'Pickup acknowledged. Wait for the passenger to validate boarding from the passenger app.'
+                      : request.status == 'completed'
+                          ? 'Passenger boarding has been validated and the ride is already active.'
+                          : request.sourceNote ??
+                              (request.pickupType == 'terminal'
+                                  ? 'Passenger requested terminal boarding.'
+                                  : 'Passenger requested a roadside pickup.'),
               status: request.status,
-              primaryLabel: request.status == 'pending' ? 'Acknowledge' : null,
-              onPrimary: request.status == 'pending' &&
+              primaryLabel:
+                  request.flowVersion != 2 && request.status == 'pending'
+                      ? 'Acknowledge'
+                      : null,
+              onPrimary: request.flowVersion != 2 &&
+                      request.status == 'pending' &&
                       visiblePickupRequirementMessage == null
                   ? () => _acknowledgeRequest(focusedTrip, request.id)
                   : null,
@@ -747,8 +798,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       children: [
         if (focusedTrip == null)
           const _DriverEmptyState(
-            title: 'No trip selected',
-            message: 'Select a trip to review onboard passenger destinations.',
+            title: 'No trip',
+            message: 'Start a trip first.',
           )
         else ...[
           () {
@@ -757,9 +808,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                 .toList(growable: false);
             if (onboardRides.isEmpty) {
               return const _DriverEmptyState(
-                title: 'No onboard passengers',
-                message:
-                    'Saved unload destinations appear here once riders board.',
+                title: 'No passengers',
+                message: 'Drop-offs appear after boarding.',
               );
             }
             return Column(
@@ -769,8 +819,9 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                     index += 1) ...[
                   () {
                     final ride = onboardRides[index];
-                    final destinationLabel =
-                        (ride.destinationStopRef ?? '').trim().isEmpty
+                    final destinationLabel = ride.flowVersion == 2
+                        ? ride.destinationsLabel
+                        : (ride.destinationStopRef ?? '').trim().isEmpty
                             ? 'Saved destination ${index + 1}'
                             : ride.destinationStopRef!.trim();
                     final hasSavedPoint =
@@ -779,15 +830,17 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                       title: destinationLabel,
                       subtitle:
                           '${ride.passengerLabel} · Booking ${ride.bookingLabel}\n${ride.remainingCount} onboard - ${ParagoFormat.relative(ride.boardedAt)}',
-                      detail: hasSavedPoint
-                          ? 'Saved drop-off location is pinned on the driver map.'
-                          : 'Passenger saved a drop-off stop reference without map coordinates.',
+                      detail:
+                          hasSavedPoint ? 'Drop-off on map.' : 'No map pin.',
                       status: ride.status,
-                      secondaryLabel: 'Mark unloaded',
+                      secondaryLabel:
+                          ride.flowVersion == 2 ? 'Fix drop-off' : 'Unload',
                       onSecondary: () => _completeRideDestination(ride),
                       icon: Icons.location_on_outlined,
                     );
                   }(),
+                  if (onboardRides[index].flowVersion == 2)
+                    JourneySummary(members: onboardRides[index].members),
                   if (index < onboardRides.length - 1)
                     const SizedBox(height: 12),
                 ],
@@ -798,14 +851,13 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
         const SizedBox(height: 18),
         if (focusedTrip == null)
           const _DriverEmptyState(
-            title: 'No trip selected',
-            message: 'Select a trip to review destination alerts.',
+            title: 'No trip',
+            message: 'Start a trip first.',
           )
         else if (alerts.isEmpty)
           const _DriverEmptyState(
-            title: 'No active stop alerts',
-            message:
-                'Passengers have not triggered any digital para alerts on this trip.',
+            title: 'No para',
+            message: 'No para alerts.',
           )
         else
           for (final alert in alerts) ...[
@@ -825,10 +877,9 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                 title: alert.stopRef,
                 subtitle:
                     '${ParagoFormat.statusLabel(alert.status)} - ${ParagoFormat.relative(alert.createdAt)}',
-                detail: alert.note ??
-                    'Passenger is nearing the selected unloading point.',
+                detail: alert.note ?? 'Drop-off ahead.',
                 status: alert.status,
-                secondaryLabel: canCompleteUnload ? 'Mark unloaded' : null,
+                secondaryLabel: canCompleteUnload ? 'Unload' : null,
                 onSecondary: canCompleteUnload
                     ? () => _completeUnloadAlert(alert)
                     : null,

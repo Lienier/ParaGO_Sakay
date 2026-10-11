@@ -151,6 +151,7 @@ const createTripSession = async ({
     try {
       return await TripSession.create({
         ...payload,
+        flowVersion: require('../config/env').automaticGroupFlowEnabled ? 2 : 1,
         routePathSnapshot: buildRoutePathSnapshot(route),
         startedAt,
         active: payload.status === 'active',
@@ -380,6 +381,7 @@ router.patch(
     }
     await assertVehicleAllowed(await Jeepney.findById(trip.jeepneyId));
     trip.status = 'active';
+    trip.flowVersion = require('../config/env').automaticGroupFlowEnabled ? 2 : 1;
     if (
       (!trip.routePathSnapshot || !Array.isArray(trip.routePathSnapshot.coordinates)) &&
       trip.routeId

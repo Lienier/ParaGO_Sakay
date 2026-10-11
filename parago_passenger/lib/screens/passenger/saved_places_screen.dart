@@ -1,3 +1,4 @@
+import '../../widgets/glass_surface.dart';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import '../../core/network/api_client.dart';
@@ -94,7 +95,7 @@ class _SavedPlacesScreenState extends State<SavedPlacesScreen> {
     final body = await showDialog<Map<String, dynamic>>(
         context: context,
         builder: (context) => StatefulBuilder(
-            builder: (context, update) => AlertDialog(
+            builder: (context, update) => GlassAlertDialog(
                   title: const Text('Save a place'),
                   content: SingleChildScrollView(
                       child: Form(
@@ -155,7 +156,7 @@ class _SavedPlacesScreenState extends State<SavedPlacesScreen> {
   Future<void> _remove(Map<String, dynamic> place) async {
     final confirmed = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (context) => GlassAlertDialog(
                 title: const Text('Remove saved place?'),
                 content: Text(
                     'Remove ${place['name']}? Existing bookings will stay unchanged.'),

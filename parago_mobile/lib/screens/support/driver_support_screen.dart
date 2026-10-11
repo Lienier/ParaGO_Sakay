@@ -1,3 +1,4 @@
+import '../../widgets/glass_surface.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -115,7 +116,7 @@ class _DriverSupportScreenState extends State<DriverSupportScreen> {
   }
 
   Future<void> _openThreadComposer() async {
-    final created = await showModalBottomSheet<_SupportThreadDraft>(
+    final created = await showGlassBottomSheet<_SupportThreadDraft>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -159,7 +160,7 @@ class _DriverSupportScreenState extends State<DriverSupportScreen> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(ActionFeedback.messageOf(error))),
+        GlassSnackBar(content: Text(ActionFeedback.messageOf(error))),
       );
     } finally {
       if (mounted) {
@@ -413,7 +414,7 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(ActionFeedback.messageOf(error))),
+        GlassSnackBar(content: Text(ActionFeedback.messageOf(error))),
       );
     } finally {
       if (mounted) {
@@ -435,7 +436,7 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(ActionFeedback.messageOf(error))),
+        GlassSnackBar(content: Text(ActionFeedback.messageOf(error))),
       );
     }
   }
@@ -453,7 +454,7 @@ class _DriverSupportThreadScreenState extends State<DriverSupportThreadScreen> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(ActionFeedback.messageOf(error))),
+        GlassSnackBar(content: Text(ActionFeedback.messageOf(error))),
       );
     }
   }

@@ -70,6 +70,9 @@ router.put(
     if (!Object.keys(updates).length) {
       throw new ApiError(400, 'No valid route fields provided');
     }
+    if (updates.path && await TripSession.exists({ routeId: req.params.id, status: { $in: ['active', 'scheduled'] } })) {
+      throw new ApiError(409, 'End the active trips before changing the route path. Current pickup and drop-off locations must stay valid.');
+    }
     const updated = await RouteModel.findByIdAndUpdate(
       req.params.id,
       { $set: updates },

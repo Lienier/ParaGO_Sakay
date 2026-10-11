@@ -28,7 +28,7 @@ class DriverLocationSample {
   final double latitude;
   final double longitude;
   final double accuracyMeters;
-  final double speedMetersPerSecond;
+  final double? speedMetersPerSecond;
   final double headingDegrees;
   final DateTime capturedAt;
 }
@@ -204,7 +204,8 @@ class AdaptiveLocationTransmitter {
   }
 
   Duration _intervalFor(DriverLocationSample sample) {
-    return sample.speedMetersPerSecond <= stationarySpeedMetersPerSecond
+    return (sample.speedMetersPerSecond ?? double.infinity) <=
+            stationarySpeedMetersPerSecond
         ? stationaryInterval
         : movingInterval;
   }
@@ -226,7 +227,8 @@ class AdaptiveLocationTransmitter {
         (sample.headingDegrees - previous.headingDegrees).abs() % 360;
     final shortestHeadingDifference =
         min(headingDifference, 360 - headingDifference);
-    return sample.speedMetersPerSecond > stationarySpeedMetersPerSecond &&
+    return (sample.speedMetersPerSecond ?? double.infinity) >
+            stationarySpeedMetersPerSecond &&
         shortestHeadingDifference >= meaningfulHeadingDegrees;
   }
 

@@ -7,11 +7,13 @@ class TripSession {
     required this.driverId,
     required this.routeId,
     required this.status,
+    this.flowVersion = 1,
     this.routeName,
     this.routeCode,
     this.routePathSnapshotPoints = const <LatLng>[],
     this.jeepneyPlateNumber,
     this.jeepneyName,
+    this.availableSeats,
     this.jeepneyCapacity,
     this.driverName,
     this.jeepneyLatitude,
@@ -38,11 +40,13 @@ class TripSession {
   final String driverId;
   final String routeId;
   final String status;
+  final int flowVersion;
   final String? routeName;
   final String? routeCode;
   final List<LatLng> routePathSnapshotPoints;
   final String? jeepneyPlateNumber;
   final String? jeepneyName;
+  final int? availableSeats;
   final int? jeepneyCapacity;
   final String? driverName;
   final double? jeepneyLatitude;
@@ -78,11 +82,16 @@ class TripSession {
       driverId: _readId(driver),
       routeId: _readId(route),
       status: json['status']?.toString() ?? '',
+      flowVersion: (json['flowVersion'] as num?)?.toInt() ?? 1,
       routeName: _readMapString(route, const ['name']),
       routeCode: _readMapString(route, const ['code']),
       routePathSnapshotPoints: _readLinePoints(json['routePathSnapshot']),
       jeepneyPlateNumber: _readMapString(jeepney, const ['plateNumber']),
       jeepneyName: _readMapString(jeepney, const ['jeepneyName', 'vehicleTag']),
+      availableSeats: _toInt(json['availableSeats']) ??
+          (json['terminalSummary'] is Map
+              ? _toInt(json['terminalSummary']['availableSeats'])
+              : null),
       jeepneyCapacity: int.tryParse(
         _readMapString(jeepney, const ['capacity']) ?? '',
       ),
@@ -177,6 +186,7 @@ class TripSession {
       startedAt: startedAt ?? this.startedAt,
       endedAt: endedAt ?? this.endedAt,
       acceptRequests: acceptRequests ?? this.acceptRequests,
+      availableSeats: availableSeats,
       terminalSummary: terminalSummary,
       manualOccupancyCount: manualOccupancyCount ?? this.manualOccupancyCount,
       occupancyCount: occupancyCount ?? this.occupancyCount,

@@ -61,6 +61,7 @@ const processAutomaticBoardingForRequest = async ({
   jeepneyLocation,
   now = new Date(),
 }) => {
+  if (pickupRequest?.flowVersion === 2) return require('./automaticGroupBoarding.service').processRequest({ pickupRequest, now });
   if (!pickupRequest || (pickupRequest.partySize ?? 1) > 1 || pickupRequest.pickupType === 'terminal' || pickupRequest.status !== 'acknowledged') {
     return null;
   }
@@ -152,7 +153,7 @@ const processAutomaticBoardingForTrip = async ({
 
   const requests = await PickupRequest.find({
     tripSessionId: trip._id,
-    status: 'acknowledged',
+    $or: [{ flowVersion: 2, status: 'pending' }, { flowVersion: { $ne: 2 }, status: 'acknowledged' }],
   }).sort({ acknowledgedAt: 1, createdAt: 1 });
 
   const boarded = [];
@@ -179,7 +180,7 @@ const processAutomaticBoardingForPassenger = async ({
   }
   const requests = await PickupRequest.find({
     passengerId,
-    status: 'acknowledged',
+    $or: [{ flowVersion: 2, status: 'pending' }, { flowVersion: { $ne: 2 }, status: 'acknowledged' }],
   }).sort({ acknowledgedAt: 1, createdAt: 1 });
 
   const boarded = [];

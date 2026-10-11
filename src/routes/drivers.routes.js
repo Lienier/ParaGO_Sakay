@@ -21,7 +21,7 @@ const {
 const {
   processAutomaticOffboardingForTrip,
 } = require('../services/automaticOffboarding.service');
-const { emitJeepneyLocationUpdate } = require('../realtime/socketServer');
+const { emitJeepneyLocationUpdate, emitFleetLocationUpdate } = require('../realtime/socketServer');
 const {
   validateOrderedLocationPayload,
   buildPersistentLocationOrderFilter,
@@ -76,6 +76,7 @@ router.get(
       res,
       {
         ...raw,
+        automaticLifecycleEnabled: require('../config/env').automaticGroupFlowEnabled && require('../config/env').automaticDriverLifecycleEnabled,
         accountStatus: profile.userId?.status?.toString() ?? req.user.status ?? 'unknown',
       },
       'Driver profile'
@@ -217,7 +218,7 @@ const updateDriverJeepneyLocation = async (req, res) => {
     serverReceivedAt: serverReceivedAt.toISOString(),
   };
 
-  const activeTrip =
+  let activeTrip =
     activeContext.value?.tripStatus === 'active' &&
     activeContext.value?.tripId
       ? {
@@ -230,7 +231,14 @@ const updateDriverJeepneyLocation = async (req, res) => {
         }).select('_id routeId');
 
   if (orderedLocation) {
-    await processTerminalArrival({
+    const flowConfig = require('../config/env');
+    if (flowConfig.automaticGroupFlowEnabled &&
+        require('../services/mobileUpdates.service').buildNumber(req.get('X-App-Build')) < flowConfig.automaticGroupMinimumBuild &&
+        !activeTrip && await TripSession.exists({ driverId: driver._id, jeepneyId, status: 'scheduled', operatingMode: 'terminal_queue' })) {
+      throw new ApiError(426, 'Update the driver app before starting a new terminal journey.', [], 'APP_UPDATE_REQUIRED');
+    }
+    const legacyIntent = flowConfig.automaticDriverLifecycleEnabled && await TripSession.exists({ driverId: driver._id, jeepneyId, flowVersion: { $ne: 2 }, status: 'scheduled' });
+    if (!flowConfig.automaticDriverLifecycleEnabled || legacyIntent) await processTerminalArrival({
       actor: req.user,
       jeepneyId,
       latitude,
@@ -245,6 +253,7 @@ const updateDriverJeepneyLocation = async (req, res) => {
 
   if (
     asyncLocationProcessingEnabled &&
+    !require('../config/env').automaticDriverLifecycleEnabled &&
     orderedLocation &&
     getRedisHealth().status === 'healthy'
   ) {
@@ -329,6 +338,10 @@ const updateDriverJeepneyLocation = async (req, res) => {
     const automationQueued =
       !activeTrip || (await enqueueAutomationWork(job));
     if (locationQueued && automationQueued) {
+      emitFleetLocationUpdate({ jeepneyId: String(jeepneyId), latitude, longitude,
+        lastSeenAt: serverReceivedAt.toISOString(), capturedAt: orderedLocation.capturedAt.toISOString(),
+        streamId: orderedLocation.streamId, sequence: orderedLocation.sequence,
+        routeId: String(activeTrip?.routeId || driver.assignedRouteId || ''), driverId: String(driver._id) });
       if (activeTrip) {
         emitJeepneyLocationUpdate({
           tripId: activeTrip._id.toString(),
@@ -421,6 +434,18 @@ const updateDriverJeepneyLocation = async (req, res) => {
     sequence: orderedLocation?.sequence ?? null,
   });
 
+  emitFleetLocationUpdate({ jeepneyId: String(jeepneyId), latitude, longitude,
+    lastSeenAt: serverReceivedAt.toISOString(), capturedAt: (orderedLocation?.capturedAt || serverReceivedAt).toISOString(),
+    streamId: orderedLocation?.streamId || '', sequence: orderedLocation?.sequence ?? null,
+    routeId: String(activeTrip?.routeId || driver.assignedRouteId || ''), driverId: String(driver._id) });
+
+  const lifecycleEnabled = require('../config/env').automaticDriverLifecycleEnabled &&
+    require('../services/mobileUpdates.service').buildNumber(req.get('X-App-Build')) >= require('../config/env').automaticGroupMinimumBuild;
+  if (orderedLocation && lifecycleEnabled) {
+    await require('../services/automaticDriverLifecycle.service').processAutomaticDriverLifecycle({ actor: req.user, jeepneyId, observation: orderedLocation, now: serverReceivedAt });
+    activeTrip = await TripSession.findOne({ jeepneyId, driverId: driver._id, status: 'active' }).select('_id routeId');
+  }
+
   // Find active trip for this jeepney to broadcast location
   // Broadcast location update via WebSocket
   if (activeTrip) {
@@ -441,6 +466,7 @@ const updateDriverJeepneyLocation = async (req, res) => {
       now: serverReceivedAt,
     });
     await processAutomaticOffboardingForTrip({
+      observation: orderedLocation,
       tripSessionId: activeTrip._id,
       jeepneyLocation: {
         type: 'Point',
@@ -461,6 +487,9 @@ const updateDriverJeepneyLocation = async (req, res) => {
     });
   }
 
+  if (orderedLocation && lifecycleEnabled) {
+    await require('../services/automaticDriverLifecycle.service').processAutomaticDriverLifecycle({ actor: req.user, jeepneyId, observation: orderedLocation, now: serverReceivedAt, phase: 'finish' });
+  }
   return ok(res, acknowledgement, 'Location updated');
 };
 

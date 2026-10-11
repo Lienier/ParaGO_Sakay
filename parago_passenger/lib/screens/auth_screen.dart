@@ -266,7 +266,9 @@ class _AuthScreenState extends State<AuthScreen> {
                             fit: BoxFit.contain,
                           ),
                           Text(
-                            'Login',
+                            _isRegisterMode
+                                ? 'Create passenger account'
+                                : 'Login',
                             textAlign: TextAlign.left,
                             style: Theme.of(context)
                                 .textTheme

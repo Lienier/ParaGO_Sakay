@@ -89,6 +89,9 @@ const checkAndReassignPassedRequests = async () => {
           expiresAt: { $gt: new Date() },
         }, { $set: { status: 'expired' } });
         if (!expired) continue;
+        require('../realtime/socketServer').emitToTrip(String(trip._id), 'pickup_request.updated', {
+          request: require('../utils/realtimePayloads').serializePickupRequest(expired),
+        });
 
         // Notify passenger that jeep passed by
         const passenger = await Passenger.findById(request.passengerId).select('userId');

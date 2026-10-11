@@ -50,9 +50,11 @@ const completeBoardingForPickupRequest = async ({
   allowExisting = false,
   groupConfirmation = null,
 }) => {
-  const size = pickupRequest.partySize ?? 1;
-  if (size > 1 && !groupConfirmation) throw new ApiError(409, 'Your driver must confirm how many people boarded.', [], 'GROUP_CONFIRMATION_REQUIRED');
-  const count = groupConfirmation?.count ?? 1;
+  const v2 = pickupRequest.flowVersion === 2;
+  if (v2 && (boardingMethod !== 'auto_proximity' || groupConfirmation)) throw new ApiError(409, 'This booking boards automatically when the group is near the jeep.', [], 'AUTO_BOARDING_PENDING');
+  const size = v2 ? pickupRequest.members.length : pickupRequest.partySize ?? 1;
+  if (!v2 && size > 1 && !groupConfirmation) throw new ApiError(409, 'Your driver must confirm how many people boarded.', [], 'GROUP_CONFIRMATION_REQUIRED');
+  const count = v2 ? size : groupConfirmation?.count ?? 1;
   if (!Number.isSafeInteger(count) || count < 1 || count > size) throw new ApiError(400, 'Boarded count must be between one and your reserved seats.', [], 'INVALID_BOARDING_COUNT');
   if (groupConfirmation && (typeof groupConfirmation.requestId !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(groupConfirmation.requestId))) throw new ApiError(400, 'A valid action reference is required. Refresh and try again.');
   const pickupType = pickupRequest.pickupType || 'roadside';
@@ -85,8 +87,9 @@ const completeBoardingForPickupRequest = async ({
   }
 
   const rideDocument = {
+    ...(v2 ? { flowVersion: 2, members: pickupRequest.members.map(m => ({ ...m.toObject(), status: 'onboard', boardedAt: now })) } : {}),
     partySize: size, boardedCount: count, remainingCount: count,
-    regularTotal: Math.round((pickupRequest.fareSnapshot?.amount || 0) * count * 100) / 100,
+    regularTotal: v2 ? pickupRequest.regularTotal : Math.round((pickupRequest.fareSnapshot?.amount || 0) * count * 100) / 100,
     boardingMutationId: groupConfirmation?.requestId,
     passengerId,
     tripSessionId: trip._id,
@@ -171,7 +174,7 @@ const completeBoardingForPickupRequest = async ({
       if (!freshTrip) {
         throw new ApiError(409, 'Trip session is not active');
       }
-      const checkedAt = new Date();
+      const checkedAt = now;
       if (freshPickup.expiresAt && checkedAt >= freshPickup.expiresAt) {
         throw new ApiError(409, 'Pickup request expired');
       }
@@ -195,16 +198,28 @@ const completeBoardingForPickupRequest = async ({
         }
       }
       if (pickupType === 'terminal') {
-        if (boardingMethod !== 'manual' || freshTrip.operatingMode !== 'terminal_queue' || freshTrip.terminalQueueStatus !== 'loading')
+        if ((!v2 && boardingMethod !== 'manual') || freshTrip.operatingMode !== 'terminal_queue' || freshTrip.terminalQueueStatus !== 'loading')
           throw new ApiError(409, 'Only the assigned loading jeep accepts terminal boarding');
         const passenger = await require('../models/passenger').findById(passengerId).session(session);
         const vehicle = await Jeepney.findById(freshTrip.jeepneyId).session(session);
-        const fresh = (date, seconds) => date && Date.now() - new Date(date).getTime() >= 0 && Date.now() - new Date(date).getTime() <= seconds * 1000;
+        const fresh = (date, seconds) => date && now - new Date(date) >= 0 && now - new Date(date) <= seconds * 1000;
         const p = passenger?.lastKnownLocation?.coordinates; const v = vehicle?.lastKnownLocation?.coordinates;
         if (!fresh(passenger?.lastSeenAt, autoBoardingPassengerLocationMaxAgeSeconds) || !fresh(vehicle?.lastSeenAt, autoBoardingDriverLocationMaxAgeSeconds) || p?.length !== 2 || v?.length !== 2)
           throw new ApiError(409, 'Fresh passenger and driver GPS are required. Refresh location and try again');
         if (haversineMeters(p[1], p[0], v[1], v[0]) > autoBoardingProximityMeters)
           throw new ApiError(409, 'Move near your assigned jeep before confirming boarding');
+      }
+      if (v2) {
+        const window = freshPickup.autoBoarding;
+        if (!window?.proximityStartedAt || now - window.proximityStartedAt < 10000 || now - window.lastCheckedAt > 15000 || window.tripId !== String(freshTrip._id)) throw new ApiError(409, 'Fresh proximity observations are required.');
+        const passenger = await require('../models/passenger').findById(passengerId).session(session);
+        const vehicle = await Jeepney.findById(freshTrip.jeepneyId).session(session);
+        const p = passenger?.lastKnownLocation?.coordinates; const v = vehicle?.lastKnownLocation?.coordinates;
+        const fresh = t => t && now - new Date(t) >= 0 && now - new Date(t) <= 15000;
+        if (!fresh(passenger?.lastSeenAt) || !fresh(vehicle?.latestLocationOrder?.capturedAt) || vehicle.latestLocationOrder.streamId !== window.streamId || !p || !v || haversineMeters(p[1], p[0], v[1], v[0]) > 25) throw new ApiError(409, 'Fresh nearby GPS is required for automatic boarding.');
+        if (!freshTrip.acceptRequests) throw new ApiError(409, 'The assigned trip is no longer accepting boarding.');
+        const assignedDriver = freshTrip.driverId && await Driver.findById(freshTrip.driverId).session(session);
+        if (freshTrip.flowVersion !== 2 || vehicle.status !== 'active' || assignedDriver?.status !== 'active') throw new ApiError(409, 'The assigned jeep or driver is no longer eligible for boarding.');
       }
       await ensureTripHasBoardingCapacity(freshTrip, { session, count });
 
@@ -214,6 +229,7 @@ const completeBoardingForPickupRequest = async ({
         {
           $set: {
             status: 'completed',
+            ...(v2 ? { members: rideDocument.members } : {}),
             destinationStopRef: normalizedDestinationStopRef,
             destinationLocation: {
               type: 'Point',
@@ -228,6 +244,7 @@ const completeBoardingForPickupRequest = async ({
         { $inc: { occupancyCount: count } },
         { session }
       );
+      if (v2) await require('../models/activityLog').create([{ actorRole: 'system', action: 'automatic_boarding', entity: 'RideSession', entityId: String(rideSession._id), details: { memberIds: rideSession.members.map(m => m.memberId), seats: count, tripId: String(trip._id) } }], { session });
       created = true;
     });
   } catch (error) {
@@ -255,6 +272,11 @@ const completeBoardingForPickupRequest = async ({
   }
 
   pickupRequest.status = 'completed';
+  // Refresh the route's informative pickup pins immediately after commit,
+  // independently of passenger/driver notification delivery.
+  require('../realtime/socketServer').emitToTrip(String(trip._id), 'ride_session.updated', {
+    rideSession: serializeRideSession(rideSession),
+  });
   // Notify the owner independently: driver delivery must not gate passenger state.
   try {
     const passenger = await require('../models/passenger').findById(passengerId).select('userId');
@@ -347,6 +369,7 @@ const validateBoardingAttempt = async ({
   // A lost response or GPS-triggered boarding must be safe to confirm again.
   const existingRide = await RideSession.findOne({ pickupRequestId, passengerId, tripSessionId });
   if (existingRide) return existingRide;
+  if (pickupRequest.flowVersion === 2) throw new ApiError(409, 'Keep your phone near the assigned jeep. Boarding is automatic.', [], 'AUTO_BOARDING_PENDING');
   const pickupType = pickupRequest.pickupType || 'roadside';
   if (!canPassengerBoardPickupRequest(pickupRequest.status, { pickupType })) {
     throw new ApiError(

@@ -8,6 +8,8 @@ class RideSessionModel {
     required this.pickupRequestId,
     required this.status,
     required this.pickupType,
+    this.flowVersion = 1,
+    this.members = const [],
     this.partySize = 1,
     this.boardedCount = 1,
     this.remainingCount = 1,
@@ -24,6 +26,11 @@ class RideSessionModel {
     this.endedAt,
   });
 
+  final int flowVersion;
+  final List<JourneyMemberModel> members;
+  String get destinationsLabel => members.isEmpty
+      ? (destinationStopRef ?? "Saved destination")
+      : JourneyMemberModel.destinationSummary(members);
   final int partySize;
   final int boardedCount;
   final int remainingCount;
@@ -54,6 +61,11 @@ class RideSessionModel {
 
   factory RideSessionModel.fromJson(Map<String, dynamic> json) {
     return RideSessionModel(
+      flowVersion: (json['flowVersion'] as num?)?.toInt() ?? 1,
+      members: (json['members'] as List? ?? [])
+          .map((m) =>
+              JourneyMemberModel.fromJson(Map<String, dynamic>.from(m as Map)))
+          .toList(),
       partySize: (json['partySize'] as num?)?.toInt() ?? 1,
       boardedCount: (json['boardedCount'] as num?)?.toInt() ?? 1,
       remainingCount: json['status'] == 'completed'

@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 
 class AppBuildInfo {
   static const channel = MethodChannel('sakaygaray/app_release');
-  static int build = 0;
+  static int build = kIsWeb ? const int.fromEnvironment('SAKAY_APP_BUILD', defaultValue: 0) : 0;
   static Future<void> load() async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     try {

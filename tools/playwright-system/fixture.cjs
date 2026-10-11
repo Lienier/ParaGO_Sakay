@@ -9,7 +9,7 @@ Object.assign(process.env, {
   JWT_SECRET: crypto.randomBytes(48).toString('hex'),
   JWT_REFRESH_SECRET: crypto.randomBytes(48).toString('hex'),
   REDIS_URL: 'redis://127.0.0.1:6398', REDIS_NAMESPACE: `parago:test:playwright:${crypto.randomBytes(6).toString('hex')}`,
-  GROUP_BOOKINGS_ENABLED: 'true', RUN_API_JOBS: 'false',
+  GROUP_BOOKINGS_ENABLED: 'true', AUTOMATIC_GROUP_FLOW_ENABLED: 'false', AUTOMATIC_DRIVER_LIFECYCLE_ENABLED: 'false', RUN_API_JOBS: 'false',
   FIREBASE_PROJECT_ID: '', FIREBASE_CLIENT_EMAIL: '', FIREBASE_PRIVATE_KEY: '',
   GOOGLE_APPLICATION_CREDENTIALS: '', GOOGLE_CLIENT_IDS: '', FACEBOOK_APP_TOKEN: '',
   TOMTOM_API_KEY: '', GOOGLE_ROUTES_API_KEY: '', SMSAPIPH_API_KEY: '',
@@ -95,7 +95,7 @@ async function createLab() {
     apiServer = http.createServer(app);
     sockets.attachSocketServer(apiServer, { corsOrigins: [webOrigin] });
     const web = express();
-    web.use(express.static(path.join(root, 'artifacts/playwright_system_test_2026-10-06/admin-web')));
+    web.use(express.static(path.join(root, process.env.SYSTEM_TEST_BUILD_DIR || 'artifacts/playwright_system_test_2026-10-06/admin-web')));
     webServer = http.createServer(web);
     await Promise.all([[apiServer, 5068], [webServer, 8768]].map(([s, port]) => new Promise((resolve, reject) => {
       s.once('error', reject); s.listen(port, '127.0.0.1', resolve);

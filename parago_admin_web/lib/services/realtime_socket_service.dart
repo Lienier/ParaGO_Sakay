@@ -16,6 +16,11 @@ class RealtimeSocketService {
       StreamController<Map<String, dynamic>>.broadcast();
 
   io.Socket? _socket;
+  final _fleetController = StreamController<Map<String, dynamic>>.broadcast();
+  final _connectionController = StreamController<bool>.broadcast();
+  Stream<Map<String, dynamic>> get fleetLocationsStream =>
+      _fleetController.stream;
+  Stream<bool> get connectionStream => _connectionController.stream;
   String? _currentSocketBaseUrl;
   String? _currentToken;
   bool _networkFailureReported = false;
@@ -88,6 +93,7 @@ class RealtimeSocketService {
     );
 
     socket.onConnect((_) {
+      _connectionController.add(true);
       _retryTimer?.cancel();
       _retryTimer = null;
       _networkFailureReported = false;
@@ -95,6 +101,7 @@ class RealtimeSocketService {
       _operationsController.add({'notificationType': 'connection_restored'});
     });
     socket.onDisconnect((reason) {
+      _connectionController.add(false);
       debugPrint('Realtime socket disconnected: $reason');
     });
     socket.onReconnect((attempt) {
@@ -135,6 +142,10 @@ class RealtimeSocketService {
       if (normalized.isNotEmpty) {
         _operationsController.add(normalized);
       }
+    });
+    socket.on('fleet.locations.updated', (payload) {
+      final normalized = _normalizePayload(payload);
+      if (normalized.isNotEmpty) _fleetController.add(normalized);
     });
     for (final eventName in const [
       'support.thread.created',
@@ -181,6 +192,8 @@ class RealtimeSocketService {
     _operationsController.close();
     _supportController.close();
     _announcementController.close();
+    _fleetController.close();
+    _connectionController.close();
   }
 
   Map<String, dynamic> _normalizePayload(dynamic payload) {

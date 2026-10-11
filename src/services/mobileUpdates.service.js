@@ -40,6 +40,8 @@ function startsJourney(req) {
 async function enforceNewJourney(req) {
   const app = appFor(req.user);
   if (!app || !startsJourney(req)) return;
+  const config = require('../config/env');
+  if (config.automaticGroupFlowEnabled && config.automaticGroupMinimumBuild > buildNumber(req.get('X-App-Build'))) throw new ApiError(426, 'Update the app before starting a new journey.', [], 'APP_UPDATE_REQUIRED');
   const policy = await Policy.findById(app).lean();
   if (policy?.minimumBuild > buildNumber(req.get('X-App-Build'))) {
     throw new ApiError(426, 'A major update is required before starting a new journey. Download it at https://downloads.sakaygaray.com', [], 'APP_UPDATE_REQUIRED');
