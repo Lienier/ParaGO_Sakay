@@ -145,20 +145,24 @@ router.patch(
         'This stop alert is already being acknowledged.', 'Refresh the alert list before trying again.');
     }
 
-    const passenger = await Passenger.findById(alert.passengerId).select('userId');
-    await publishNotification({
-      userId: passenger?.userId,
-      type: 'stop_alert_acknowledged',
-      title: 'Stop alert acknowledged',
-      body: `${req.user.fullName || 'Driver'} is preparing to help stopping soon.`,
-      payload: {
-        stopAlertId: acknowledgedAlert._id.toString(),
-        tripSessionId: acknowledgedAlert.tripSessionId.toString(),
-        previousStatus,
-        stopAlert: serializeStopAlert(acknowledgedAlert),
-      },
-      category: 'ride',
-    });
+    try {
+      const passenger = await Passenger.findById(alert.passengerId).select('userId');
+      await publishNotification({
+        userId: passenger?.userId,
+        type: 'stop_alert_acknowledged',
+        title: 'Stop alert acknowledged',
+        body: `${req.user.fullName || 'Driver'} is preparing to help stopping soon.`,
+        payload: {
+          stopAlertId: acknowledgedAlert._id.toString(),
+          tripSessionId: acknowledgedAlert.tripSessionId.toString(),
+          previousStatus,
+          stopAlert: serializeStopAlert(acknowledgedAlert),
+        },
+        category: 'ride',
+      });
+    } catch (_) {
+      console.error('[Stop alert] Acknowledgement notification delivery failed after the alert was saved');
+    }
 
     return ok(res, acknowledgedAlert, 'Stop alert acknowledged');
   })

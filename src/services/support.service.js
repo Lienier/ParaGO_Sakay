@@ -453,19 +453,16 @@ const addSupportMessage = async ({ user, threadId, body }) => {
 };
 
 const markSupportThreadRead = async ({ user, threadId }) => {
-  const thread = await resolveThreadAccess({ user, threadId });
+  await resolveThreadAccess({ user, threadId });
   const role = normalizeThreadRole(user);
   ensureSupportRole(role);
   const now = new Date();
 
-  if (role === 'ADMIN') {
-    thread.unreadAdminCount = 0;
-    thread.lastAdminReadAt = now;
-  } else {
-    thread.unreadUserCount = 0;
-    thread.lastUserReadAt = now;
-  }
-  await thread.save();
+  const thread = await SupportThread.findByIdAndUpdate(threadId, { $set: role === 'ADMIN'
+    ? { unreadAdminCount: 0, lastAdminReadAt: now }
+    : { unreadUserCount: 0, lastUserReadAt: now },
+  }, { new: true });
+  if (!thread) throw new ApiError(404, 'Support thread not found');
 
   const populatedThread = await populateThread(thread);
   await emitSupportThreadEvent({
@@ -494,15 +491,20 @@ const closeSupportThread = async ({ user, threadId, reason = '' }) => {
 };
 
 const reopenSupportThread = async ({ user, threadId }) => {
-  const thread = await resolveThreadAccess({ user, threadId });
+  await resolveThreadAccess({ user, threadId });
   const now = new Date();
-  thread.status = 'awaiting_admin';
-  thread.reopenedAt = now;
-  thread.reopenedByUserId = user._id;
-  thread.closedAt = undefined;
-  thread.closedByUserId = undefined;
-  thread.unreadAdminCount = (thread.unreadAdminCount || 0) + 1;
-  await thread.save();
+  // Only a closed -> open transition creates an unread event. Retries and
+  // stale access reads must not overwrite message increments or previews.
+  let thread = await SupportThread.findOneAndUpdate({ _id: threadId, status: 'closed' }, {
+    $set: { status: 'awaiting_admin', reopenedAt: now, reopenedByUserId: user._id },
+    $unset: { closedAt: '', closedByUserId: '' },
+    $inc: { unreadAdminCount: 1 },
+  }, { new: true });
+  if (!thread) {
+    thread = await SupportThread.findById(threadId);
+    if (!thread) throw new ApiError(404, 'Support thread not found');
+    return summarizeThread(await populateThread(thread));
+  }
   const populatedThread = await populateThread(thread);
   await emitSupportThreadEvent({
     thread: populatedThread,
@@ -513,17 +515,26 @@ const reopenSupportThread = async ({ user, threadId }) => {
 };
 
 const resolveSupportThread = async ({ user, threadId, status = 'resolved' }) => {
-  const thread = await resolveThreadAccess({ user, threadId });
+  await resolveThreadAccess({ user, threadId });
   const role = normalizeThreadRole(user);
   if (role !== 'ADMIN') {
     throw new ApiError(403, 'Only admins can resolve support threads');
   }
   const normalizedStatus = normalizeSupportStatus(status);
-  thread.status = normalizedStatus === 'closed' ? 'closed' : 'resolved';
-  thread.resolvedAt = new Date();
-  thread.resolvedByUserId = user._id;
-  thread.unreadUserCount = (thread.unreadUserCount || 0) + 1;
-  await thread.save();
+  const targetStatus = normalizedStatus === 'closed' ? 'closed' : 'resolved';
+  const now = new Date();
+  let thread = await SupportThread.findOneAndUpdate({ _id: threadId, status: { $ne: targetStatus } }, {
+    $set: { status: targetStatus, resolvedAt: now, resolvedByUserId: user._id,
+      ...(targetStatus === 'closed' ? { closedAt: now, closedByUserId: user._id } : {}),
+    },
+    ...(targetStatus === 'resolved' ? { $unset: { closedAt: '', closedByUserId: '' } } : {}),
+    $inc: { unreadUserCount: 1 },
+  }, { new: true });
+  if (!thread) {
+    thread = await SupportThread.findById(threadId);
+    if (!thread) throw new ApiError(404, 'Support thread not found');
+    return summarizeThread(await populateThread(thread));
+  }
   const populatedThread = await populateThread(thread);
   await emitSupportThreadEvent({
     thread: populatedThread,

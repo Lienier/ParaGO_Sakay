@@ -7,6 +7,7 @@ const authorize = require('../middlewares/authorize');
 const { ADMIN } = require('../constants/roles');
 const { ok } = require('../utils/response');
 const ApiError = require('../utils/apiError');
+const terminalQueue = require('../services/terminalQueue.service');
 const { ensureObjectId } = require('../utils/validators');
 const {
   buildRouteCreatePayload,
@@ -20,21 +21,6 @@ const {
 
 const router = express.Router();
 const routeListCacheKey = redisKey('read', 'routes', 'all');
-
-const buildRoutePathSnapshot = (route) => {
-  const coordinates = Array.isArray(route?.path?.coordinates)
-    ? route.path.coordinates
-    : [];
-
-  if (coordinates.length < 2) {
-    return undefined;
-  }
-
-  return {
-    type: 'LineString',
-    coordinates: coordinates.map((entry) => [Number(entry[0]), Number(entry[1])]),
-  };
-};
 
 router.get(
   '/',
@@ -70,26 +56,24 @@ router.put(
     if (!Object.keys(updates).length) {
       throw new ApiError(400, 'No valid route fields provided');
     }
-    if (updates.path && await TripSession.exists({ routeId: req.params.id, status: { $in: ['active', 'scheduled'] } })) {
-      throw new ApiError(409, 'End the active trips before changing the route path. Current pickup and drop-off locations must stay valid.');
-    }
-    const updated = await RouteModel.findByIdAndUpdate(
-      req.params.id,
-      { $set: updates },
-      { new: true, runValidators: true }
-    );
-    if (!updated) throw new ApiError(404, 'Route not found');
-    await TripSession.updateMany(
-      {
-        routeId: updated._id,
-        status: { $in: ['scheduled', 'active'] },
-      },
-      {
-        $set: {
-          routePathSnapshot: buildRoutePathSnapshot(updated),
-        },
+    // Use the same route lock as trip creation: a trip cannot appear between
+    // the geometry check and the route write. Trip snapshots stay immutable.
+    const updated = await terminalQueue.transaction(req.params.id, async session => {
+      const current = await RouteModel.findById(req.params.id).session(session);
+      if (!current) throw new ApiError(404, 'Route not found');
+      const pathChanged = updates.path && (
+        updates.path.type !== current.path?.type ||
+        JSON.stringify(updates.path.coordinates) !== JSON.stringify(current.path?.coordinates)
+      );
+      if (pathChanged && await TripSession.exists({
+        routeId: req.params.id, status: { $in: ['active', 'scheduled'] },
+      }).session(session)) {
+        throw new ApiError(409, 'End the active trips before changing the route path. Current pickup and drop-off locations must stay valid.');
       }
-    );
+      return RouteModel.findByIdAndUpdate(req.params.id, { $set: updates }, {
+        new: true, runValidators: true, session,
+      });
+    }, { publishChanges: false });
     await invalidateCachedRead(routeListCacheKey);
     return ok(res, updated, 'Route updated');
   })

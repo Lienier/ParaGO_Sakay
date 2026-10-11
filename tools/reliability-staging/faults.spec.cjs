@@ -269,3 +269,123 @@ test('A23 expired reservations release the passenger waiting state without delet
   expect(mine.body.data.find(item => item._id === String(pickup._id)).status).toBe('expired');
   expect(await models().Pickup.countDocuments({ _id: pickup._id })).toBe(1);
 });
+
+test('A24 notification outage cannot report a saved fallback acknowledgement as failed', async () => {
+  const { trip } = await seedRide();
+  const created = await call('post', '/stop-alerts', 'passenger', para(trip));
+  expect(created.status).toBe(201);
+  const id = created.body.data._id;
+  const Notification = models().Notification;
+  const original = Notification.create;
+  let result;
+  try {
+    Notification.create = async () => { throw Error('Injected acknowledgement notification failure'); };
+    result = await call('patch', `/stop-alerts/${id}/acknowledge`, 'driver', {});
+  } finally { Notification.create = original; }
+  expect((await models().Alert.findById(id)).status).toBe('acknowledged');
+  expect(result.status).toBe(200);
+  expect((await call('patch', `/stop-alerts/${id}/acknowledge`, 'driver', {})).status).toBe(200);
+});
+
+test('A25 unchanged route geometry permits ordinary edits and preserves the trip snapshot', async () => {
+  const { trip } = await seedRide();
+  const route = await lab.models.Route.findById(lab.ids.route).lean();
+  const snapshot = { type: 'LineString', coordinates: [[121.05, 14.9], [121.05, 14.93]] };
+  await lab.models.Trip.updateOne({ _id: trip._id }, { $set: { routePathSnapshot: snapshot } });
+  const result = await call('put', `/routes/${route._id}`, 'admin', { name: 'Edited route name', path: route.path });
+  expect(result.status).toBe(200);
+  expect((await lab.models.Trip.findById(trip._id)).routePathSnapshot.toObject()).toEqual(snapshot);
+});
+
+test('A26 reopening support cannot overwrite a concurrent new message unread count', async () => {
+  const created = await call('post', '/support/threads', 'passenger', { message: 'Start' });
+  const id = created.body.data.thread._id;
+  await call('patch', `/support/threads/${id}/close`, 'passenger', {});
+  const Thread = models().Thread;
+  const original = Thread.findById;
+  let release, captured;
+  const gate = new Promise(resolve => { release = resolve; });
+  const read = new Promise(resolve => { captured = resolve; });
+  let intercept = true;
+  Thread.findById = function (...args) {
+    const query = original.apply(this, args);
+    if (intercept && String(args[0]) === id) {
+      intercept = false;
+      const exec = query.exec.bind(query);
+      query.exec = async (...execArgs) => {
+        const document = await exec(...execArgs);
+        captured();
+        await gate;
+        return document;
+      };
+    }
+    return query;
+  };
+  const reopening = call('patch', `/support/threads/${id}/reopen`, 'passenger', {});
+  try {
+    await read;
+    // Another request reopens and sends a message after the first access read.
+    expect((await call('patch', `/support/threads/${id}/reopen`, 'passenger', {})).status).toBe(200);
+    expect((await call('post', `/support/threads/${id}/messages`, 'passenger', { body: 'New message' })).status).toBe(201);
+  } finally { release(); Thread.findById = original; }
+  expect((await reopening).status).toBe(200);
+  expect((await Thread.findById(id)).unreadAdminCount).toBe(3);
+  expect(await models().Message.countDocuments({ threadId: id })).toBe(2);
+});
+
+test('A27 repeated support reopen and resolve do not add duplicate unread events', async () => {
+  const created = await call('post', '/support/threads', 'passenger', { message: 'Start' });
+  const id = created.body.data.thread._id;
+  await call('patch', `/support/threads/${id}/close`, 'passenger', {});
+  for (let i = 0; i < 3; i++) expect((await call('patch', `/support/threads/${id}/reopen`, 'passenger', {})).status).toBe(200);
+  expect((await models().Thread.findById(id)).unreadAdminCount).toBe(2);
+  for (let i = 0; i < 3; i++) expect((await call('patch', `/support/admin/threads/${id}/resolve`, 'admin', {})).status).toBe(200);
+  expect((await models().Thread.findById(id)).unreadUserCount).toBe(1);
+});
+
+test('A28 ordinary edits never overwrite an existing trip path snapshot', async () => {
+  const { trip } = await seedRide();
+  const snapshot = { type: 'LineString', coordinates: [[121.0499, 14.9], [121.0499, 14.93]] };
+  await lab.models.Trip.updateOne({ _id: trip._id }, { $set: { routePathSnapshot: snapshot } });
+  const result = await call('put', `/routes/${lab.ids.route}`, 'admin', { description: 'Updated description' });
+  expect(result.status).toBe(200);
+  expect((await lab.models.Trip.findById(trip._id)).routePathSnapshot.toObject()).toEqual(snapshot);
+});
+
+test('A29 route geometry edit and simultaneous trip creation use the same route lock', async () => {
+  const Trip = lab.models.Trip;
+  const original = Trip.exists;
+  const coordinates = [[121.05, 14.9], [121.0501, 14.915], [121.05, 14.93]];
+  let release, checked;
+  const gate = new Promise(resolve => { release = resolve; });
+  const read = new Promise(resolve => { checked = resolve; });
+  let intercept = true;
+  Trip.exists = function (...args) {
+    const query = original.apply(this, args);
+    if (intercept && String(args[0].routeId) === lab.ids.route) {
+      intercept = false;
+      const exec = query.exec.bind(query);
+      query.exec = async (...execArgs) => {
+        const result = await exec(...execArgs);
+        checked();
+        await gate;
+        return result;
+      };
+    }
+    return query;
+  };
+  const edit = call('put', `/routes/${lab.ids.route}`, 'admin', { path: { type: 'LineString', coordinates } });
+  let intent;
+  try {
+    await read;
+    intent = require('../../src/services/terminalIntent.service').createTerminalIntent({
+      driverId: lab.ids.driver, routeId: lab.ids.route, jeepneyId: lab.ids.jeepney,
+    });
+    // Give the competing request an opportunity to reach its transaction lock.
+    await new Promise(resolve => setTimeout(resolve, 100));
+  } finally { release(); Trip.exists = original; }
+  const [updated, created] = await Promise.all([edit, intent]);
+  expect(updated.status).toBe(200);
+  expect(created.routePathSnapshot.coordinates.map(pair => [...pair])).toEqual(coordinates);
+  expect((await Trip.findById(created._id)).routePathSnapshot.coordinates.map(pair => [...pair])).toEqual(coordinates);
+});
