@@ -314,6 +314,7 @@ router.post(
         'A driver assignment is required for terminal entry.', 'Select an assigned driver before creating the terminal trip.');
       const intent = await require('../services/terminalIntent.service').createTerminalIntent({
         driverId: payload.driverId, routeId: route._id, jeepneyId: jeepney._id,
+        selectRoute: req.user.role === DRIVER,
       });
       return ok(res, await terminalQueue.describe(intent),
         intent.status === 'scheduled' ? 'Drive to the configured terminal; arrival will be detected automatically' : 'Existing trip retained', 201);
@@ -436,7 +437,8 @@ router.patch(
 
 router.patch('/:id/terminal/:action', authenticate, authorize(DRIVER, ADMIN), asyncHandler(async (req, res) => {
   ensureObjectId(req.params.id, 'trip id');
-  const trip = await terminalQueue.change({ tripId: req.params.id, actor: req.user, action: req.params.action,
+  const mutate = req.params.action === 'cancel' ? terminalQueue.cancel : terminalQueue.change;
+  const trip = await mutate({ tripId: req.params.id, actor: req.user, action: req.params.action,
     requestId: req.body.requestId, reason: req.body.reason });
   return ok(res, await terminalQueue.describe(trip), 'Terminal queue updated');
 }));

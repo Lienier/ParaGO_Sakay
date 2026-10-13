@@ -47,6 +47,7 @@ const driverSchema = new Schema(
     terminalQueueNumber: { type: Number, min: 1 },
     terminalStopRef: { type: String, trim: true },
     automaticJourneyCheck: { type: Schema.Types.Mixed },
+    automaticJourneyPaused: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

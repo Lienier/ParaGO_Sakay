@@ -39,12 +39,12 @@ async function log(session, trip, driver, action, details) {
 async function runAutomaticDriverLifecycle({ actor, jeepneyId, observation, now = new Date(), phase = 'progress' }) {
   const config = require('../config/env');
   if (!config.automaticGroupFlowEnabled || !config.automaticDriverLifecycleEnabled || !observation) return null;
-  const assigned = await Driver.findOne({ userId: actor._id, status: 'active', assignedJeepneyId: jeepneyId });
+  const assigned = await Driver.findOne({ userId: actor._id, status: 'active', assignedJeepneyId: jeepneyId, automaticJourneyPaused: { $ne: true } });
   if (!assigned?.assignedRouteId) return null;
   const result = await queue.transaction(assigned.assignedRouteId, async session => {
     // The route, driver and trip writes serialize GPS transitions with queue,
     // booking and occupancy transactions. No transition runs on rejected GPS.
-    const driver = await Driver.findOneAndUpdate({ _id: assigned._id, status: 'active', assignedJeepneyId: jeepneyId, assignedRouteId: assigned.assignedRouteId },
+    const driver = await Driver.findOneAndUpdate({ _id: assigned._id, status: 'active', assignedJeepneyId: jeepneyId, assignedRouteId: assigned.assignedRouteId, automaticJourneyPaused: { $ne: true } },
       { $set: { updatedAt: now } }, { new: true, session });
     if (!driver || !await User.exists({ _id: driver.userId, status: 'active' }).session(session)) return null;
     const vehicle = await Jeepney.findById(jeepneyId).session(session);

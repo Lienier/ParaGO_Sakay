@@ -1589,7 +1589,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     final sortedRoutes = List<RouteSummaryModel>.from(routes)
       ..sort((a, b) => _routeChoiceLabel(a).compareTo(_routeChoiceLabel(b)));
 
-    RouteSummaryModel selectedRoute = sortedRoutes.first;
+    RouteSummaryModel selectedRoute = sortedRoutes.firstWhere(
+      (route) => route.id == _assignedRouteId,
+      orElse: () => sortedRoutes.first,
+    );
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
@@ -1671,7 +1674,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                   child: const Text('Cancel'),
                 ),
                 FilledButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  onPressed: terminalAvailable
+                      ? () => Navigator.of(dialogContext).pop(true)
+                      : null,
                   child: const Text('Start'),
                 ),
               ],
@@ -1735,6 +1740,32 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       loadingMessage: 'Ending trip...',
       successMessage: 'Trip ended. Ride sessions and alerts were closed.',
       action: () => tripService.endTrip(tripId),
+    );
+  }
+
+  Future<void> _cancelQueue(TripSession trip) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => GlassAlertDialog(
+        title: const Text('Cancel queue?'),
+        content: const Text(
+            'Leave this queue and cancel waiting bookings. You can choose another route.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Stay')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Cancel queue')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _runDriverAction(
+      loadingMessage: 'Cancelling queue...',
+      successMessage: 'Queue cancelled. Choose a route when ready.',
+      action: () => TripService(context.read<SessionController>().apiClient)
+          .terminalAction(trip.id, 'cancel'),
     );
   }
 
@@ -3221,6 +3252,7 @@ class _DrivePanelLiveData {
     required this.onAdjustManualCount,
     required this.onStartTrip,
     required this.onEndTrip,
+    required this.onCancelQueue,
     required this.onTogglePickup,
     required this.onDismissAlert,
     required this.onDismissRequirementMessage,
@@ -3241,6 +3273,7 @@ class _DrivePanelLiveData {
   final void Function(int delta)? onAdjustManualCount;
   final VoidCallback? onStartTrip;
   final VoidCallback? onEndTrip;
+  final VoidCallback? onCancelQueue;
   final VoidCallback? onTogglePickup;
   final VoidCallback? onDismissAlert;
   final VoidCallback? onDismissRequirementMessage;
@@ -3399,6 +3432,26 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                     Padding(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         child: Text(live.requirementMessage!)),
+                  if (current == null) ...[
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: live.onStartTrip,
+                      icon: const Icon(Icons.route_outlined),
+                      label: const Text('Choose route'),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (current?.operatingMode == 'terminal_queue' &&
+                      (current?.status == 'scheduled' ||
+                          current?.status == 'active')) ...[
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: live.onCancelQueue,
+                      icon: const Icon(Icons.cancel_outlined),
+                      label: const Text('Cancel queue'),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   ExpansionTile(
                     title: const Text('Controls'),
                     tilePadding: EdgeInsets.zero,
@@ -3416,11 +3469,12 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                       Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            OutlinedButton.icon(
-                              onPressed: waiting ? null : live.onStartTrip,
-                              icon: const Icon(Icons.play_arrow),
-                              label: Text(waiting ? 'Terminal' : 'Start'),
-                            ),
+                            if (current != null)
+                              OutlinedButton.icon(
+                                onPressed: waiting ? null : live.onStartTrip,
+                                icon: const Icon(Icons.play_arrow),
+                                label: Text(waiting ? 'Terminal' : 'Start'),
+                              ),
                             const SizedBox(height: 12),
                             OutlinedButton.icon(
                               onPressed: live.onEndTrip,
@@ -3507,10 +3561,10 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                         ),
                       MarkerLayer(
                         markers: [
-                          ...markers.where(
-                              (entry) => entry.kind != _DriveMarkerKind.vehicle),
-                          ...markers.where(
-                              (entry) => entry.kind == _DriveMarkerKind.vehicle),
+                          ...markers.where((entry) =>
+                              entry.kind != _DriveMarkerKind.vehicle),
+                          ...markers.where((entry) =>
+                              entry.kind == _DriveMarkerKind.vehicle),
                         ]
                             .map(
                               (entry) => Marker(

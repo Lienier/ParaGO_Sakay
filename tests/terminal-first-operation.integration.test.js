@@ -45,6 +45,11 @@ before(async () => {
     replSet: { count: 1 },
   });
   await mongoose.connect(repl.getUri('terminal-first-test'));
+  // Keep arrival/queue tests independent of today's number-coding weekday.
+  await require('../src/models/codingHoliday').create({
+    date: require('../src/services/operatingRules.service').manilaDate(),
+    name: 'Isolated terminal test holiday',
+  });
 
   user = await User.create({
     email: 'terminal-first-driver@example.test',

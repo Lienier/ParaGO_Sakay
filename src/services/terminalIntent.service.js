@@ -7,7 +7,7 @@ const { driverError, DRIVER_ERROR_CODES } = require('../utils/driverError');
 const queue = require('./terminalQueue.service');
 const { resolveRouteTerminalStop } = require('./hybridDispatch.service');
 
-async function createTerminalIntent({ driverId, routeId, jeepneyId, assignedRouteOnly = false }) {
+async function createTerminalIntent({ driverId, routeId, jeepneyId, assignedRouteOnly = false, selectRoute = false }) {
   return queue.transaction(routeId, async session => {
     // Lock the driver and vehicle as well as the route. Different-route requests
     // must not create a competing intent or race with arrival profile updates.
@@ -42,6 +42,12 @@ async function createTerminalIntent({ driverId, routeId, jeepneyId, assignedRout
       throw driverError(409, DRIVER_ERROR_CODES.QUEUE_CONFLICT, 'The driver or jeepney already has a trip on another assignment.', 'Finish or resolve the existing trip before assigning another.');
     }
     if (!trip) {
+      // A driver's explicit route choice must also drive GPS progression,
+      // route subscriptions and request visibility after the profile reload.
+      if (selectRoute) driver.assignedRouteId = routeId;
+      driver.automaticJourneyPaused = false;
+      driver.automaticJourneyCheck = { observations: 0 };
+      await driver.save({ session });
       [trip] = await Trip.create([{
         flowVersion: require('../config/env').automaticGroupFlowEnabled ? 2 : 1, driverId, jeepneyId, routeId, status: 'scheduled', active: false,
         acceptRequests: false, operatingMode: 'terminal_queue', terminalQueueStatus: 'off_queue',

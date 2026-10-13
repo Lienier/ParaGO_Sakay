@@ -149,6 +149,68 @@ async function offerTransfers(trip, session) {
     }], { session });
   }
 }
+async function cancel({ tripId, actor, requestId, reason = '' }) {
+  validateActor(actor, requestId, reason);
+  const original = await Trip.findById(tripId);
+  if (!original) throw driverError(404, 'TRIP_NOT_FOUND', 'Trip not found.', 'Refresh your trip.');
+  let cancelledPickups = [];
+  const result = await transaction(original.routeId, async session => {
+    cancelledPickups = [];
+    const driverFilter = actor.role === 'ADMIN'
+      ? (original.driverId ? { _id: original.driverId } : null) : { userId: actor._id };
+    const driver = driverFilter ? await Driver.findOneAndUpdate(driverFilter,
+      { $set: { updatedAt: new Date() } }, { new: true, session }) : null;
+    if (actor.role !== 'ADMIN' && (!driver || String(driver._id) !== String(original.driverId))) {
+      throw driverError(403, DRIVER_ERROR_CODES.TRIP_NOT_ASSIGNED, 'This queue belongs to another driver.', 'Open your own trip.');
+    }
+    const prior = await replay(actor, requestId, 'cancel_queue', session);
+    if (prior && String(prior.tripId) !== String(tripId)) throw driverError(409, DRIVER_ERROR_CODES.REQUEST_ID_CONFLICT,
+      'This request belongs to another trip.', 'Refresh and try again.');
+    if (prior) return Trip.findById(tripId).session(session);
+    let trip = await Trip.findOneAndUpdate({ _id: tripId, operatingMode: 'terminal_queue', status: { $in: ['scheduled', 'active'] } },
+      { $inc: { lifecycleRevision: 1 } }, { new: true, session });
+    if (!trip) {
+      trip = await Trip.findById(tripId).session(session);
+      if (trip?.status === 'cancelled' && trip.operatingMode === 'terminal_queue') return trip;
+      throw driverError(409, DRIVER_ERROR_CODES.WRONG_QUEUE_STATE, 'This trip is no longer queued.', 'Refresh your trip.');
+    }
+    const seats = await require('./seatAccounting.service').counts(trip, session);
+    if (seats.occupied > 0) throw driverError(409, 'QUEUE_HAS_PASSENGERS',
+      'Passengers are still onboard.', 'Depart or unload passengers before cancelling the queue.');
+    const pickups = await Pickup.find({ tripSessionId: tripId, status: { $in: ['pending', 'acknowledged', 'transfer_offered'] } }).session(session);
+    cancelledPickups = pickups.map(pickup => ({ id: pickup._id, passengerId: pickup.passengerId }));
+    await Pickup.updateMany({ tripSessionId: tripId, flowVersion: 2, status: { $in: ['pending', 'acknowledged', 'transfer_offered'] } },
+      { $set: { status: 'cancelled', 'members.$[].status': 'cancelled' } }, { session });
+    await Pickup.updateMany({ tripSessionId: tripId, flowVersion: { $ne: 2 }, status: { $in: ['pending', 'acknowledged', 'transfer_offered'] } },
+      { $set: { status: 'cancelled' } }, { session });
+    trip.status = 'cancelled'; trip.endedAt = new Date(); trip.active = false; trip.acceptRequests = false;
+    trip.terminalQueueStatus = 'off_queue';
+    for (const field of ['terminalQueueNumber', 'terminalCheckedInAt', 'terminalLoadingStartedAt', 'terminalLoadingWarnedAt',
+      'terminalLoadingExpiredAt', 'terminalStopRef', 'terminalLocation', 'terminalArrivalLastAt', 'terminalArrivalLastStreamId',
+      'terminalArrivalLastSequence', 'automaticDepartureCheck', 'automaticFinishCheck']) trip[field] = undefined;
+    trip.terminalArrivalFixCount = 0;
+    await trip.save({ session });
+    if (driver) await Driver.updateOne({ _id: driver._id }, {
+      $set: { operatingMode: 'route', terminalQueueStatus: 'off_queue', automaticJourneyPaused: true, automaticJourneyCheck: { observations: 0 } },
+      $unset: { terminalQueueNumber: '', terminalCheckedInAt: '', terminalStopRef: '' },
+    }, { session });
+    await promote(trip.routeId, session);
+    await audit(trip, actor, 'cancel_queue', requestId, reason, session);
+    return trip;
+  });
+  await invalidateDriverActiveContext(result.driverId);
+  for (const pickup of cancelledPickups) {
+    try {
+      const passenger = await require('../models/passenger').findById(pickup.passengerId).select('userId');
+      const request = await Pickup.findById(pickup.id);
+      await require('./notificationPublisher').publishNotification({ userId: passenger?.userId, type: 'pickup_request_cancelled',
+        title: 'Booking cancelled', body: 'The jeep left the queue. Please book another jeep.', category: 'trip',
+        payload: { requestId: String(pickup.id), request: require('../utils/realtimePayloads').serializePickupRequest(request),
+          tripSessionId: String(tripId), routeId: String(original.routeId), reason: 'queue_cancelled' } });
+    } catch (_) { console.error('[Terminal queue] Cancellation notification failed after commit'); }
+  }
+  return result;
+}
 async function change({ tripId, actor, action, requestId, reason, direction }) {
   validateActor(actor, requestId, reason);
   const original = await Trip.findById(tripId);
@@ -378,4 +440,4 @@ async function describe(value) {
     },
   } };
 }
-module.exports = { audit, validateActor, reconcile, describe, driverStatusFor, prepare, lock, promote, publish, transaction, checkIn, change, reserve, transfer, activeQueue };
+module.exports = { audit, validateActor, reconcile, describe, driverStatusFor, prepare, lock, promote, publish, transaction, checkIn, change, cancel, reserve, transfer, activeQueue };

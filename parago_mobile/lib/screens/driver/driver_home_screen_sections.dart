@@ -694,6 +694,14 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
                   liveTrip.status != 'active'
               ? null
               : () => _endTrip(liveTrip.id),
+          onCancelQueue: liveTrip == null ||
+                  _loading ||
+                  _driverActionBusy ||
+                  liveTrip.operatingMode != 'terminal_queue' ||
+                  !['scheduled', 'active'].contains(liveTrip.status) ||
+                  _displayedOnboardCount(liveTrip, liveRides) > 0
+              ? null
+              : () => _cancelQueue(liveTrip),
           onTogglePickup: liveTrip == null ||
                   _loading ||
                   _driverActionBusy ||
