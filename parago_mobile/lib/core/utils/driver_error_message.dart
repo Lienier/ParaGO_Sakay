@@ -8,6 +8,19 @@ class DriverErrorMessage {
   final String title;
   final String message;
 
+  static DriverErrorMessage forSignIn(Object error) {
+    if (isConnectivity(error)) return from(error);
+    if (error is ApiException && error.statusCode >= 500) return from(error);
+    if (error is ApiException && error.statusCode == 429) {
+      return const DriverErrorMessage(
+          title: 'Please wait',
+          message: 'Too many attempts. Wait a moment before trying again.');
+    }
+    return const DriverErrorMessage(
+        title: 'Check sign-in details',
+        message: 'Check your email and password. Use a driver account.');
+  }
+
   static DriverErrorMessage from(Object error) {
     if (error is ApiException) {
       final mapped = _forCode(error.code);

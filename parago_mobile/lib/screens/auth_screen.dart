@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/utils/action_feedback.dart';
+import '../core/utils/driver_error_message.dart';
 import '../models/auth/auth_models.dart';
 import '../models/user_role.dart';
 import '../services/auth_service.dart';
@@ -37,6 +38,12 @@ class _AuthScreenState extends State<AuthScreen> {
 
   Future<void> _submit() async {
     _dismissKeyboard();
+    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+            .hasMatch(_emailCtrl.text.trim()) ||
+        _passwordCtrl.text.isEmpty) {
+      setState(() => _error = 'Enter a valid email and your password.');
+      return;
+    }
     final session = context.read<SessionController>();
     final auth = AuthService(session.apiClient);
 
@@ -50,6 +57,7 @@ class _AuthScreenState extends State<AuthScreen> {
         context: context,
         loadingMessage: 'Signing in...',
         showSuccess: false,
+        describeError: DriverErrorMessage.forSignIn,
         action: () async {
           final result = await auth.loginEmail(
             email: _emailCtrl.text,
@@ -64,7 +72,7 @@ class _AuthScreenState extends State<AuthScreen> {
         },
         onError: (error) async {
           if (!mounted) return;
-          setState(() => _error = ActionFeedback.messageOf(error));
+          setState(() => _error = DriverErrorMessage.forSignIn(error).message);
         },
       );
       if (response == null) {
@@ -348,6 +356,9 @@ class _AuthScreenState extends State<AuthScreen> {
                                     BorderSide(color: actionColor, width: 1.4),
                               ),
                               suffixIcon: IconButton(
+                                tooltip: _obscurePassword
+                                    ? 'Show password'
+                                    : 'Hide password',
                                 onPressed: () {
                                   setState(
                                     () => _obscurePassword = !_obscurePassword,

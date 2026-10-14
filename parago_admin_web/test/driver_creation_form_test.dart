@@ -38,6 +38,27 @@ class FormApi extends ApiClient {
 }
 
 void main() {
+  testWidgets('phone rejects letters and extra digits while typing',
+      (tester) async {
+    final session =
+        SessionController(apiClient: FormApi(), tokenStorage: TokenStorage());
+    await tester.pumpWidget(ChangeNotifierProvider.value(
+        value: session,
+        child: const MaterialApp(home: AdminDriverManagementScreen())));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Create driver').first);
+    await tester.pumpAndSettle();
+    final phone = find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.labelText == 'CP number *');
+    await tester.ensureVisible(phone);
+    await tester.pumpAndSettle();
+    await tester.enterText(phone, '09abc123456789999');
+    await tester.pump();
+    expect((tester.widget<TextField>(phone)).controller!.text, '09123456789');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    session.dispose();
+  });
   testWidgets(
       'creation form retains fields and values after scrolling to submit',
       (tester) async {

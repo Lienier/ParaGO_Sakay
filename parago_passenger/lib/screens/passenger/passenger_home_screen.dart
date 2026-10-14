@@ -1,3 +1,4 @@
+import '../../services/visible_route_trip.dart';
 import '../../services/waiting_movement_guard.dart';
 import '../../widgets/waiting_check_card.dart';
 import 'package:parago_map_ui/road_jeep_marker.dart';
@@ -13,7 +14,9 @@ import '../../core/utils/automation_location.dart';
 import '../../widgets/legal_pages.dart';
 import 'dart:async';
 import '../../widgets/group_booking_dialog.dart';
+import '../../widgets/member_dropoff_picker.dart';
 import '../../widgets/journey_members.dart';
+import '../../widgets/ride_history_entry.dart';
 import '../../widgets/terminal_loading_clock.dart';
 import 'dart:math' as math;
 
@@ -274,39 +277,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   Timer? _mapPromptOverlayTimer;
 
   TripSession? get _selectedTrip {
-    final selectedRoute = _selectedRoute;
-    final selectedRouteId = _selectedRouteId;
-    final onboardTrip = _onboardedTripForCamera();
-    final selectedTripId = _selectedTripId;
-    if (selectedTripId != null && selectedTripId.isNotEmpty) {
-      final trip = _tripById(selectedTripId);
-      if (trip != null) {
-        final keepSelectedTrip = selectedRoute == null ||
-            selectedRouteId == null ||
-            selectedRouteId.isEmpty ||
-            !_tripMatchesRoute(trip, selectedRoute) ||
-            trip.id == onboardTrip?.id ||
-            _isTripEligibleForSelectedRouteDisplay(
-              trip,
-              selectedRoute,
-            );
-        if (keepSelectedTrip) {
-          return trip;
-        }
-      }
-    }
-    if (onboardTrip != null &&
-        selectedRoute != null &&
-        _tripMatchesRoute(onboardTrip, selectedRoute)) {
-      return onboardTrip;
-    }
-    if (selectedRouteId != null && selectedRouteId.isNotEmpty) {
-      final candidates = _selectedRouteDisplayTrips(selectedRouteId);
-      if (candidates.isNotEmpty) {
-        return candidates.first;
-      }
-    }
-    return _trips.isEmpty ? null : _trips.first;
+    final route = _selectedRoute;
+    return selectVisibleRouteTrip(
+      route: route,
+      preferred: _selectedTripId == null ? null : _tripById(_selectedTripId!),
+      onboard: _onboardedTripForCamera(),
+      candidates: route == null ? _trips : _selectedRouteDisplayTrips(route.id),
+      isEligible: (trip) => _isTripEligibleForSelectedRouteDisplay(trip, route),
+    );
   }
 
   RouteSummaryModel? get _selectedRoute {
@@ -1163,9 +1141,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     final terminalStop = _routeTerminalStop(selectedRoute);
     final isTerminalBooking = _bookingMode == _PassengerBookingMode.terminal;
 
-    if ((isTerminalBooking && _draftUnloadPoint == null) ||
-        (!isTerminalBooking &&
-            (_draftPickupPoint == null || _draftUnloadPoint == null))) {
+    if ((capabilities['flowVersion'] == 2 &&
+            !isTerminalBooking &&
+            _draftPickupPoint == null) ||
+        (capabilities['flowVersion'] != 2 &&
+            ((isTerminalBooking && _draftUnloadPoint == null) ||
+                (!isTerminalBooking &&
+                    (_draftPickupPoint == null ||
+                        _draftUnloadPoint == null))))) {
       setState(() => _statusMessage = isTerminalBooking
           ? 'Choose a drop-off.'
           : 'Choose pickup and drop-off.');
@@ -1713,16 +1696,20 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       final seats = candidates.fold<int>(
           0, (best, t) => math.max(best, _availableSeats(t) ?? 0));
       if (seats < 1) {
-        setState(() => _statusMessage = candidates.isEmpty
+        final reason = candidates.isEmpty
             ? (_bookingMode == _PassengerBookingMode.terminal
                 ? 'No jeep is loading at this terminal yet. Please wait for the next loading jeep.'
                 : 'No roadside jeep is ready for pickups yet. Choose terminal pickup if you are at the terminal.')
-            : 'No seats are available on this route.');
+            : 'No seats are available on this route.';
+        setState(() => _statusMessage = reason);
+        await ActionFeedback.showInfoDialog(context,
+            title: 'No jeep available', message: reason);
         return null;
       }
       final choices = <Map<String, dynamic>>[
         if (_draftUnloadPoint != null)
           {
+            '_pinned': true,
             'destinationStopRef': _draftUnloadLabel ?? 'Selected drop-off',
             'destinationLocation': {
               'type': 'Point',
@@ -1748,6 +1735,38 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                   service: bookingService,
                   maxSeats: seats,
                   destinations: choices,
+                  onPinDestination: (index, current) => showDialog<
+                          Map<String, dynamic>>(
+                      context: context,
+                      builder: (_) => MemberDropoffPicker(
+                          label: index == 0 ? 'You' : 'Passenger ${index + 1}',
+                          route: route,
+                          pickup: pickup,
+                          initial: current,
+                          resolveDestination: (point) {
+                            final distance = _distanceToRoute(route, point);
+                            final projected =
+                                _nearestRouteProjection(route, point)?.point;
+                            if (distance == null ||
+                                projected == null ||
+                                distance > _unloadPinToleranceMeters ||
+                                !_isUnloadAfterPickup(
+                                    route, pickup, projected)) {
+                              return null;
+                            }
+                            return {
+                              'destinationStopRef': _nearestRoutePlaceName(
+                                  route, projected,
+                                  fallback: 'Pinned drop-off'),
+                              'destinationLocation': {
+                                'type': 'Point',
+                                'coordinates': [
+                                  projected.longitude,
+                                  projected.latitude
+                                ]
+                              },
+                            };
+                          })),
                   basePayload: {
                     'routeId': route.id,
                     'pickupType': _bookingMode.apiValue,
@@ -2123,27 +2142,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   bool _tripIsLive(TripSession trip) =>
       trip.status == 'active' || trip.active == true;
 
-  bool _tripMatchesRoute(TripSession trip, RouteSummaryModel? route) {
-    if (route == null) {
-      return false;
-    }
-    if (trip.routeId == route.id) {
-      return true;
-    }
-    if ((trip.routeCode ?? '').trim().isNotEmpty &&
-        (route.code).trim().isNotEmpty &&
-        trip.routeCode!.trim().toLowerCase() ==
-            route.code.trim().toLowerCase()) {
-      return true;
-    }
-    if ((trip.routeName ?? '').trim().isNotEmpty &&
-        route.name.trim().isNotEmpty &&
-        trip.routeName!.trim().toLowerCase() ==
-            route.name.trim().toLowerCase()) {
-      return true;
-    }
-    return false;
-  }
+  bool _tripMatchesRoute(TripSession trip, RouteSummaryModel? route) =>
+      tripMatchesSelectedRoute(trip, route);
 
   List<TripSession> _routeTrips(String routeId) {
     final route = _routeById(routeId);
@@ -3219,7 +3219,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
             ? 'Group ready'
             : 'Ready';
       case 'completed':
-        return 'Onboard';
+        final finished = _rides.any((r) =>
+                r.pickupRequestId == request.id && r.status == 'completed') ||
+            (request.members.isNotEmpty &&
+                request.members.every((m) => m.status == 'completed'));
+        return finished ? 'Completed' : 'Boarded';
       case 'cancelled':
         return 'Cancelled';
       default:
@@ -3286,7 +3290,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                                 .textTheme
                                 .bodyMedium
                                 ?.copyWith(
-                                  color: const Color(0xFF67726E),
+                                  color: Colors.white70,
                                 ),
                           ),
                         ],
@@ -3298,18 +3302,18 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF6F7F2),
+                    color: Colors.white.withValues(alpha: .10),
                     borderRadius: BorderRadius.circular(18),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _DetailRow(
+                      ReadableDetailRow(
                         label: 'Coordinates',
                         value:
                             '${stop.position.latitude.toStringAsFixed(5)}, ${stop.position.longitude.toStringAsFixed(5)}',
                       ),
-                      _DetailRow(
+                      ReadableDetailRow(
                         label: 'Stop order',
                         value: '${stop.order}',
                       ),
@@ -3343,7 +3347,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                     width: double.infinity,
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFDF7E8),
+                      color: Colors.white.withValues(alpha: .10),
                       borderRadius: BorderRadius.circular(18),
                       border: Border.all(color: const Color(0xFFFFE1A6)),
                     ),
@@ -6140,7 +6144,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                     Text(
                       'Your recent bookings and completed rides',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: const Color(0xFF67726E),
+                            color: Colors.white70,
                           ),
                     ),
                     const SizedBox(height: 20),
@@ -6173,7 +6177,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                                           .textTheme
                                           .bodyMedium
                                           ?.copyWith(
-                                            color: const Color(0xFF67726E),
+                                            color: Colors.white70,
                                           ),
                                     ),
                                   ],
@@ -6187,7 +6191,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                                   .textTheme
                                   .labelSmall
                                   ?.copyWith(
-                                    color: const Color(0xFF8A928F),
+                                    color: Colors.white70,
                                     fontWeight: FontWeight.w700,
                                   ),
                             ),
@@ -6197,7 +6201,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                                 margin: const EdgeInsets.only(bottom: 12),
                                 padding: const EdgeInsets.all(16),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFF8F8F5),
+                                  color: Colors.white.withValues(alpha: .10),
                                   borderRadius: BorderRadius.circular(18),
                                 ),
                                 child: Column(
@@ -6207,7 +6211,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                                       children: [
                                         Expanded(
                                           child: Text(
-                                            '${request.partySize} people | ${request.stopRef ?? "Booking request"}',
+                                            '${passengerCountLabel(request.partySize)} | ${request.stopRef ?? "Booking request"}',
                                             style: Theme.of(context)
                                                 .textTheme
                                                 .titleMedium
@@ -6220,12 +6224,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                                       ],
                                     ),
                                     const SizedBox(height: 8),
-                                    Text(
-                                      _bookingStateText(request),
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium,
-                                    ),
+                                    if (_bookingStateText(request)
+                                            .toLowerCase() !=
+                                        request.status.toLowerCase())
+                                      Text(
+                                        _bookingStateText(request),
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodyMedium,
+                                      ),
                                     const SizedBox(height: 8),
                                     Text(
                                       ParagoFormat.relative(request.createdAt),
@@ -6233,7 +6240,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                                           .textTheme
                                           .bodySmall
                                           ?.copyWith(
-                                            color: const Color(0xFF67726E),
+                                            color: Colors.white70,
                                           ),
                                     ),
                                     if (_canCancelRequest(request)) ...[
@@ -6258,71 +6265,13 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                                   .textTheme
                                   .labelSmall
                                   ?.copyWith(
-                                    color: const Color(0xFF8A928F),
+                                    color: Colors.white70,
                                     fontWeight: FontWeight.w700,
                                   ),
                             ),
                             const SizedBox(height: 12),
-                            for (final ride in _rides) ...[
-                              Container(
-                                margin: const EdgeInsets.only(bottom: 12),
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF8F8F5),
-                                  borderRadius: BorderRadius.circular(18),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            '${ride.onboardCount} onboard | ${ride.destinationStopRef ?? "Ride session"}',
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .titleMedium
-                                                ?.copyWith(
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                          ),
-                                        ),
-                                        StatusBadge(status: ride.status),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      _rideStatusMessage(ride),
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      'Boarded ${ParagoFormat.relative(ride.boardedAt)}',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: const Color(0xFF67726E),
-                                          ),
-                                    ),
-                                    if (ride.estimatedFare != null) ...[
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        'Regular fare/person: ${_formatFareAmount(ride.estimatedFare)} | Total: ${_formatFareAmount(ride.regularTotal ?? (ride.estimatedFare! * ride.boardedCount))}',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodyMedium
-                                            ?.copyWith(
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            ],
+                            for (final ride in _rides)
+                              RideHistoryEntry(ride: ride),
                           ],
                         ],
                       ),
@@ -7528,7 +7477,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                         ListTile(
                           contentPadding: EdgeInsets.zero,
                           title: Text(
-                              '${request.partySize} people | ${request.stopRef ?? "Unspecified booking stop"}'),
+                              '${passengerCountLabel(request.partySize)} | ${request.stopRef ?? "Unspecified booking stop"}'),
                           subtitle: Text(
                             '${_bookingStateText(request)} · ${ParagoFormat.relative(request.createdAt)}',
                           ),

@@ -69,7 +69,7 @@ class JourneyPickupPin extends StatelessWidget {
                 color: const Color(0xFF102725),
                 borderRadius: BorderRadius.circular(8)),
             child: Text(
-                '${JourneyMemberModel.destinationSummary(members)}\n${members.length} passenger(s)${assignedJeepneyLabel == null ? '' : ' · $assignedJeepneyLabel'}',
+                '${JourneyMemberModel.destinationSummary(members)}\n${members.length} ${members.length == 1 ? 'passenger' : 'passengers'}${assignedJeepneyLabel == null ? '' : ' · $assignedJeepneyLabel'}',
                 textAlign: TextAlign.center,
                 maxLines: 4,
                 overflow: TextOverflow.ellipsis,

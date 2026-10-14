@@ -16,6 +16,7 @@ class ActionFeedback {
     String successTitle = 'Success',
     String errorTitle = 'Action not completed',
     bool showSuccess = true,
+    DriverErrorMessage Function(Object)? describeError,
   }) async {
     final navigator = Navigator.of(context, rootNavigator: true);
     var loadingVisible = true;
@@ -71,7 +72,7 @@ class ActionFeedback {
         await onError(error);
       }
       if (context.mounted) {
-        final feedback = DriverErrorMessage.from(error);
+        final feedback = (describeError ?? DriverErrorMessage.from)(error);
         await showErrorDialog(
           context,
           title: errorTitle == 'Action not completed'

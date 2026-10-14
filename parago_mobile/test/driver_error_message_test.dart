@@ -5,6 +5,13 @@ import 'package:parago_mobile/core/utils/driver_error_message.dart';
 import 'package:parago_mobile/models/trip/trip_session.dart';
 
 void main() {
+  test('login failures do not instruct the user to refresh a trip', () {
+    final result =
+        DriverErrorMessage.forSignIn(ApiException(401, 'Invalid credentials'));
+    expect(result.message, contains('email and password'));
+    expect(result.message.toLowerCase(), isNot(contains('trip')));
+    expect(result.message.toLowerCase(), isNot(contains('expired')));
+  });
   test('maps terminal GPS codes to a reason and corrective action', () {
     final result = DriverErrorMessage.from(ApiException(
       409,
@@ -18,7 +25,8 @@ void main() {
   });
 
   test('does not expose raw unknown exception text', () {
-    final result = DriverErrorMessage.from(StateError('Mongo stack trace secret'));
+    final result =
+        DriverErrorMessage.from(StateError('Mongo stack trace secret'));
 
     expect(result.message, isNot(contains('Mongo')));
     expect(result.message, contains('Refresh'));

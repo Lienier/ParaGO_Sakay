@@ -567,7 +567,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
       statusMessage: visibleStatusMessage,
       requirementMessage: visibleOperationsMessage,
       availabilityNote: _availabilityNote,
-      isOnline: _isOnline,
+      isOnline: _displayDriverOnline,
       activePickupCount: focusedRequests
           .where(
             (request) =>
@@ -664,7 +664,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
           routeLabel: liveTrip == null
               ? (_assignedRouteSummary()?.label ?? 'Metro overview')
               : _routeLabel(liveTrip),
-          isOnline: _isOnline,
+          isOnline: _displayDriverOnline,
           availabilityNote: _availabilityNote,
           requirementMessage: liveOperationsMessage,
           statusMessage: liveStatusMessage,

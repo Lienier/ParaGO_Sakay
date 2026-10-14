@@ -88,6 +88,15 @@ async function createLab() {
       fareConfig: { baseAmount: 17, baseDistanceKm: 1, additionalAmountPerKm: 4 }, stops: [{ name: 'Playwright Terminal', code: 'PW-START', order: 0, fare: 0, location: point() },
         { name: 'College', code: 'PW-COLLEGE', order: 1, fare: 17, location: point(14.915) }, { name: 'Market', code: 'PW-MARKET', order: 2, fare: 22, location: point(14.925) }, { name: 'Nearby Stop', code: 'PW-NEARBY', order: 3, fare: 22, location: point(14.9253) }, { name: 'Playwright Destination', code: 'PW-END', order: 4, fare: 20, location: point(14.93) }] });
     const jeepney = await Jeepney.create({ plateNumber: 'PW 123', capacity: 6, status: 'active', lastKnownLocation: point(), lastSeenAt: new Date() });
+    // Baseline route for exercising the real route picker: same display name,
+    // different ID/direction, and deliberately no assigned jeep or journey.
+    if (process.env.UI_LAB_SECOND_ROUTE === 'true') {
+      await Route.create({ name: 'Playwright Main Route', code: 'PW-OTHER', direction: 'down', status: 'active',
+        path: { type: 'LineString', coordinates: [[121.05, 14.93], [121.05, 14.9]] },
+        terminal: { enabled: true, name: 'Other Terminal', stopRef: 'OTHER-START', location: point(14.93), radiusMeters: 100 },
+        stops: [{ name: 'Other Terminal', code: 'OTHER-START', order: 0, fare: 0, location: point(14.93) },
+          { name: 'Other End', code: 'OTHER-END', order: 1, fare: 17, location: point() }] });
+    }
     const driver = await Driver.create({ userId: driverUser._id, licenseNumber: 'N01-23-456789', status: 'active', assignedJeepneyId: jeepney._id, assignedRouteId: route._id });
     const otherDriver = await Driver.create({ userId: otherDriverUser._id, status: 'active',
       ...(process.env.UI_LAB_SHARED_DRIVERS === 'true' ? { assignedRouteId: route._id } : {}) });

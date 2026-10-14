@@ -33,7 +33,7 @@ class JourneyMembers extends StatelessWidget {
                 : Icons.person),
             title: Text('${member.label}: ${member.destinationStopRef}'),
             subtitle: Text(
-                '${member.status == 'completed' ? 'Unloaded' : member.status == 'onboard' ? 'Onboard' : 'Reserved'} • ₱${member.fare.toStringAsFixed(2)}'),
+                '${member.status == 'completed' ? 'Unloaded' : member.status == 'onboard' ? 'Onboard' : member.status == 'cancelled' ? 'Cancelled' : member.status == 'expired' ? 'Expired' : 'Reserved'} • ₱${member.fare.toStringAsFixed(2)}'),
           ),
         Text(
             'Total: ₱${members.fold<double>(0, (sum, m) => sum + m.fare).toStringAsFixed(2)}'),

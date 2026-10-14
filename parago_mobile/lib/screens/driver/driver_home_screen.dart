@@ -1,3 +1,4 @@
+import '../../widgets/driver_map_frame.dart';
 import 'package:parago_map_ui/road_jeep_marker.dart';
 import '../../widgets/walk_in_controls.dart';
 import '../../widgets/glass_surface.dart';
@@ -300,11 +301,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   bool get _isAppForeground {
     switch (_appLifecycleState) {
-      case AppLifecycleState.inactive:
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
       case AppLifecycleState.detached:
         return false;
+      case AppLifecycleState.inactive:
       case AppLifecycleState.resumed:
       case null:
         return true;
@@ -449,7 +450,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return;
     }
 
-    if (!_isAppForeground) {
+    if (_isAppDetached) {
       _applyAutomaticAvailabilityState(session, hasInternet: _hasInternet);
       _syncRealtimeSocket(session);
       await _syncAutomaticAvailability(session, forcePush: forcePush);
@@ -457,7 +458,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return;
     }
 
-    if (probeNetwork && _isAppForeground) {
+    if (probeNetwork) {
       final hasInternet = await _probeServerReachability(session);
       if (!mounted) {
         return;
@@ -1616,6 +1617,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                       DropdownButtonFormField<String>(
                         initialValue: selectedRoute.id,
                         isExpanded: true,
+                        isDense: false,
+                        itemHeight: null,
                         decoration: const InputDecoration(labelText: 'Route'),
                         selectedItemBuilder: (context) => [
                           for (final route in sortedRoutes)
@@ -1634,8 +1637,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                               value: route.id,
                               child: Text(
                                 _routeChoiceLabel(route),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
+                                softWrap: true,
                               ),
                             ),
                         ],
@@ -2011,12 +2013,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   void _handleTrackedDriverPositionError(Object error) {
-    if (_looksLikeConnectivityIssue(error)) {
-      final session = context.read<SessionController>();
-      _applyAutomaticAvailabilityState(session, hasInternet: false);
-      return;
-    }
-
+    // Sensor timeouts and network-provider errors describe GPS acquisition,
+    // not API reachability. Only HTTP probes/requests change connectivity.
     _setStatusMessage(
       'Location tracking needs attention. Check location permission and device location settings.',
     );
@@ -2543,6 +2541,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     // Profile status can lag briefly while automatic availability sync runs.
     return _isOnline;
   }
+
+  bool get _displayDriverOnline =>
+      _hasInternet &&
+      _driverAccountStatus() == 'active' &&
+      _isDriverOperationallyOnline();
 
   String _driverAccountStatus() {
     final direct =
@@ -3529,8 +3532,8 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
           height: height,
           child: Listener(
             behavior: HitTestBehavior.translucent,
-            child: Stack(
-              children: [
+            child: DriverMapFrame(
+              map: Stack(children: [
                 Positioned.fill(
                   child: FlutterMap(
                     mapController: mapController,
@@ -3640,34 +3643,25 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                           : onDismissRequirementMessage,
                     ),
                   ),
-                Positioned(
-                  right: 16,
-                  bottom: 112,
-                  child: StreamBuilder<int>(
-                      stream: Stream<int>.periodic(
-                          const Duration(seconds: 2), (i) => i),
-                      builder: (context, _) => MapFollowControl(
-                            status: widget.readFollowStatus(),
-                            onRecenter: widget.onRecenter,
-                          )),
-                ),
-                Positioned(
-                  left: 16,
-                  right: 16,
-                  bottom: 16,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onVerticalDragEnd: (details) {
-                      if (details.primaryVelocity != null &&
-                          details.primaryVelocity! < -120) {
-                        _openControlSheet(context);
-                      }
-                    },
-                    onTap: () => _openControls(context),
-                    child: const _DriveMapMiniControl(),
-                  ),
-                ),
-              ],
+              ]),
+              followControl: StreamBuilder<int>(
+                  stream: Stream<int>.periodic(
+                      const Duration(seconds: 2), (i) => i),
+                  builder: (context, _) => MapFollowControl(
+                        status: widget.readFollowStatus(),
+                        onRecenter: widget.onRecenter,
+                      )),
+              tripControl: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onVerticalDragEnd: (details) {
+                  if (details.primaryVelocity != null &&
+                      details.primaryVelocity! < -120) {
+                    _openControlSheet(context);
+                  }
+                },
+                onTap: () => _openControls(context),
+                child: const _DriveMapMiniControl(),
+              ),
             ),
           ),
         ),

@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 
 import 'adaptive_location_transmitter.dart';
 import 'driver_service.dart';
+import 'driver_position_source.dart';
 
 class LocationTrackingService {
   LocationTrackingService(
@@ -79,9 +80,8 @@ class LocationTrackingService {
     _transmitter.start();
     debugPrint('Starting adaptive location tracking (1s sample, 2s/5s send)');
 
-    _positionSubscription = Geolocator.getPositionStream(
-      locationSettings: _streamLocationSettings(),
-    ).listen(
+    _positionSubscription =
+        driverPositionStream(_streamLocationSettings()).listen(
       _handlePositionUpdate,
       onError: (error) {
         debugPrint('Location stream error: $error');
@@ -101,9 +101,8 @@ class LocationTrackingService {
         _fallbackRequestInFlight = true;
         debugPrint('Fallback: forcing location update');
         try {
-          final position = await Geolocator.getCurrentPosition(
-            locationSettings: _singleFixLocationSettings(),
-          );
+          final position =
+              await driverCurrentPosition(_singleFixLocationSettings());
           await _handlePositionUpdate(position);
         } catch (error) {
           debugPrint('Fallback location update failed: $error');

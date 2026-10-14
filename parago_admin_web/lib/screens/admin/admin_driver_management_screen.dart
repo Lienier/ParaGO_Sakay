@@ -1,8 +1,8 @@
 import '../../widgets/operations_panel.dart';
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
@@ -320,8 +320,7 @@ class _AdminDriverManagementScreenState
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text(
-                  'Each credential image must be 5 MB or smaller.')),
+              content: Text('Each credential image must be 5 MB or smaller.')),
         );
       }
       return null;
@@ -431,10 +430,12 @@ class _AdminDriverManagementScreenState
     if (driverId == null || driverId.isEmpty) return;
     final jeepney = driver['assignedJeepneyId'];
     final jeepneyId = _nullableIdOf(jeepney);
-    final routeId = _routeSelection.value ?? _nullableIdOf(driver['assignedRouteId']);
+    final routeId =
+        _routeSelection.value ?? _nullableIdOf(driver['assignedRouteId']);
     if (jeepneyId == null || routeId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Assign an active route and jeepney first.')),
+        const SnackBar(
+            content: Text('Assign an active route and jeepney first.')),
       );
       return;
     }

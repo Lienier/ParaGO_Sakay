@@ -83,7 +83,8 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                       decoration: const InputDecoration(
                         labelText: 'Cooperative / driver reference *',
                         helperText:
-                            'Stored in the existing driver-license record for compatibility.',
+                            'Use the driver’s cooperative or reference number.',
+                        helperMaxLines: 3,
                       ),
                       textInputAction: TextInputAction.next,
                       onTapOutside: (_) =>
@@ -93,6 +94,7 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                           ? 'A cooperative / driver reference is required'
                           : null,
                     ),
+                    const SizedBox(height: 16),
                     TextFormField(
                       controller: _createEmployeeCtrl,
                       decoration:
@@ -104,8 +106,13 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                     ),
                     TextFormField(
                       controller: _createPhoneCtrl,
-                      decoration: const InputDecoration(labelText: 'CP number *'),
+                      decoration:
+                          const InputDecoration(labelText: 'CP number *'),
                       keyboardType: TextInputType.phone,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly,
+                        LengthLimitingTextInputFormatter(11)
+                      ],
                       textInputAction: TextInputAction.next,
                       onTapOutside: (_) =>
                           FocusManager.instance.primaryFocus?.unfocus(),
@@ -364,12 +371,14 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                   decoration: const InputDecoration(
                     labelText: 'Cooperative / driver reference',
                     helperText:
-                        'Stored in the existing driver-license record for compatibility.',
+                        'Use the driver’s cooperative or reference number.',
+                    helperMaxLines: 3,
                   ),
                   textInputAction: TextInputAction.next,
                   onTapOutside: (_) =>
                       FocusManager.instance.primaryFocus?.unfocus(),
                 ),
+                const SizedBox(height: 16),
                 TextFormField(
                   controller: _editEmployeeCtrl,
                   decoration:
@@ -382,6 +391,16 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                   controller: _editPhoneCtrl,
                   decoration: const InputDecoration(labelText: 'Phone'),
                   keyboardType: TextInputType.phone,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(11)
+                  ],
+                  validator: (value) {
+                    final phone = _textOf(value);
+                    return phone.isEmpty || RegExp(r'^09\d{9}$').hasMatch(phone)
+                        ? null
+                        : 'Use exactly 11 digits starting with 09';
+                  },
                   textInputAction: TextInputAction.next,
                   onTapOutside: (_) =>
                       FocusManager.instance.primaryFocus?.unfocus(),
@@ -475,7 +494,8 @@ extension _AdminDriverManagementForms on _AdminDriverManagementScreenState {
                 ),
                 const SizedBox(height: 8),
                 OutlinedButton.icon(
-                  onPressed: _saving ? null : () => _addDriverToTerminal(driver),
+                  onPressed:
+                      _saving ? null : () => _addDriverToTerminal(driver),
                   icon: const Icon(Icons.location_on_outlined),
                   label: const Text('Add to terminal'),
                 ),
@@ -646,9 +666,8 @@ class _StoredLicenseDocumentsPanelState
   Widget _sideCard(String side, dynamic value) {
     final data = value is Map<String, dynamic> ? value : null;
     final url = data?['url']?.toString() ?? '';
-    final title = side == 'front'
-        ? 'Front credential image'
-        : 'Back credential image';
+    final title =
+        side == 'front' ? 'Front credential image' : 'Back credential image';
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(

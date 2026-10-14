@@ -477,6 +477,9 @@ class _AuthScreenState extends State<AuthScreen> {
                                     BorderSide(color: actionColor, width: 1.4),
                               ),
                               suffixIcon: IconButton(
+                                tooltip: _obscurePassword
+                                    ? 'Show password'
+                                    : 'Hide password',
                                 onPressed: () {
                                   setState(() {
                                     _obscurePassword = !_obscurePassword;
@@ -538,6 +541,7 @@ class _AuthScreenState extends State<AuthScreen> {
                                 : () => setState(() {
                                       _isRegisterMode = !_isRegisterMode;
                                       _legalAccepted = false;
+                                      _error = null;
                                     }),
                             child: Text(
                               _isRegisterMode

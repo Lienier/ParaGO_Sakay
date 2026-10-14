@@ -52,7 +52,7 @@ void main() {
                         assignedJeepneyLabel: 'PW 123'))))));
     expect(find.textContaining('Municipal Hall\nCollege\n+1 more'),
         findsOneWidget);
-    expect(find.textContaining('3 passenger(s) · PW 123'), findsOneWidget);
+    expect(find.textContaining('3 passengers · PW 123'), findsOneWidget);
     await tester.tap(find.byType(JourneyPickupPin));
     await tester.pumpAndSettle();
     expect(find.text('Passenger 3: Mall'), findsOneWidget);

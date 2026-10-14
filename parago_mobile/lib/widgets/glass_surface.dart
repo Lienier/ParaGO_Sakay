@@ -20,6 +20,7 @@ class GlassSurface extends StatelessWidget {
   static ThemeData theme(BuildContext context) {
     final base = Theme.of(context);
     return base.copyWith(
+      canvasColor: const Color(0xFF0D4E47),
       colorScheme: base.colorScheme.copyWith(
         surface: const Color(0xFF0D4E47),
         onSurface: Colors.white,
@@ -60,6 +61,7 @@ class GlassSurface extends StatelessWidget {
               side: const WidgetStatePropertyAll(
                   BorderSide(color: Colors.white54)))),
       popupMenuTheme: base.popupMenuTheme.copyWith(
+          color: const Color(0xFF0D4E47),
           labelTextStyle: const WidgetStatePropertyAll(
               TextStyle(color: Colors.white, fontSize: 14))),
       inputDecorationTheme: base.inputDecorationTheme.copyWith(

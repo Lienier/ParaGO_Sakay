@@ -183,7 +183,11 @@ class _AdminOperationsPage extends StatelessWidget {
   }
 
   Widget _dispatch(BuildContext context) {
-    final allTrips = [..._awaiting, ..._queue, ..._readDynamicList(board?['routeDrivers'])];
+    final allTrips = [
+      ..._awaiting,
+      ..._queue,
+      ..._readDynamicList(board?['routeDrivers'])
+    ];
     final routes = <String, String>{
       for (final t in allTrips)
         _routeKey(t): _readDynamicMap(_readDynamicMap(t)['routeId'])['name']
@@ -222,15 +226,18 @@ class _AdminOperationsPage extends StatelessWidget {
             'Scheduled trips remain out of the queue until two valid GPS fixes arrive.',
             style: TextStyle(color: AppColors.textSecondary)),
         const SizedBox(height: 10),
-        if (_awaiting.where((t) => selected == null || _routeKey(t) == selected).isEmpty)
+        if (_awaiting
+            .where((t) => selected == null || _routeKey(t) == selected)
+            .isEmpty)
           const OperationsPanel(
               child: Text('No drivers are awaiting terminal arrival.'))
         else
-          for (final trip in _awaiting.where((t) => selected == null || _routeKey(t) == selected))
+          for (final trip in _awaiting
+              .where((t) => selected == null || _routeKey(t) == selected))
             Padding(
                 padding: const EdgeInsets.only(bottom: 12),
-                child: _AwaitingTerminalArrivalRow(
-                    trip: _readDynamicMap(trip))),
+                child:
+                    _AwaitingTerminalArrivalRow(trip: _readDynamicMap(trip))),
         for (final status in ['loading', 'waiting', 'skipped']) ...[
           const SizedBox(height: 20),
           Row(children: [
@@ -479,8 +486,10 @@ class _TerminalDispatchRow extends StatelessWidget {
       field('Onboard',
           '${summary['onboardSeats'] ?? trip['occupancyCount'] ?? '—'}'),
       field('Reserved', '${summary['reservedSeats'] ?? '—'}'),
-      if (summary['reservationPartySizes'] is List && (summary['reservationPartySizes'] as List).isNotEmpty)
-        field('People per booking', (summary['reservationPartySizes'] as List).join(' + ')),
+      if (summary['reservationPartySizes'] is List &&
+          (summary['reservationPartySizes'] as List).isNotEmpty)
+        field('People per booking',
+            (summary['reservationPartySizes'] as List).join(' + ')),
       field('Free', '${summary['availableSeats'] ?? '—'}',
           color: AppColors.primary),
     ]);
@@ -584,12 +593,17 @@ class _AwaitingTerminalArrivalRow extends StatelessWidget {
         Text('Terminal location: $terminalLocation'),
         Text('GPS: ${arrival['status'] ?? 'Unknown'}'),
         Text(distanceLabel),
-        Text('Valid fixes: ${arrival['validFixes'] ?? 0} / ${arrival['requiredValidFixes'] ?? 2}'),
-        Text('Last update: ${lastUpdate == null ? 'None' : DateTime.tryParse(lastUpdate)?.toLocal().toString().split('.').first ?? lastUpdate}'),
+        Text(
+            'Valid fixes: ${arrival['validFixes'] ?? 0} / ${arrival['requiredValidFixes'] ?? 2}'),
+        Text(
+            'Last update: ${lastUpdate == null ? 'None' : DateTime.tryParse(lastUpdate)?.toLocal().toString().split('.').first ?? lastUpdate}'),
       ]),
       const SizedBox(height: 12),
-      Text(arrival['reason']?.toString() ?? 'Driver has not provided an ordered location update',
-          style: const TextStyle(color: AppColors.warning, fontWeight: FontWeight.w600)),
+      Text(
+          arrival['reason']?.toString() ??
+              'Driver has not provided an ordered location update',
+          style: const TextStyle(
+              color: AppColors.warning, fontWeight: FontWeight.w600)),
     ]));
   }
 }
@@ -631,7 +645,7 @@ class _PassengerFlowHotspotMap extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Map hotspots show where passengers most often board and unload.',
+            'Tap a location for counts. Nearby locations are grouped; zoom in to separate them.',
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 14),
@@ -668,34 +682,98 @@ class _PassengerFlowHotspotMap extends StatelessWidget {
                         'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                     userAgentPackageName: 'com.parago.mobile',
                   ),
-                  MarkerLayer(
-                    markers: [
+                  Builder(builder: (context) {
+                    final camera = MapCamera.of(context);
+                    final controller = MapController.of(context);
+                    final entries = [
                       for (final location in boardingLocations)
-                        Marker(
-                          point: location.position,
-                          width: 130,
-                          height: 72,
-                          child: _HotspotMarker(
-                            label: location.label,
-                            count: location.count,
-                            accent: const Color(0xFF0F6A5F),
-                            icon: Icons.login_rounded,
-                          ),
-                        ),
+                        _ReportHotspot(location, true),
                       for (final location in unloadLocations)
+                        _ReportHotspot(location, false),
+                    ];
+                    final groups = clusterMapLabels(entries.map((entry) {
+                      final pixel =
+                          camera.latLngToScreenPoint(entry.location.position);
+                      return MapLabelPoint(pixel.x, pixel.y, entry);
+                    }));
+                    return MarkerLayer(markers: [
+                      for (final group in groups)
                         Marker(
-                          point: location.position,
+                          point: camera
+                              .pointToLatLng(math.Point(group.x, group.y)),
+                          rotate: true,
                           width: 130,
                           height: 72,
-                          child: _HotspotMarker(
-                            label: location.label,
-                            count: location.count,
-                            accent: const Color(0xFFE29B2D),
-                            icon: Icons.logout_rounded,
-                          ),
+                          child: Semantics(
+                              button: true,
+                              label: group.points.length > 1
+                                  ? '${group.points.length} nearby locations'
+                                  : '${group.points.first.value.kind}: ${group.points.first.value.location.label}',
+                              child: GestureDetector(
+                                onTap: () => showDialog<void>(
+                                    context: context,
+                                    builder: (context) => AlertDialog(
+                                          title:
+                                              const Text('Passenger locations'),
+                                          scrollable: true,
+                                          content: SizedBox(
+                                              width: 420,
+                                              child: Column(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    for (final point
+                                                        in group.points)
+                                                      ListTile(
+                                                        contentPadding:
+                                                            EdgeInsets.zero,
+                                                        onTap: () {
+                                                          Navigator.pop(
+                                                              context);
+                                                          controller.move(
+                                                              point
+                                                                  .value
+                                                                  .location
+                                                                  .position,
+                                                              19);
+                                                        },
+                                                        title: Text(point.value
+                                                            .location.label),
+                                                        subtitle: Text(
+                                                            '${point.value.kind} · View on map'),
+                                                        trailing: Text(
+                                                            '${point.value.location.count}'),
+                                                      )
+                                                  ])),
+                                          actions: [
+                                            TextButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(context),
+                                                child: const Text('Close'))
+                                          ],
+                                        )),
+                                child: _HotspotMarker(
+                                  label: group.points.length > 1
+                                      ? 'Locations'
+                                      : group.points.first.value.location.label,
+                                  count: group.points.length > 1
+                                      ? group.points.length
+                                      : group.points.first.value.location.count,
+                                  accent: group.points.length > 1
+                                      ? const Color(0xFF3556A8)
+                                      : group.points.first.value.boarded
+                                          ? const Color(0xFF0F6A5F)
+                                          : const Color(0xFFE29B2D),
+                                  icon: group.points.length > 1
+                                      ? Icons.layers
+                                      : group.points.first.value.boarded
+                                          ? Icons.login_rounded
+                                          : Icons.logout_rounded,
+                                ),
+                              )),
                         ),
-                    ],
-                  ),
+                    ]);
+                  }),
                   const RichAttributionWidget(
                     attributions: [
                       TextSourceAttribution('OpenStreetMap contributors'),
@@ -709,6 +787,13 @@ class _PassengerFlowHotspotMap extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ReportHotspot {
+  const _ReportHotspot(this.location, this.boarded);
+  final _PassengerFlowLocation location;
+  final bool boarded;
+  String get kind => boarded ? 'Boarded' : 'Unloaded';
 }
 
 class _HotspotMarker extends StatelessWidget {

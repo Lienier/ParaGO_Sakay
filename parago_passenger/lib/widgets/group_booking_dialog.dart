@@ -8,17 +8,72 @@ class GroupBookingDialog extends StatefulWidget {
       required this.service,
       required this.basePayload,
       required this.destinations,
-      required this.maxSeats});
+      required this.maxSeats,
+      this.onPinDestination});
   final PassengerService service;
   final Map<String, dynamic> basePayload;
   final List<Map<String, dynamic>> destinations;
   final int maxSeats;
+  final Future<Map<String, dynamic>?> Function(
+      int memberIndex, Map<String, dynamic>? current)? onPinDestination;
   @override
   State<GroupBookingDialog> createState() => _GroupBookingDialogState();
 }
 
 class _GroupBookingDialogState extends State<GroupBookingDialog> {
   final List<int?> _destinations = [null];
+  late final List<Map<String, dynamic>> _choices;
+  @override
+  void initState() {
+    super.initState();
+    _choices = [];
+    for (final destination in widget.destinations) {
+      final existing =
+          _choices.indexWhere((d) => _sameDestination(d, destination));
+      if (existing == -1) {
+        _choices.add(destination);
+      } else if (_choices[existing]['_pinned'] == true &&
+          destination['_pinned'] != true) {
+        _choices[existing] = destination;
+      }
+    }
+    final initialPin =
+        widget.destinations.where((d) => d['_pinned'] == true).firstOrNull;
+    if (initialPin != null) {
+      _destinations[0] =
+          _choices.indexWhere((d) => _sameDestination(d, initialPin));
+    }
+  }
+
+  bool _sameDestination(Map<String, dynamic> a, Map<String, dynamic> b) {
+    final ac = a['destinationLocation']?['coordinates'] as List?;
+    final bc = b['destinationLocation']?['coordinates'] as List?;
+    return a['destinationStopRef'] == b['destinationStopRef'] &&
+        (ac == null && bc == null ||
+            ac != null &&
+                bc != null &&
+                ac.length == 2 &&
+                bc.length == 2 &&
+                ((ac[0] as num) - (bc[0] as num)).abs() < .000001 &&
+                ((ac[1] as num) - (bc[1] as num)).abs() < .000001);
+  }
+
+  Future<void> _pin(int index) async {
+    final selected = await widget.onPinDestination!(index,
+        _destinations[index] == null ? null : _choices[_destinations[index]!]);
+    if (!mounted || selected == null) return;
+    setState(() {
+      var choice = _choices.indexWhere((d) => _sameDestination(d, selected));
+      if (choice == -1) {
+        _choices.add({...selected, '_pinned': true});
+        choice = _choices.length - 1;
+      }
+      _destinations[index] = choice;
+      _quote = null;
+      _error = null;
+    });
+  }
+
   Map<String, dynamic>? _quote;
   bool _busy = false;
   String? _error;
@@ -63,7 +118,10 @@ class _GroupBookingDialogState extends State<GroupBookingDialog> {
     try {
       final quote = await widget.service.quoteBooking({
         ...widget.basePayload,
-        'members': _destinations.map((d) => widget.destinations[d!]).toList()
+        'members': _destinations
+            .map((d) =>
+                Map<String, dynamic>.from(_choices[d!])..remove('_pinned'))
+            .toList()
       });
       if (mounted) setState(() => _quote = quote);
     } catch (e) {
@@ -98,14 +156,16 @@ class _GroupBookingDialogState extends State<GroupBookingDialog> {
                       decoration: InputDecoration(
                           labelText: i == 0 ? 'You' : 'Passenger ${i + 1}',
                           hintText: 'Drop-off'),
-                      items: List.generate(
-                          widget.destinations.length,
-                          (d) => DropdownMenuItem(
-                              value: d,
-                              child: Text(
-                                  widget.destinations[d]['destinationStopRef']
-                                      .toString(),
-                                  softWrap: true))),
+                      items: [
+                        for (var d = 0; d < _choices.length; d++)
+                          if (_choices[d]['_pinned'] != true ||
+                              _destinations[i] == d)
+                            DropdownMenuItem(
+                                value: d,
+                                child: Text(
+                                    '${_choices[d]['destinationStopRef']}${_choices[d]['_pinned'] == true ? ' (pin)' : ''}',
+                                    softWrap: true))
+                      ],
                       onChanged: _busy
                           ? null
                           : (d) => setState(() {
@@ -113,6 +173,13 @@ class _GroupBookingDialogState extends State<GroupBookingDialog> {
                                 _quote = null;
                                 _error = null;
                               })),
+                  if (widget.onPinDestination != null)
+                    Semantics(
+                        label: i == 0 ? 'You' : 'Passenger ${i + 1}',
+                        child: OutlinedButton.icon(
+                            onPressed: _busy ? null : () => _pin(i),
+                            icon: const Icon(Icons.location_on_outlined),
+                            label: const Text('Pin drop-off'))),
                   if (i < members.length)
                     Text(
                         'Fare: ₱${(members[i]['fareSnapshot']['amount'] as num).toStringAsFixed(2)}'),

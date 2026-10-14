@@ -8,19 +8,22 @@ import 'package:parago_passenger/models/operations/pickup_request.dart';
 
 class QuoteService extends PassengerService {
   QuoteService() : super(ApiClient(baseUrl: 'http://127.0.0.1'));
+  Map<String, dynamic>? lastBody;
   @override
-  Future<Map<String, dynamic>> quoteBooking(Map<String, dynamic> body) async =>
-      {
-        'quoteToken': 'reviewed',
-        'regularTotal': 17,
-        'members': [
-          for (final m in body['members'] as List)
-            {
-              ...m as Map,
-              'fareSnapshot': {'amount': 17}
-            }
-        ],
-      };
+  Future<Map<String, dynamic>> quoteBooking(Map<String, dynamic> body) async {
+    lastBody = body;
+    return {
+      'quoteToken': 'reviewed',
+      'regularTotal': 17,
+      'members': [
+        for (final m in body['members'] as List)
+          {
+            ...m as Map,
+            'fareSnapshot': {'amount': 17}
+          }
+      ],
+    };
+  }
 }
 
 class ChangedPriceService extends QuoteService {
@@ -34,6 +37,100 @@ class ChangedPriceService extends QuoteService {
 }
 
 void main() {
+  testWidgets('a nearby custom pin is distinct from its named saved stop',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: GroupBookingDialog(
+                service: QuoteService(),
+                maxSeats: 2,
+                basePayload: const {},
+                destinations: const [
+          {
+            '_pinned': true,
+            'destinationStopRef': 'College',
+            'destinationLocation': {
+              'coordinates': [121.05, 14.9151]
+            }
+          },
+          {
+            'destinationStopRef': 'College',
+            'destinationLocation': {
+              'coordinates': [121.05, 14.915]
+            }
+          },
+        ]))));
+    expect(find.text('College (pin)'), findsOneWidget);
+    await tester.tap(find.byType(DropdownButtonFormField<int>));
+    await tester.pumpAndSettle();
+    expect(find.text('College'), findsOneWidget);
+    expect(find.text('College (pin)').last, findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('each member pins only a drop-off and editing invalidates quote',
+      (tester) async {
+    final service = QuoteService();
+    final indices = <int>[];
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: GroupBookingDialog(
+      service: service,
+      maxSeats: 2,
+      basePayload: const {'routeId': 'route', 'stopRef': 'Shared pickup'},
+      destinations: const [],
+      onPinDestination: (index, current) async {
+        indices.add(index);
+        return {
+          'destinationStopRef': index == 0 ? 'College' : 'Mall',
+          'destinationLocation': {
+            'type': 'Point',
+            'coordinates': [121, 14 + index * .01]
+          }
+        };
+      },
+    ))));
+    await tester.tap(find.text('Pin drop-off'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pin drop-off').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Review'));
+    await tester.pumpAndSettle();
+    expect(indices, [0, 1]);
+    expect(service.lastBody!['stopRef'], 'Shared pickup');
+    final members = service.lastBody!['members'] as List;
+    expect(members.map((m) => m['destinationStopRef']), ['College', 'Mall']);
+    expect(members.every((m) => !m.containsKey('pickupLocation')), isTrue);
+    expect(find.text('Book'), findsOneWidget);
+    await tester.tap(find.text('Pin drop-off').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Review'), findsOneWidget);
+    expect(find.text('Book'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('equivalent pinned and saved stops have one choice',
+      (tester) async {
+    const destination = {
+      'destinationStopRef': 'College',
+      'destinationLocation': {
+        'type': 'Point',
+        'coordinates': [121.05, 14.915]
+      }
+    };
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: GroupBookingDialog(
+      service: QuoteService(),
+      maxSeats: 2,
+      basePayload: const {},
+      destinations: const [destination, destination],
+    ))));
+    await tester.tap(find.byType(DropdownButtonFormField<int>));
+    await tester.pumpAndSettle();
+    expect(find.text('College'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
   testWidgets(
       'long drop-off names remain readable with enlarged text at 320 pixels',
       (tester) async {
