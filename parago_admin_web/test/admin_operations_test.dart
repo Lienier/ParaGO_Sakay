@@ -12,12 +12,13 @@ class OperationsApi extends ApiClient {
   bool failDispatch = true;
   bool failReports = false;
   int reports = 0;
+  List<Map<String, dynamic>> terminalHints = [];
   @override Future<Map<String, dynamic>> request({required String method, required String path,
     Map<String, dynamic>? queryParameters, dynamic body, bool useCache = true, Duration? cacheTtl}) async {
     expect(useCache, false);
     if (path == '/admin/hybrid-dispatch') {
       if (failDispatch) throw Exception('offline');
-      return {'data': {'terminalQueue': [], 'waitingTerminalPassengers': [], 'routeDrivers': []}};
+      return {'data': {'terminalQueue': [], 'waitingTerminalPassengers': [], 'routeDrivers': [], 'terminalLocationHints': terminalHints}};
     }
     if (path == '/reports/passenger-flow') {
       reports++;
@@ -28,6 +29,27 @@ class OperationsApi extends ApiClient {
   }
 }
 void main() {
+  testWidgets('terminal location hints explain missing queue entries and respect the route filter', (tester) async {
+    tester.view.physicalSize = const Size(1440, 1200); tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetDevicePixelRatio);
+    final api = OperationsApi()..failDispatch = false..terminalHints = [
+      {'plateNumber':'TEST-ONE','driverName':'Synthetic One','state':'Not queued','reason':'Open Trip and choose a route.', 'terminalName':'Test terminal','routeId':{'_id':'r1','name':'Route One'}},
+      {'plateNumber':'TEST-TWO','driverName':'Synthetic Two','state':'Old location','reason':'Old GPS location.', 'terminalName':'Test terminal','routeId':{'_id':'r2','name':'Route Two'}},
+    ];
+    final session = SessionController(apiClient: api, tokenStorage: TokenStorage());
+    await tester.pumpWidget(ChangeNotifierProvider.value(value: session, child: MaterialApp(theme: AppTheme.light(), home: const AdminHomeScreen())));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Terminal dispatch').first); await tester.pumpAndSettle();
+    expect(find.text('TEST-ONE · Not queued'), findsOneWidget);
+    expect(find.text('TEST-TWO · Old location'), findsOneWidget);
+    expect(find.textContaining('Old GPS does not confirm arrival'), findsOneWidget);
+    await tester.tap(find.byType(DropdownButtonFormField<String>)); await tester.pumpAndSettle();
+    await tester.tap(find.text('Route One').last); await tester.pumpAndSettle();
+    expect(find.text('TEST-ONE · Not queued'), findsOneWidget);
+    expect(find.text('TEST-TWO · Old location'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); session.dispose();
+  });
   testWidgets('dispatch failure preserves activity; reports are lazy and preserve stale data', (tester) async {
     tester.view.physicalSize = const Size(1440, 1100); tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetDevicePixelRatio);

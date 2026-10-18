@@ -186,7 +186,8 @@ class _AdminOperationsPage extends StatelessWidget {
     final allTrips = [
       ..._awaiting,
       ..._queue,
-      ..._readDynamicList(board?['routeDrivers'])
+      ..._readDynamicList(board?['routeDrivers']),
+      ..._readDynamicList(board?['terminalLocationHints']),
     ];
     final routes = <String, String>{
       for (final t in allTrips)
@@ -215,6 +216,27 @@ class _AdminOperationsPage extends StatelessWidget {
         _state('dispatch'),
       ])),
       if (board != null) ...[
+        if (_readDynamicList(board?['terminalLocationHints'])
+            .any((t) => selected == null || _routeKey(t) == selected)) ...[
+          const SizedBox(height: 20),
+          Text('Near terminal, not queued',
+              style: Theme.of(context).textTheme.titleLarge),
+          const Text(
+              'A saved location is not a queue entry. Old GPS does not confirm arrival.',
+              style: TextStyle(color: AppColors.textSecondary)),
+          const SizedBox(height: 10),
+          OperationsPanel(
+              child: Column(children: [
+            for (final hint in _readDynamicList(board?['terminalLocationHints'])
+                .where((t) => selected == null || _routeKey(t) == selected))
+              ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('${hint['plateNumber']} · ${hint['state']}'),
+                  subtitle: Text(
+                      '${hint['driverName']} · ${hint['terminalName']}\n${hint['reason']}'),
+                  isThreeLine: true),
+          ])),
+        ],
         const SizedBox(height: 20),
         Text('Awaiting terminal arrival',
             style: Theme.of(context)

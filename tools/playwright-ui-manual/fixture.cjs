@@ -11,7 +11,7 @@ Object.assign(process.env, {
   JWT_SECRET: crypto.randomBytes(48).toString('hex'),
   JWT_REFRESH_SECRET: crypto.randomBytes(48).toString('hex'),
   REDIS_URL: 'redis://127.0.0.1:6398', REDIS_NAMESPACE: `parago:test:playwright:${crypto.randomBytes(6).toString('hex')}`,
-  AUTOMATIC_GROUP_FLOW_ENABLED: 'true', AUTOMATIC_DRIVER_LIFECYCLE_ENABLED: process.env.UI_LAB_AUTOMATIC_LIFECYCLE === 'true' ? 'true' : 'false', AUTOMATIC_GROUP_MINIMUM_BUILD: '21', GROUP_BOOKINGS_ENABLED: 'true', RUN_API_JOBS: 'false',
+  AUTOMATIC_GROUP_FLOW_ENABLED: process.env.UI_LAB_AUTOMATIC_GROUP_FLOW === 'false' ? 'false' : 'true', AUTOMATIC_DRIVER_LIFECYCLE_ENABLED: process.env.UI_LAB_AUTOMATIC_LIFECYCLE === 'true' ? 'true' : 'false', AUTOMATIC_GROUP_MINIMUM_BUILD: '21', GROUP_BOOKINGS_ENABLED: 'true', RUN_API_JOBS: 'false',
   FIREBASE_PROJECT_ID: '', FIREBASE_CLIENT_EMAIL: '', FIREBASE_PRIVATE_KEY: '',
   GOOGLE_APPLICATION_CREDENTIALS: '', GOOGLE_CLIENT_IDS: '', FACEBOOK_APP_TOKEN: '',
   TOMTOM_API_KEY: '', GOOGLE_ROUTES_API_KEY: '', SMSAPIPH_API_KEY: '',

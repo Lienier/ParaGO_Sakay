@@ -90,6 +90,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   static const double _vehicleTeleportSnapMeters = 90;
 
   List<TripSession> _trips = [];
+  final _tripPanelKey = GlobalKey<_DriveMapPanelState>();
   List<RouteSummaryModel> _routes = [];
   Map<String, List<LatLng>> _cachedRoutePreviewPoints = {};
   List<NotificationModel> _notifications = [];
@@ -3027,6 +3028,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
             tooltip: 'More',
             onSelected: (action) {
               switch (action) {
+                case 'trip':
+                  _tripPanelKey.currentState?._openControlSheet(context);
+                  break;
                 case 'profile':
                   _openDriverProfile();
                   break;
@@ -3042,6 +3046,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
               }
             },
             itemBuilder: (_) => [
+              const GlassPopupMenuItem(value: 'trip', child: Text('Trip')),
               const GlassPopupMenuItem(
                   value: 'profile', child: Text('Profile')),
               GlassPopupMenuItem(
@@ -3285,6 +3290,7 @@ class _DrivePanelLiveData {
 
 class _DriveMapPanel extends StatefulWidget {
   const _DriveMapPanel({
+    super.key,
     required this.mapController,
     required this.trip,
     required this.cameraTarget,
@@ -3444,6 +3450,11 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                     ),
                     const SizedBox(height: 12),
                   ],
+                  if (current != null)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Text('Choose a new route after this trip ends.'),
+                    ),
                   if (current?.operatingMode == 'terminal_queue' &&
                       (current?.status == 'scheduled' ||
                           current?.status == 'active')) ...[
@@ -3660,7 +3671,11 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                   }
                 },
                 onTap: () => _openControls(context),
-                child: const _DriveMapMiniControl(),
+                child: Semantics(
+                    button: true,
+                    label: 'Trip',
+                    child:
+                        const ExcludeSemantics(child: _DriveMapMiniControl())),
               ),
             ),
           ),

@@ -1949,28 +1949,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                 ),
               const SizedBox(height: 12),
               if (farePreview != null) ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFDF7E8),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: const Color(0xFFFFE1A6)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      BookingFareReference(
-                          regular: farePreview.amount,
-                          partySize: selectedPartySize),
-                      const Text('Arrive before booking expiry.'),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${farePreview.boardingStopRef} to ${farePreview.destinationStopRef}',
-                      ),
-                    ],
-                  ),
-                ),
+                BookingFareCard(
+                    regular: farePreview.amount,
+                    partySize: selectedPartySize,
+                    boardingStop: farePreview.boardingStopRef,
+                    destinationStop: farePreview.destinationStopRef),
                 const SizedBox(height: 12),
               ],
               TextField(

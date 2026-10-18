@@ -558,6 +558,7 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
     );
 
     return _DriveMapPanel(
+      key: _tripPanelKey,
       automaticLifecycleEnabled:
           _driverProfile['automaticLifecycleEnabled'] == true,
       mapController: _driverMapController,
@@ -639,9 +640,8 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
             ? const <RideSessionModel>[]
             : (_tripRides[liveTrip.id] ?? const <RideSessionModel>[]);
 
-        final liveStartRequirement = liveTrip == null
-            ? null
-            : _driverStartRequirementMessage(trip: liveTrip);
+        final liveStartRequirement =
+            _driverStartRequirementMessage(trip: liveTrip);
         final livePickupRequirement = liveTrip == null
             ? null
             : _driverPickupRequirementMessage(trip: liveTrip);
@@ -666,7 +666,9 @@ extension _DriverHomeScreenSections on _DriverHomeScreenState {
               : _routeLabel(liveTrip),
           isOnline: _displayDriverOnline,
           availabilityNote: _availabilityNote,
-          requirementMessage: liveOperationsMessage,
+          // Requirements must remain visible here even if the map banner
+          // was dismissed. A disabled route action needs an explanation.
+          requirementMessage: liveStartRequirement ?? liveOperationsMessage,
           statusMessage: liveStatusMessage,
           displayedOnboard: _displayedOnboardCount(liveTrip, liveRides),
           seatCapacity: liveTrip?.jeepneyCapacity,

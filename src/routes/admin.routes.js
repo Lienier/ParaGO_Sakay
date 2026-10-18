@@ -130,7 +130,7 @@ const populateDispatchTrip = (query) =>
     .populate('routeId', 'name code direction terminal stops');
 
 const buildHybridDispatchBoard = async () => {
-  const [terminalTrips, awaitingTrips, routeTrips] = await Promise.all([
+  const [terminalTrips, awaitingTrips, routeTrips, terminalLocationHints] = await Promise.all([
     populateDispatchTrip(
       TripSession.find({
         status: 'active',
@@ -150,6 +150,7 @@ const buildHybridDispatchBoard = async () => {
         operatingMode: 'route',
       })
     ).sort({ startedAt: -1, createdAt: -1 }),
+    require('../services/terminalLocationHints.service').getTerminalLocationHints(),
   ]);
 
   terminalTrips.sort(compareTerminalQueueTrips);
@@ -167,6 +168,7 @@ const buildHybridDispatchBoard = async () => {
     awaitingTerminalArrival: await Promise.all(awaitingTrips.map(terminalQueue.describe)),
     waitingTerminalPassengers: terminalRequests,
     routeDrivers: routeTrips,
+    terminalLocationHints,
   };
 };
 
