@@ -3486,6 +3486,25 @@ class _DriveMapPanelState extends State<_DriveMapPanel> {
                             if (current != null)
                               OutlinedButton.icon(
                                 onPressed: waiting ? null : live.onStartTrip,
+                                style: ButtonStyle(
+                                  foregroundColor:
+                                      WidgetStateProperty.resolveWith(
+                                          (states) => states.contains(
+                                                  WidgetState.disabled)
+                                              ? Colors.white54
+                                              : null),
+                                  backgroundColor:
+                                      WidgetStateProperty.resolveWith(
+                                          (states) => states.contains(
+                                                  WidgetState.disabled)
+                                              ? Colors.black12
+                                              : null),
+                                  side: WidgetStateProperty.resolveWith(
+                                      (states) =>
+                                          states.contains(WidgetState.disabled)
+                                              ? BorderSide.none
+                                              : null),
+                                ),
                                 icon: const Icon(Icons.play_arrow),
                                 label: Text(waiting ? 'Terminal' : 'Start'),
                               ),
